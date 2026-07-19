@@ -494,7 +494,11 @@ export class ChatGPTApi implements LLMApi {
   }
 
   async models(): Promise<LLMModel[]> {
-    if (this.disableListModels) {
+    const managedMode =
+      !!getClientConfig()?.sub2apiManagedMode ||
+      !!useAccessStore.getState().sub2apiManagedMode;
+
+    if (this.disableListModels && !managedMode) {
       return DEFAULT_MODELS.slice();
     }
 
@@ -506,9 +510,11 @@ export class ChatGPTApi implements LLMApi {
     });
 
     const resJson = (await res.json()) as OpenAIListModelResponse;
-    const chatModels = resJson.data?.filter(
-      (m) => m.id.startsWith("gpt-") || m.id.startsWith("chatgpt-"),
-    );
+    const chatModels = managedMode
+      ? resJson.data
+      : resJson.data?.filter(
+          (m) => m.id.startsWith("gpt-") || m.id.startsWith("chatgpt-"),
+        );
     console.log("[Models]", chatModels);
 
     if (!chatModels) {
