@@ -2,7 +2,7 @@
 
 require("../polyfill");
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import styles from "./home.module.scss";
 
 import BotIcon from "../icons/bot.svg";
@@ -30,6 +30,7 @@ import { type ClientApi, getClientApi } from "../client/api";
 import { useAccessStore } from "../store";
 import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
+import { withBasePath } from "../utils/api-path";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -220,23 +221,92 @@ function Screen() {
   );
 }
 
-export function useLoadData() {
+export function useLoadData(enabled = true) {
   const config = useAppConfig();
 
   const api: ClientApi = getClientApi(config.modelConfig.providerName);
 
   useEffect(() => {
+    if (!enabled) return;
     (async () => {
       const models = await api.llm.models();
       config.mergeModels(models);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [enabled]);
+}
+
+function useSub2APIManagedLaunch() {
+  const clientConfig = useMemo(() => getClientConfig(), []);
+  const [launching, setLaunching] = useState(() => {
+    if (!clientConfig?.sub2apiManagedMode || typeof window === "undefined") {
+      return false;
+    }
+    return new URLSearchParams(window.location.search).has("launch_token");
+  });
+  const [launchError, setLaunchError] = useState("");
+
+  useEffect(() => {
+    if (!clientConfig?.sub2apiManagedMode || typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const launchToken = params.get("launch_token")?.trim();
+    if (!launchToken) return;
+
+    const controller = new AbortController();
+    setLaunching(true);
+    setLaunchError("");
+
+    fetch(withBasePath("/api/nextchat/session"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ launch_token: launchToken }),
+      credentials: "same-origin",
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.msg || "Failed to start managed session");
+        }
+        return res.json();
+      })
+      .then(() => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("launch_token");
+        window.history.replaceState(
+          null,
+          "",
+          `${url.pathname}${url.search}${url.hash}`,
+        );
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          console.error("[Sub2API Managed] launch failed", error);
+          setLaunchError(error.message || "Failed to start managed session");
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLaunching(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [clientConfig?.sub2apiManagedMode]);
+
+  return { launching, launchError };
 }
 
 export function Home() {
   useSwitchTheme();
-  useLoadData();
+  const launchState = useSub2APIManagedLaunch();
+  useLoadData(!launchState.launching && !launchState.launchError);
   useHtmlLang();
 
   useEffect(() => {
@@ -258,8 +328,17 @@ export function Home() {
     initMcp();
   }, []);
 
-  if (!useHasHydrated()) {
+  if (!useHasHydrated() || launchState.launching) {
     return <Loading />;
+  }
+
+  if (launchState.launchError) {
+    return (
+      <div className={clsx("no-dark", styles["loading-content"])}>
+        <BotIcon />
+        <div>{launchState.launchError}</div>
+      </div>
+    );
   }
 
   return (

@@ -25,6 +25,12 @@ declare global {
       DEFAULT_MODEL?: string; // to control default model in every new chat window
       VISION_MODELS?: string; // to control vision models
 
+      SUB2API_MANAGED_MODE?: string; // run NextChat as a Sub2API-hosted frontend
+      SUB2API_BASE_URL?: string; // Sub2API origin used by server-side proxies
+      SUB2API_NEXTCHAT_SECRET?: string; // server-to-server launch exchange secret
+      NEXTCHAT_SESSION_SECRET?: string; // encrypts managed session cookies
+      NEXTCHAT_BASE_PATH?: string; // deployment subpath, e.g. /ai
+
       // stability only
       STABILITY_URL?: string;
       STABILITY_API_KEY?: string;
@@ -129,6 +135,16 @@ function getApiKey(keys?: string) {
   return apiKey;
 }
 
+function isTruthy(value?: string) {
+  return ["1", "true", "yes", "on"].includes((value ?? "").toLowerCase());
+}
+
+function normalizeBasePath(path?: string) {
+  const trimmed = (path ?? "").trim();
+  if (!trimmed || trimmed === "/") return "";
+  return "/" + trimmed.replace(/^\/+|\/+$/g, "");
+}
+
 export const getServerSideConfig = () => {
   if (typeof process === "undefined") {
     throw Error(
@@ -179,6 +195,11 @@ export const getServerSideConfig = () => {
   const allowedWebDavEndpoints = (
     process.env.WHITE_WEBDAV_ENDPOINTS ?? ""
   ).split(",");
+
+  const sub2apiManagedMode = isTruthy(process.env.SUB2API_MANAGED_MODE);
+  const nextChatBasePath = normalizeBasePath(
+    process.env.NEXTCHAT_BASE_PATH ?? (sub2apiManagedMode ? "/ai" : ""),
+  );
 
   return {
     baseUrl: process.env.BASE_URL,
@@ -258,21 +279,26 @@ export const getServerSideConfig = () => {
     gtmId: process.env.GTM_ID,
     gaId: process.env.GA_ID || DEFAULT_GA_ID,
 
-    needCode: ACCESS_CODES.size > 0,
+    needCode: !sub2apiManagedMode && ACCESS_CODES.size > 0,
     code: process.env.CODE,
     codes: ACCESS_CODES,
 
     proxyUrl: process.env.PROXY_URL,
     isVercel: !!process.env.VERCEL,
 
-    hideUserApiKey: !!process.env.HIDE_USER_API_KEY,
+    hideUserApiKey: sub2apiManagedMode || !!process.env.HIDE_USER_API_KEY,
     disableGPT4,
-    hideBalanceQuery: !process.env.ENABLE_BALANCE_QUERY,
-    disableFastLink: !!process.env.DISABLE_FAST_LINK,
+    hideBalanceQuery: sub2apiManagedMode || !process.env.ENABLE_BALANCE_QUERY,
+    disableFastLink: sub2apiManagedMode || !!process.env.DISABLE_FAST_LINK,
     customModels,
     defaultModel,
     visionModels,
     allowedWebDavEndpoints,
     enableMcp: process.env.ENABLE_MCP === "true",
+    sub2apiManagedMode,
+    sub2apiBaseUrl: process.env.SUB2API_BASE_URL,
+    sub2apiNextChatSecret: process.env.SUB2API_NEXTCHAT_SECRET,
+    nextChatSessionSecret: process.env.NEXTCHAT_SESSION_SECRET,
+    nextChatBasePath,
   };
 };

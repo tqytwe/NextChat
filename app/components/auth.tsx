@@ -40,7 +40,10 @@ export function AuthPage() {
   }; // Reset access code to empty string
 
   useEffect(() => {
-    if (getClientConfig()?.isApp) {
+    const clientConfig = getClientConfig();
+    if (clientConfig?.sub2apiManagedMode) {
+      navigate(Path.Home);
+    } else if (clientConfig?.isApp) {
       navigate(Path.Settings);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

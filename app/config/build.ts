@@ -10,6 +10,15 @@ export const getBuildConfig = () => {
 
   const buildMode = process.env.BUILD_MODE ?? "standalone";
   const isApp = !!process.env.BUILD_APP;
+  const sub2apiManagedMode = ["1", "true", "yes", "on"].includes(
+    (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
+  );
+  const rawBasePath =
+    process.env.NEXTCHAT_BASE_PATH ?? (sub2apiManagedMode ? "/ai" : "");
+  const basePath =
+    rawBasePath.trim() === "" || rawBasePath.trim() === "/"
+      ? ""
+      : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
   const version = "v" + tauriConfig.package.version;
 
   const commitInfo = (() => {
@@ -39,6 +48,8 @@ export const getBuildConfig = () => {
     ...commitInfo,
     buildMode,
     isApp,
+    basePath,
+    sub2apiManagedMode,
     template: process.env.DEFAULT_INPUT_TEMPLATE ?? DEFAULT_INPUT_TEMPLATE,
   };
 };
