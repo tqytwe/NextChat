@@ -229,6 +229,25 @@ const DEFAULT_CHAT_STATE = {
   lastInput: "",
 };
 
+const CHAT_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+function pruneExpiredSessions<T extends typeof DEFAULT_CHAT_STATE>(
+  state: T,
+): T {
+  const cutoff = Date.now() - CHAT_SESSION_RETENTION_MS;
+  state.sessions = state.sessions.filter((session) => {
+    return Number(session.lastUpdate || 0) >= cutoff;
+  });
+  if (state.sessions.length === 0) {
+    state.sessions = [createEmptySession()];
+  }
+  state.currentSessionIndex = Math.min(
+    Math.max(state.currentSessionIndex || 0, 0),
+    state.sessions.length - 1,
+  );
+  return state;
+}
+
 export const useChatStore = createPersistStore(
   DEFAULT_CHAT_STATE,
   (set, _get) => {
@@ -860,7 +879,12 @@ export const useChatStore = createPersistStore(
   },
   {
     name: StoreKey.Chat,
-    version: 3.3,
+    version: 3.4,
+    onRehydrateStorage: () => (state) => {
+      state?.update((draft) => {
+        pruneExpiredSessions(draft as typeof DEFAULT_CHAT_STATE);
+      });
+    },
     migrate(persistedState, version) {
       const state = persistedState as any;
       const newState = JSON.parse(
@@ -925,7 +949,7 @@ export const useChatStore = createPersistStore(
         });
       }
 
-      return newState as any;
+      return pruneExpiredSessions(newState) as any;
     },
   },
 );

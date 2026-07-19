@@ -6,6 +6,17 @@ console.log("[Next] build mode", mode);
 const disableChunk = !!process.env.DISABLE_CHUNK || mode === "export";
 console.log("[Next] build with chunk: ", !disableChunk);
 
+const sub2apiManagedMode = ["1", "true", "yes", "on"].includes(
+  (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
+);
+const rawBasePath =
+  process.env.NEXTCHAT_BASE_PATH ?? (sub2apiManagedMode ? "/ai" : "");
+const basePath =
+  rawBasePath.trim() === "" || rawBasePath.trim() === "/"
+    ? ""
+    : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
+console.log("[Next] base path", basePath || "/");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   webpack(config) {
@@ -34,6 +45,10 @@ const nextConfig = {
     forceSwcTransforms: true,
   },
 };
+
+if (basePath) {
+  nextConfig.basePath = basePath;
+}
 
 const CorsHeaders = [
   { key: "Access-Control-Allow-Credentials", value: "true" },

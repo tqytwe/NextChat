@@ -253,6 +253,11 @@ export function getHeaders(ignoreHeaders: boolean = false) {
   }
 
   const clientConfig = getClientConfig();
+  const sub2apiManagedMode =
+    !!clientConfig?.sub2apiManagedMode || !!accessStore.sub2apiManagedMode;
+  if (sub2apiManagedMode) {
+    return headers;
+  }
 
   function getConfig() {
     const modelConfig = chatStore.currentSession().mask.modelConfig;

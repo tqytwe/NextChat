@@ -19,8 +19,8 @@ import {
   SILICONFLOW_BASE_URL,
   AI302_BASE_URL,
 } from "../constant";
-import { getHeaders } from "../client/api";
 import { getClientConfig } from "../config/client";
+import { withBasePath } from "../utils/api-path";
 import { createPersistStore } from "../utils/store";
 import { ensure } from "../utils/clone";
 import { DEFAULT_CONFIG } from "./config";
@@ -148,6 +148,7 @@ const DEFAULT_ACCESS_STATE = {
   customModels: "",
   defaultModel: "",
   visionModels: "",
+  sub2apiManagedMode: false,
 
   // tts config
   edgeTTSVoiceName: "zh-CN-YunxiNeural",
@@ -252,11 +253,12 @@ export const useAccessStore = createPersistStore(
     fetch() {
       if (fetchState > 0 || getClientConfig()?.buildMode === "export") return;
       fetchState = 1;
-      fetch("/api/config", {
+      fetch(withBasePath("/api/config"), {
         method: "post",
         body: null,
         headers: {
-          ...getHeaders(),
+          "Content-Type": "application/json",
+          Accept: "application/json",
         },
       })
         .then((res) => res.json())

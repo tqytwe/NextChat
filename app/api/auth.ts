@@ -2,6 +2,11 @@ import { NextRequest } from "next/server";
 import { getServerSideConfig } from "../config/server";
 import md5 from "spark-md5";
 import { ACCESS_CODE_PREFIX, ModelProvider } from "../constant";
+import {
+  canHandleManagedProvider,
+  getManagedSessionFromRequest,
+  isSub2APIManagedMode,
+} from "./sub2api-managed";
 
 function getIP(req: NextRequest) {
   let ip = req.ip ?? req.headers.get("x-real-ip");
@@ -24,7 +29,37 @@ function parseApiKey(bearToken: string) {
   };
 }
 
-export function auth(req: NextRequest, modelProvider: ModelProvider) {
+export async function auth(req: NextRequest, modelProvider: ModelProvider) {
+  const serverConfig = getServerSideConfig();
+
+  if (isSub2APIManagedMode(serverConfig)) {
+    if (!canHandleManagedProvider(req, modelProvider)) {
+      return {
+        error: true,
+        msg: "Sub2API managed mode only allows the OpenAI-compatible gateway",
+      };
+    }
+
+    const session = await getManagedSessionFromRequest(req);
+    if (!session) {
+      clearClientAuthHeaders(req);
+      return {
+        error: true,
+        msg: "missing or expired Sub2API managed session",
+      };
+    }
+
+    clearClientAuthHeaders(req);
+    req.headers.set("Authorization", `Bearer ${session.apiKey}`);
+    console.log("[Auth] use Sub2API managed session", {
+      userId: session.userId,
+      apiKeyId: session.apiKeyId,
+    });
+    return {
+      error: false,
+    };
+  }
+
   const authToken = req.headers.get("Authorization") ?? "";
 
   // check if it is openai api key or user token
@@ -32,7 +67,6 @@ export function auth(req: NextRequest, modelProvider: ModelProvider) {
 
   const hashedCode = md5.hash(accessCode ?? "").trim();
 
-  const serverConfig = getServerSideConfig();
   console.log("[Auth] allowed hashed codes: ", [...serverConfig.codes]);
   console.log("[Auth] got access code:", accessCode);
   console.log("[Auth] hashed access code:", hashedCode);
@@ -126,4 +160,14 @@ export function auth(req: NextRequest, modelProvider: ModelProvider) {
   return {
     error: false,
   };
+}
+
+function clearClientAuthHeaders(req: NextRequest) {
+  [
+    "Authorization",
+    "api-key",
+    "x-api-key",
+    "x-goog-api-key",
+    "anthropic-version",
+  ].forEach((header) => req.headers.delete(header));
 }
