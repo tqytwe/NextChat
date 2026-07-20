@@ -21,11 +21,34 @@ describe("Sub2API managed image studio helpers", () => {
       template_id: "free-create",
       user_prompt: "clean product photo",
       size: "1024x1536",
+      aspect: "2:3",
+      tier: "1K",
       count: 4,
       model: "gpt-image-1.5",
       quality: "high",
       output_format: "webp",
       retain_days: 1,
+    });
+  });
+
+  test("resolves aspect and resolution into a Sub2API image size", () => {
+    const payload = buildSub2APIImageStudioGeneratePayload({
+      model: "grok-imagine-image",
+      params: {
+        prompt: "wide campaign visual",
+        aspect: "16:9",
+        resolution: "2K",
+        count: 1,
+        quality: "standard",
+        output_format: "jpeg",
+      },
+    });
+
+    expect(payload).toMatchObject({
+      size: "3584x2048",
+      aspect: "16:9",
+      tier: "2K",
+      output_format: "jpeg",
     });
   });
 

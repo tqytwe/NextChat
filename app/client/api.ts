@@ -371,6 +371,13 @@ export function getHeaders(ignoreHeaders: boolean = false) {
 }
 
 export function getClientApi(provider: ServiceProvider): ClientApi {
+  const managedMode =
+    !!getClientConfig()?.sub2apiManagedMode ||
+    !!useAccessStore.getState().sub2apiManagedMode;
+  if (managedMode) {
+    return new ClientApi(ModelProvider.GPT);
+  }
+
   switch (provider) {
     case ServiceProvider.Google:
       return new ClientApi(ModelProvider.GeminiPro);

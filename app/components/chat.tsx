@@ -704,6 +704,18 @@ export function ChatActions(props: {
           icon={<BreakIcon />}
           onClick={() => {
             chatStore.updateTargetSession(session, (session) => {
+              if (managedMode) {
+                session.messages = [];
+                session.memoryPrompt = "";
+                session.clearContextIndex = undefined;
+                session.lastSummarizeIndex = 0;
+                session.stat = {
+                  tokenCount: 0,
+                  wordCount: 0,
+                  charCount: 0,
+                };
+                return;
+              }
               if (session.clearContextIndex === session.messages.length) {
                 session.clearContextIndex = undefined;
               } else {
@@ -711,6 +723,9 @@ export function ChatActions(props: {
                 session.memoryPrompt = ""; // will clear memory
               }
             });
+            if (managedMode) {
+              showToast(Locale.Context.Clear);
+            }
           }}
         />
 
@@ -1154,10 +1169,21 @@ function _Chat() {
     prev: () => chatStore.nextSession(-1),
     next: () => chatStore.nextSession(1),
     clear: () =>
-      chatStore.updateTargetSession(
-        session,
-        (session) => (session.clearContextIndex = session.messages.length),
-      ),
+      chatStore.updateTargetSession(session, (session) => {
+        if (getClientConfig()?.sub2apiManagedMode) {
+          session.messages = [];
+          session.memoryPrompt = "";
+          session.clearContextIndex = undefined;
+          session.lastSummarizeIndex = 0;
+          session.stat = {
+            tokenCount: 0,
+            wordCount: 0,
+            charCount: 0,
+          };
+        } else {
+          session.clearContextIndex = session.messages.length;
+        }
+      }),
     fork: () => chatStore.forkSession(),
     del: () => chatStore.deleteSession(chatStore.currentSessionIndex),
   });
@@ -1740,6 +1766,18 @@ function _Chat() {
       ) {
         event.preventDefault();
         chatStore.updateTargetSession(session, (session) => {
+          if (clientConfig?.sub2apiManagedMode) {
+            session.messages = [];
+            session.memoryPrompt = "";
+            session.clearContextIndex = undefined;
+            session.lastSummarizeIndex = 0;
+            session.stat = {
+              tokenCount: 0,
+              wordCount: 0,
+              charCount: 0,
+            };
+            return;
+          }
           if (session.clearContextIndex === session.messages.length) {
             session.clearContextIndex = undefined;
           } else {
@@ -1747,6 +1785,9 @@ function _Chat() {
             session.memoryPrompt = ""; // will clear memory
           }
         });
+        if (clientConfig?.sub2apiManagedMode) {
+          showToast(Locale.Context.Clear);
+        }
       }
     };
 
@@ -1755,7 +1796,13 @@ function _Chat() {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [messages, chatStore, navigate, session]);
+  }, [
+    clientConfig?.sub2apiManagedMode,
+    messages,
+    chatStore,
+    navigate,
+    session,
+  ]);
 
   const [showChatSidePanel, setShowChatSidePanel] = useState(false);
 

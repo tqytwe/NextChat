@@ -11,6 +11,7 @@ import { nanoid } from "nanoid";
 import { uploadImage, base64Image2Blob } from "@/app/utils/chat";
 import { models, getModelParamBasicData } from "@/app/components/sd/sd-panel";
 import { useAccessStore } from "./access";
+import { useManagedWorkspaceStore } from "./managed-workspace";
 import { withBasePath } from "@/app/utils/api-path";
 
 const NEXTCHAT_IMAGE_STUDIO_RETAIN_DAYS = 1;
@@ -26,6 +27,20 @@ type Sub2APIEnvelope<T> = {
 export type Sub2APIImageStudioModel = {
   id: string;
   display_name?: string;
+  supported_sizes?: string[];
+  supported_aspect_ratios?: string[];
+  supported_resolutions?: string[];
+  supported_qualities?: string[];
+  supported_backgrounds?: string[];
+  supported_output_formats?: string[];
+  supported_input_fidelities?: string[];
+  max_reference_images?: number;
+  default_aspect_ratio?: string;
+  default_resolution?: string;
+  default_quality?: string;
+  default_background?: string;
+  default_output_format?: string;
+  default_input_fidelity?: string;
 };
 
 export type Sub2APIImageStudioReference = {
@@ -248,6 +263,7 @@ export const useSdStore = createPersistStore<
             ],
             sub2apiImageStudioJobsLoading: false,
           });
+          refreshManagedWorkspaceBootstrap();
           return data.jobs ?? [];
         } catch (error: any) {
           set({
@@ -275,6 +291,8 @@ export const useSdStore = createPersistStore<
           this.updateDraw(toSub2APIImageStudioDraw(data, job));
           if (isSub2APIImageStudioRunning(job.status)) {
             this.pollSub2APIImageStudioJob(data, job.id);
+          } else {
+            refreshManagedWorkspaceBootstrap();
           }
         } catch (error: any) {
           this.updateDraw({
@@ -304,6 +322,8 @@ export const useSdStore = createPersistStore<
             this.getNextId();
             if (isSub2APIImageStudioRunning(job.status)) {
               this.pollSub2APIImageStudioJob(data, jobId, attempt + 1);
+            } else {
+              refreshManagedWorkspaceBootstrap();
             }
           } catch (error: any) {
             this.updateDraw({
@@ -423,6 +443,7 @@ export function toSub2APIImageStudioPanelModel(model: Sub2APIImageStudioModel) {
   return {
     name: model.display_name || model.id,
     value: model.id,
+    sub2apiModel: model,
     params: () => [],
   };
 }
@@ -432,20 +453,97 @@ export function buildSub2APIImageStudioGeneratePayload(data: any) {
   const referenceIDs = Array.isArray(params.reference_ids)
     ? params.reference_ids.filter(Boolean)
     : [];
+  const tier = normalizeImageStudioTier(params.resolution || params.tier);
+  const size =
+    params.size ||
+    resolveSub2APIImageStudioSize(params.aspect, tier) ||
+    "1024x1024";
+  const inferredSize = inferSub2APIImageStudioAspectTier(size);
   const payload: any = {
     template_id: "free-create",
     user_prompt: params.prompt ?? "",
-    size: params.size || "1024x1024",
+    size,
+    aspect: params.aspect || inferredSize.aspect,
+    tier: params.resolution || params.tier ? tier : inferredSize.tier,
     count: clampImageStudioCount(params.count),
     model: data?.model || "",
     quality: params.quality || "auto",
     output_format: params.output_format || "png",
     retain_days: NEXTCHAT_IMAGE_STUDIO_RETAIN_DAYS,
   };
+  if (params.background !== undefined && params.background !== "") {
+    payload.background = params.background;
+  }
+  if (
+    params.output_compression !== undefined &&
+    params.output_compression !== "" &&
+    ["jpeg", "webp"].includes(payload.output_format)
+  ) {
+    payload.output_compression = params.output_compression;
+  }
+  if (referenceIDs.length > 0 && params.input_fidelity) {
+    payload.input_fidelity = params.input_fidelity;
+  }
   if (referenceIDs.length > 0) {
     payload.reference_ids = referenceIDs;
   }
   return payload;
+}
+
+export const SUB2API_IMAGE_STUDIO_SIZE_MATRIX: Record<
+  string,
+  Record<string, string>
+> = {
+  "1:1": {
+    "1K": "1024x1024",
+    "2K": "2048x2048",
+    "3K": "3072x3072",
+    "4K": "4096x4096",
+  },
+  "2:3": {
+    "1K": "1024x1536",
+    "2K": "2048x3072",
+    "3K": "2160x3240",
+    "4K": "4096x6144",
+  },
+  "3:2": {
+    "1K": "1536x1024",
+    "2K": "3072x2048",
+    "3K": "3240x2160",
+    "4K": "6144x4096",
+  },
+  "9:16": {
+    "1K": "1024x1792",
+    "2K": "2048x3584",
+    "3K": "1728x3072",
+    "4K": "4096x7168",
+  },
+  "16:9": {
+    "1K": "1792x1024",
+    "2K": "3584x2048",
+    "3K": "3072x1728",
+    "4K": "3840x2160",
+  },
+};
+
+export function resolveSub2APIImageStudioSize(aspect?: string, tier?: string) {
+  const normalizedAspect = normalizeImageStudioAspect(aspect);
+  const normalizedTier = normalizeImageStudioTier(tier);
+  return SUB2API_IMAGE_STUDIO_SIZE_MATRIX[normalizedAspect]?.[normalizedTier];
+}
+
+export function inferSub2APIImageStudioAspectTier(size?: string) {
+  const raw = (size || "").trim();
+  for (const [aspect, tiers] of Object.entries(
+    SUB2API_IMAGE_STUDIO_SIZE_MATRIX,
+  )) {
+    for (const [tier, candidate] of Object.entries(tiers)) {
+      if (candidate === raw) {
+        return { aspect, tier };
+      }
+    }
+  }
+  return { aspect: "1:1", tier: "1K" };
 }
 
 export function normalizeSub2APIImageStudioAssetURL(
@@ -551,10 +649,30 @@ function isSub2APIImageStudioRunning(status: string) {
   return status === "pending" || status === "running";
 }
 
+function refreshManagedWorkspaceBootstrap() {
+  if (isSub2APIManagedImageStudio()) {
+    void useManagedWorkspaceStore.getState().fetchBootstrap();
+  }
+}
+
 function clampImageStudioCount(value: any) {
   const count = Number.parseInt(String(value || 1), 10);
   if (!Number.isFinite(count) || count <= 0) return 1;
   return Math.min(count, 4);
+}
+
+function normalizeImageStudioAspect(value: any) {
+  const aspect = String(value || "1:1").trim();
+  if (aspect === "3:4") return "2:3";
+  if (aspect === "4:3") return "3:2";
+  return SUB2API_IMAGE_STUDIO_SIZE_MATRIX[aspect] ? aspect : "1:1";
+}
+
+function normalizeImageStudioTier(value: any) {
+  const tier = String(value || "1K")
+    .trim()
+    .toUpperCase();
+  return ["1K", "2K", "3K", "4K"].includes(tier) ? tier : "1K";
 }
 
 async function fetchSub2APIImageStudio<T>(path: string, init?: RequestInit) {
@@ -571,7 +689,22 @@ async function fetchSub2APIImageStudio<T>(path: string, init?: RequestInit) {
     | Sub2APIEnvelope<T>
     | undefined;
   if (!res.ok || envelope?.code !== 0 || !envelope.data) {
-    throw new Error(envelope?.message || "Sub2API image studio request failed");
+    throw new Error(
+      normalizeSub2APIImageStudioError(
+        envelope?.message || "Sub2API image studio request failed",
+      ),
+    );
   }
   return envelope.data;
+}
+
+function normalizeSub2APIImageStudioError(message: string) {
+  const lower = message.toLowerCase();
+  if (lower.includes("image generation is not enabled for this group")) {
+    return "当前分组未开启图片生成，请切换到支持图片的分组";
+  }
+  if (lower.includes("idempotency key is required")) {
+    return "图片生成缺少幂等请求头，请刷新页面后重试";
+  }
+  return message;
 }

@@ -4,8 +4,12 @@ import {
   getManagedWorkspaceCurrentGroup,
   getManagedWorkspaceModelsForCurrentGroup,
   managedWorkspaceModelsToLLMModels,
+  resolveManagedWorkspaceServiceProvider,
   resolveManagedWorkspaceURL,
 } from "../app/store/managed-workspace";
+import { useChatStore } from "../app/store/chat";
+import { useAppConfig } from "../app/store/config";
+import { applyManagedWorkspaceModelsToStores } from "../app/utils/managed-workspace-models";
 import { collectVisibleModelsForWorkspace } from "../app/utils/hooks";
 
 describe("Sub2API managed workspace model helpers", () => {
@@ -47,10 +51,50 @@ describe("Sub2API managed workspace model helpers", () => {
         displayName: "Grok 4 Fast",
         available: true,
         provider: expect.objectContaining({
-          providerName: "OpenAI",
-          providerType: "openai",
+          providerName: "XAI",
+          providerType: "xai",
         }),
       }),
+    ]);
+  });
+
+  test("maps Sub2API platforms to real NextChat providers", () => {
+    expect(resolveManagedWorkspaceServiceProvider("anthropic")).toBe(
+      "Anthropic",
+    );
+    expect(resolveManagedWorkspaceServiceProvider("gemini")).toBe("Google");
+    expect(resolveManagedWorkspaceServiceProvider("grok")).toBe("XAI");
+
+    const models = managedWorkspaceModelsToLLMModels(
+      [
+        {
+          id: "claude-fable-5",
+          name: "claude-fable-5",
+          platform: "anthropic",
+        },
+        { id: "gemini-3.1-pro", name: "gemini-3.1-pro" },
+      ],
+      "gemini",
+    );
+
+    expect(models.map((model) => model.provider.providerName)).toEqual([
+      "Anthropic",
+      "Google",
+    ]);
+  });
+
+  test("falls back to model-name provider inference for unknown group platforms", () => {
+    const models = managedWorkspaceModelsToLLMModels(
+      [
+        { id: "claude-fable-5", name: "claude-fable-5" },
+        { id: "grok-4-fast", name: "grok-4-fast" },
+      ],
+      "krio",
+    );
+
+    expect(models.map((model) => model.provider.providerName)).toEqual([
+      "Anthropic",
+      "XAI",
     ]);
   });
 
@@ -169,4 +213,80 @@ describe("Sub2API managed workspace model helpers", () => {
       models.find((model) => model.name === "gpt-5.4-mini")?.isDefault,
     ).toBe(true);
   });
+
+  test("repairs only the target session when applying current group models", () => {
+    const baseModelConfig = useAppConfig.getState().modelConfig;
+    const target = makeChatSession("target", "grok-4-fast", "OpenAI");
+    const untouched = makeChatSession("other", "claude-fable-5", "Anthropic");
+
+    useAppConfig.setState({
+      ...useAppConfig.getState(),
+      models: [],
+      customModels: "+claude-fable-5@anthropic",
+      modelConfig: {
+        ...baseModelConfig,
+        model: "grok-4-fast",
+        providerName: "OpenAI" as any,
+      },
+    } as any);
+    useChatStore.setState({
+      ...useChatStore.getState(),
+      currentSessionIndex: 0,
+      sessions: [target, untouched],
+    } as any);
+
+    const result = applyManagedWorkspaceModelsToStores(
+      {
+        models: {
+          source: "/v1/models",
+          selected_group_id: 8,
+          groups: [
+            {
+              id: 8,
+              name: "Grok only",
+              platform: "grok",
+              models: [{ id: "grok-4-fast", name: "grok-4-fast" }],
+            },
+          ],
+        },
+      } as any,
+      { targetSession: target },
+    );
+
+    const sessions = useChatStore.getState().sessions;
+    expect(result).toMatchObject({
+      model: "grok-4-fast",
+      providerName: "XAI",
+    });
+    expect(useAppConfig.getState().customModels).toBe("");
+    expect(sessions[0].mask.modelConfig).toMatchObject({
+      model: "grok-4-fast",
+      providerName: "XAI",
+    });
+    expect(sessions[1].mask.modelConfig).toMatchObject({
+      model: "claude-fable-5",
+      providerName: "Anthropic",
+    });
+  });
 });
+
+function makeChatSession(id: string, model: string, providerName: string) {
+  return {
+    id,
+    topic: id,
+    memoryPrompt: "",
+    messages: [],
+    stat: { tokenCount: 0, wordCount: 0, charCount: 0 },
+    lastUpdate: Date.now(),
+    lastSummarizeIndex: 0,
+    mask: {
+      context: [],
+      modelConfig: {
+        ...useAppConfig.getState().modelConfig,
+        model,
+        providerName,
+      },
+      syncGlobalConfig: true,
+    },
+  } as any;
+}

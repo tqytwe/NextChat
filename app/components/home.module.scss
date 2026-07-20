@@ -402,10 +402,11 @@
 
 .managed-sidebar-tail {
   justify-content: flex-start;
+  padding-top: 14px;
 
   .sidebar-actions {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     width: 100%;
     gap: 8px;
   }
@@ -417,10 +418,12 @@
 
   .sidebar-action {
     display: flex;
+    flex: 1 1 48px;
   }
 
   .sidebar-action button {
     width: 100%;
+    min-width: 0;
   }
 }
 

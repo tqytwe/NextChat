@@ -178,39 +178,229 @@ export function getManagedWorkspaceModelsForCurrentGroup(
 export function getManagedWorkspaceDefaultModelForCurrentGroup(
   bootstrap?: ManagedWorkspaceBootstrap,
 ) {
-  const models = getManagedWorkspaceModelsForCurrentGroup(bootstrap);
-  const defaultModel = bootstrap?.models?.default_model?.trim();
-  const selected =
-    models.find(
-      (model) => model.name === defaultModel || model.id === defaultModel,
-    ) || models[0];
+  const selected = getManagedWorkspaceDefaultLLMModelForCurrentGroup(bootstrap);
+  return selected?.name || "";
+}
 
-  return selected?.name || selected?.id || "";
+export function getManagedWorkspaceDefaultLLMModelForCurrentGroup(
+  bootstrap?: ManagedWorkspaceBootstrap,
+) {
+  const group = getManagedWorkspaceCurrentGroup(bootstrap);
+  const models = group?.models ?? [];
+  const llmModels = managedWorkspaceModelsToLLMModels(models, group?.platform);
+  const defaultModel = bootstrap?.models?.default_model?.trim();
+
+  return (
+    llmModels.find((model, index) => {
+      const raw = models[index];
+      return (
+        model.name === defaultModel ||
+        raw?.name === defaultModel ||
+        raw?.id === defaultModel
+      );
+    }) || llmModels[0]
+  );
 }
 
 export function getManagedWorkspaceLLMModelsForCurrentGroup(
   bootstrap?: ManagedWorkspaceBootstrap,
 ) {
+  const group = getManagedWorkspaceCurrentGroup(bootstrap);
   return managedWorkspaceModelsToLLMModels(
-    getManagedWorkspaceModelsForCurrentGroup(bootstrap),
+    group?.models ?? [],
+    group?.platform,
   );
 }
 
 export function managedWorkspaceModelsToLLMModels(
   models: ManagedWorkspaceModel[],
+  groupPlatform?: string,
 ): LLMModel[] {
-  return models.map((model, index) => ({
-    name: model.name || model.id,
-    displayName: model.display_name || model.name || model.id,
-    available: true,
-    sorted: model.sort_order ?? index + 1,
-    provider: {
-      id: "openai",
-      providerName: ServiceProvider.OpenAI,
-      providerType: "openai",
-      sorted: 1,
-    },
-  }));
+  return models.map((model, index) => {
+    const provider = resolveManagedWorkspaceModelProvider(
+      model.platform || groupPlatform,
+      model.name || model.id,
+    );
+    return {
+      name: model.name || model.id,
+      displayName: model.display_name || model.name || model.id,
+      available: true,
+      sorted: model.sort_order ?? index + 1,
+      provider,
+    };
+  });
+}
+
+export function resolveManagedWorkspaceModelProvider(
+  platform?: string,
+  modelName?: string,
+): LLMModel["provider"] {
+  const providerName =
+    resolveManagedWorkspaceKnownServiceProvider(platform) ||
+    resolveManagedWorkspaceKnownServiceProvider(
+      inferManagedWorkspacePlatformFromModel(modelName),
+    ) ||
+    ServiceProvider.OpenAI;
+  return {
+    id: managedWorkspaceProviderId(providerName),
+    providerName,
+    providerType: managedWorkspaceProviderType(providerName),
+    sorted: managedWorkspaceProviderSort(providerName),
+  };
+}
+
+export function resolveManagedWorkspaceServiceProvider(
+  platform?: string,
+): ServiceProvider {
+  return (
+    resolveManagedWorkspaceKnownServiceProvider(platform) ||
+    ServiceProvider.OpenAI
+  );
+}
+
+function resolveManagedWorkspaceKnownServiceProvider(
+  platform?: string,
+): ServiceProvider | undefined {
+  const normalized = (platform || "").trim().toLowerCase();
+  switch (normalized) {
+    case "anthropic":
+    case "claude":
+      return ServiceProvider.Anthropic;
+    case "gemini":
+    case "google":
+    case "antigravity":
+      return ServiceProvider.Google;
+    case "grok":
+    case "xai":
+      return ServiceProvider.XAI;
+    case "baidu":
+    case "ernie":
+      return ServiceProvider.Baidu;
+    case "bytedance":
+    case "doubao":
+    case "volcengine":
+      return ServiceProvider.ByteDance;
+    case "alibaba":
+    case "qwen":
+    case "dashscope":
+      return ServiceProvider.Alibaba;
+    case "tencent":
+    case "hunyuan":
+      return ServiceProvider.Tencent;
+    case "moonshot":
+    case "kimi":
+      return ServiceProvider.Moonshot;
+    case "iflytek":
+    case "spark":
+      return ServiceProvider.Iflytek;
+    case "deepseek":
+      return ServiceProvider.DeepSeek;
+    case "chatglm":
+    case "glm":
+      return ServiceProvider.ChatGLM;
+    case "siliconflow":
+      return ServiceProvider.SiliconFlow;
+    case "302.ai":
+    case "ai302":
+      return ServiceProvider["302.AI"];
+    case "":
+      return undefined;
+    case "openai":
+      return ServiceProvider.OpenAI;
+    default:
+      return undefined;
+  }
+}
+
+function inferManagedWorkspacePlatformFromModel(modelName?: string) {
+  const model = (modelName || "").trim().toLowerCase();
+  if (!model) return "";
+  if (model.startsWith("claude") || model.includes("-claude-")) {
+    return "anthropic";
+  }
+  if (
+    model.startsWith("gemini") ||
+    model.startsWith("imagen") ||
+    model.includes("-gemini-")
+  ) {
+    return "gemini";
+  }
+  if (model.startsWith("grok") || model.includes("-grok-")) {
+    return "grok";
+  }
+  if (model.startsWith("deepseek")) {
+    return "deepseek";
+  }
+  if (model.startsWith("qwen") || model.includes("-qwen-")) {
+    return "alibaba";
+  }
+  if (
+    model.startsWith("doubao") ||
+    model.startsWith("seedream") ||
+    model.includes("-doubao-")
+  ) {
+    return "bytedance";
+  }
+  if (model.startsWith("hunyuan")) {
+    return "tencent";
+  }
+  if (model.startsWith("kimi") || model.startsWith("moonshot")) {
+    return "moonshot";
+  }
+  if (model.startsWith("glm") || model.startsWith("chatglm")) {
+    return "chatglm";
+  }
+  if (model.startsWith("ernie")) {
+    return "baidu";
+  }
+  return "openai";
+}
+
+function managedWorkspaceProviderId(providerName: ServiceProvider) {
+  if (providerName === ServiceProvider["302.AI"]) return "ai302";
+  return providerName.toLowerCase();
+}
+
+function managedWorkspaceProviderType(providerName: ServiceProvider) {
+  if (providerName === ServiceProvider["302.AI"]) return "ai302";
+  return providerName.toLowerCase();
+}
+
+function managedWorkspaceProviderSort(providerName: ServiceProvider) {
+  switch (providerName) {
+    case ServiceProvider.OpenAI:
+      return 1;
+    case ServiceProvider.Azure:
+      return 2;
+    case ServiceProvider.Google:
+      return 3;
+    case ServiceProvider.Anthropic:
+      return 4;
+    case ServiceProvider.Baidu:
+      return 5;
+    case ServiceProvider.ByteDance:
+      return 6;
+    case ServiceProvider.Alibaba:
+      return 7;
+    case ServiceProvider.Tencent:
+      return 8;
+    case ServiceProvider.Moonshot:
+      return 9;
+    case ServiceProvider.Iflytek:
+      return 10;
+    case ServiceProvider.XAI:
+      return 11;
+    case ServiceProvider.ChatGLM:
+      return 12;
+    case ServiceProvider.DeepSeek:
+      return 13;
+    case ServiceProvider.SiliconFlow:
+      return 14;
+    case ServiceProvider["302.AI"]:
+      return 15;
+    default:
+      return 100;
+  }
 }
 
 export function resolveManagedWorkspaceURL(

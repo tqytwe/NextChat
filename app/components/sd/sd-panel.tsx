@@ -4,10 +4,14 @@ import { Select } from "@/app/components/ui-lib";
 import { IconButton } from "@/app/components/button";
 import Locale from "@/app/locales";
 import {
+  inferSub2APIImageStudioAspectTier,
   isSub2APIManagedImageStudio,
+  resolveSub2APIImageStudioSize,
+  type Sub2APIImageStudioModel,
   toSub2APIImageStudioPanelModel,
   useSdStore,
 } from "@/app/store/sd";
+import { useManagedWorkspaceStore } from "@/app/store/managed-workspace";
 import clsx from "clsx";
 import UploadIcon from "@/app/icons/upload.svg";
 import DeleteIcon from "@/app/icons/clear.svg";
@@ -191,6 +195,257 @@ export const sub2APIImageStudioParams = [
   },
 ];
 
+const imageStudioAspectLabels: Record<string, string> = {
+  "1:1": "正方 1:1",
+  "2:3": "竖版 2:3",
+  "3:2": "横版 3:2",
+  "9:16": "竖屏 9:16",
+  "16:9": "宽屏 16:9",
+};
+
+const imageStudioResolutionLabels: Record<string, string> = {
+  "1K": "标准 1K",
+  "2K": "高清 2K",
+  "3K": "精细 3K",
+  "4K": "超清 4K",
+};
+
+export function getSub2APIImageStudioParams(
+  model?: Sub2APIImageStudioModel,
+  data: any = {},
+) {
+  if (!model) return sub2APIImageStudioParams;
+  const sizeSet = new Set(model.supported_sizes ?? []);
+  const aspects = normalizeImageStudioOptions(
+    model.supported_aspect_ratios,
+    inferAspectsFromSupportedSizes(sizeSet),
+    ["1:1", "2:3", "3:2", "9:16", "16:9"],
+  );
+  const requestedAspect =
+    data.aspect ||
+    model.default_aspect_ratio ||
+    inferSub2APIImageStudioAspectTier(model.supported_sizes?.[0]).aspect ||
+    "1:1";
+  const selectedAspect = aspects.includes(requestedAspect)
+    ? requestedAspect
+    : aspects[0] || "1:1";
+  const resolutions = normalizeImageStudioOptions(
+    model.supported_resolutions?.map((resolution) => resolution.toUpperCase()),
+    inferTiersFromSupportedSizes(sizeSet),
+    ["1K"],
+  ).filter((tier) =>
+    sizeAllowedForImageStudioModel(
+      model,
+      resolveSub2APIImageStudioSize(selectedAspect, tier),
+    ),
+  );
+  const qualities = normalizeImageStudioOptions(
+    model.supported_qualities,
+    [],
+    ["auto"],
+  );
+  const outputFormats = normalizeImageStudioOptions(
+    model.supported_output_formats,
+    [],
+    ["png"],
+  );
+  const backgrounds = normalizeImageStudioOptions(
+    model.supported_backgrounds,
+    [],
+    [],
+  );
+  const inputFidelities = normalizeImageStudioOptions(
+    model.supported_input_fidelities,
+    [],
+    [],
+  );
+  const defaultSize = model.supported_sizes?.[0];
+  const inferred = inferSub2APIImageStudioAspectTier(defaultSize);
+  const defaultAspect =
+    selectedAspect ||
+    aspects.find((aspect) => aspect === inferred.aspect) ||
+    aspects[0] ||
+    "1:1";
+  const defaultResolution =
+    model.default_resolution?.toUpperCase() ||
+    resolutions.find((resolution) => resolution === inferred.tier) ||
+    resolutions[0] ||
+    "1K";
+
+  const params: any[] = [
+    {
+      name: Locale.SdPanel.Prompt,
+      value: "prompt",
+      type: "textarea",
+      placeholder: "描述你要生成的图片",
+      required: true,
+      rows: 5,
+    },
+    {
+      name: "比例",
+      value: "aspect",
+      type: "select",
+      default: defaultAspect,
+      options: aspects.map((aspect) => ({
+        name: imageStudioAspectLabels[aspect] || aspect,
+        value: aspect,
+      })),
+    },
+    {
+      name: "分辨率",
+      value: "resolution",
+      type: "select",
+      default: defaultResolution,
+      options: resolutions.map((resolution) => ({
+        name: imageStudioResolutionLabels[resolution] || resolution,
+        value: resolution,
+      })),
+    },
+    {
+      name: "张数",
+      value: "count",
+      type: "number",
+      default: 1,
+      min: 1,
+      max: 4,
+    },
+  ];
+
+  if (qualities.length > 0) {
+    params.push({
+      name: "质量",
+      value: "quality",
+      type: "select",
+      default: model.default_quality || qualities[0],
+      options: qualities.map((quality) => ({
+        name: qualityLabel(quality),
+        value: quality,
+      })),
+    });
+  }
+  if (backgrounds.length > 0) {
+    params.push({
+      name: "背景",
+      value: "background",
+      type: "select",
+      default: model.default_background || backgrounds[0],
+      options: backgrounds.map((background) => ({
+        name: backgroundLabel(background),
+        value: background,
+      })),
+    });
+  }
+  if (outputFormats.length > 0) {
+    params.push({
+      name: Locale.SdPanel.OutFormat,
+      value: "output_format",
+      type: "select",
+      default: model.default_output_format || outputFormats[0],
+      options: outputFormats.map((format) => ({
+        name: format.toUpperCase(),
+        value: format,
+      })),
+    });
+  }
+  if (inputFidelities.length > 0) {
+    params.push({
+      name: "参考图精度",
+      value: "input_fidelity",
+      type: "select",
+      default: model.default_input_fidelity || inputFidelities[0],
+      options: inputFidelities.map((fidelity) => ({
+        name: qualityLabel(fidelity),
+        value: fidelity,
+      })),
+      sub: "上传引用图时生效",
+    });
+  }
+  if (
+    model.supported_output_formats?.some((format) =>
+      ["jpeg", "webp"].includes(format),
+    )
+  ) {
+    params.push({
+      name: "压缩质量",
+      value: "output_compression",
+      type: "number",
+      default: "",
+      min: 0,
+      max: 100,
+    });
+  }
+
+  return params;
+}
+
+function normalizeImageStudioOptions(
+  preferred: string[] | undefined,
+  inferred: string[],
+  fallback: string[],
+) {
+  const out = [...(preferred ?? []), ...inferred, ...fallback]
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return Array.from(new Set(out));
+}
+
+function inferAspectsFromSupportedSizes(sizes: Set<string>) {
+  const aspects = new Set<string>();
+  sizes.forEach((size) => {
+    const { aspect } = inferSub2APIImageStudioAspectTier(size);
+    if (aspect) aspects.add(aspect);
+  });
+  return Array.from(aspects);
+}
+
+function inferTiersFromSupportedSizes(sizes: Set<string>) {
+  const tiers = new Set<string>();
+  sizes.forEach((size) => {
+    const { tier } = inferSub2APIImageStudioAspectTier(size);
+    if (tier) tiers.add(tier);
+  });
+  return Array.from(tiers);
+}
+
+function sizeAllowedForImageStudioModel(
+  model: Sub2APIImageStudioModel,
+  size?: string,
+) {
+  if (!size) return false;
+  const supported = model.supported_sizes ?? [];
+  return supported.length === 0 || supported.includes(size);
+}
+
+function qualityLabel(value: string) {
+  switch (value) {
+    case "auto":
+      return "Auto";
+    case "high":
+      return "High";
+    case "medium":
+      return "Medium";
+    case "low":
+      return "Low";
+    case "standard":
+      return "Standard";
+    default:
+      return value;
+  }
+}
+
+function backgroundLabel(value: string) {
+  switch (value) {
+    case "auto":
+      return "Auto";
+    case "opaque":
+      return "不透明";
+    case "transparent":
+      return "透明";
+    default:
+      return value;
+  }
+}
+
 export function ControlParamItem(props: {
   title: string;
   subTitle?: React.ReactNode;
@@ -334,6 +589,25 @@ export const getModelParamBasicData = (
   return newParams;
 };
 
+export const normalizeModelParamData = (
+  columns: any[],
+  data: any,
+  clearText?: boolean,
+) => {
+  const next = getModelParamBasicData(columns, data, clearText);
+  columns.forEach((item: any) => {
+    if (item.type !== "select") return;
+    const options = item.options ?? [];
+    if (!options.some((option: any) => option.value === next[item.value])) {
+      next[item.value] =
+        options.find((option: any) => option.value === item.default)?.value ||
+        options[0]?.value ||
+        "";
+    }
+  });
+  return next;
+};
+
 export const getParams = (model: any, params: any) => {
   if (typeof model?.params === "function") {
     const directParams = model.params(params);
@@ -350,6 +624,7 @@ export const getParams = (model: any, params: any) => {
 export function SdPanel() {
   const sdStore = useSdStore();
   const managedMode = isSub2APIManagedImageStudio();
+  const managedBootstrap = useManagedWorkspaceStore((state) => state.bootstrap);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const currentModel = sdStore.currentModel;
   const setCurrentModel = sdStore.setCurrentModel;
@@ -357,28 +632,60 @@ export function SdPanel() {
   const setParams = sdStore.setCurrentParams;
   const modelOptions = useMemo(() => {
     if (!managedMode) return models;
-    return sdStore.sub2apiImageStudioModels.map(toSub2APIImageStudioPanelModel);
+    return sdStore.sub2apiImageStudioModels.map((model) => ({
+      ...toSub2APIImageStudioPanelModel(model),
+      params: (data: any) => getSub2APIImageStudioParams(model, data),
+    }));
   }, [managedMode, sdStore.sub2apiImageStudioModels]);
+  const activeModel = useMemo(() => {
+    return (
+      modelOptions.find((model) => model.value === currentModel.value) ||
+      modelOptions[0] ||
+      currentModel
+    );
+  }, [currentModel, modelOptions]);
+  const columns = useMemo(
+    () => getParams?.(activeModel, params) as any[],
+    [activeModel, params],
+  );
+  const managedBalance = managedBootstrap?.user?.balance;
+  const managedBalanceLabel =
+    typeof managedBalance === "number"
+      ? `$${managedBalance.toFixed(2)}`
+      : "正在同步";
 
   useEffect(() => {
     if (managedMode) {
       void sdStore.fetchSub2APIImageStudioModels();
-      if (!params.size) {
-        setParams(getModelParamBasicData(sub2APIImageStudioParams, params));
-      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managedMode]);
 
+  useEffect(() => {
+    if (!managedMode || modelOptions.length === 0) return;
+    if (activeModel.value !== currentModel.value) {
+      setCurrentModel(activeModel);
+    }
+    const nextColumns = getParams(activeModel, params);
+    const normalized = normalizeModelParamData(nextColumns, params);
+    if (JSON.stringify(normalized) !== JSON.stringify(params)) {
+      setParams(normalized);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managedMode, modelOptions, activeModel.value, currentModel.value]);
+
   const handleValueChange = (field: string, val: any) => {
-    setParams({
+    const nextParams = {
       ...params,
       [field]: val,
-    });
+    };
+    setParams(
+      normalizeModelParamData(getParams(activeModel, nextParams), nextParams),
+    );
   };
   const handleModelChange = (model: any) => {
     setCurrentModel(model);
-    setParams(getModelParamBasicData(getParams(model, params), params));
+    setParams(normalizeModelParamData(getParams(model, params), params));
   };
   const uploadReferences = async (files?: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -398,6 +705,11 @@ export function SdPanel() {
 
   return (
     <>
+      {managedMode && (
+        <ControlParamItem title="账户余额">
+          <div className={styles["managed-balance"]}>{managedBalanceLabel}</div>
+        </ControlParamItem>
+      )}
       <ControlParamItem title={Locale.SdPanel.AIModel}>
         <div className={styles["ai-models"]}>
           {modelOptions.map((item) => {
@@ -475,7 +787,7 @@ export function SdPanel() {
         </ControlParamItem>
       )}
       <ControlParam
-        columns={getParams?.(currentModel, params) as any[]}
+        columns={columns}
         data={params}
         onChange={handleValueChange}
       ></ControlParam>

@@ -396,6 +396,7 @@ describe("Sub2API managed BFF proxy", () => {
         "POST",
         "application/json",
         JSON.stringify({ template_id: "free-create", user_prompt: "cat" }),
+        { "Idempotency-Key": "nextchat-image-task-1" },
       ),
       { params: { path: ["generate"] } },
     );
@@ -408,6 +409,9 @@ describe("Sub2API managed BFF proxy", () => {
     );
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe(
       "application/json",
+    );
+    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe(
+      "nextchat-image-task-1",
     );
     expect(body).toContain('"user_prompt":"cat"');
   });
@@ -445,11 +449,12 @@ function nextBFFRequest(
   method: string,
   contentType?: string,
   body = "",
+  headers: Record<string, string> = {},
 ) {
   return {
     method,
     headers: new Headers(
-      contentType ? { "Content-Type": contentType } : undefined,
+      contentType ? { "Content-Type": contentType, ...headers } : headers,
     ),
     cookies: {
       get(name: string) {

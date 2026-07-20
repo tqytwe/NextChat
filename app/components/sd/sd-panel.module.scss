@@ -87,3 +87,14 @@
   color: #d22;
   font-size: 12px;
 }
+
+.managed-balance {
+  width: fit-content;
+  min-width: 92px;
+  padding: 8px 10px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--black);
+  font-weight: 600;
+}

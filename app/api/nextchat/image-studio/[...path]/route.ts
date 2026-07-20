@@ -31,10 +31,14 @@ async function handle(req: NextRequest, context: RouteContext) {
     );
   }
 
+  const headers: Record<string, string> = {};
   const contentType = req.headers.get("Content-Type") || undefined;
+  const idempotencyKey = req.headers.get("Idempotency-Key") || undefined;
+  if (contentType) headers["Content-Type"] = contentType;
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const init: RequestInit = {
     method: req.method,
-    headers: contentType ? { "Content-Type": contentType } : undefined,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
   };
   if (req.method !== "GET" && req.method !== "HEAD") {
     init.body = await req.arrayBuffer();
