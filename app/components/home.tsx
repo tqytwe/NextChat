@@ -27,17 +27,16 @@ import { useAppConfig } from "../store/config";
 import { AuthPage } from "./auth";
 import { getClientConfig } from "../config/client";
 import { type ClientApi, getClientApi } from "../client/api";
-import { useAccessStore } from "../store";
+import { ModelType, useAccessStore, useChatStore } from "../store";
 import {
-  getManagedWorkspaceModelsForCurrentGroup,
-  managedWorkspaceModelsToLLMModels,
+  getManagedWorkspaceDefaultModelForCurrentGroup,
+  getManagedWorkspaceLLMModelsForCurrentGroup,
+  JISUDENG_DASHBOARD_URL,
   useManagedWorkspaceStore,
 } from "../store/managed-workspace";
 import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
 import { withBasePath } from "../utils/api-path";
-
-const JISUDENG_RETURN_URL = "https://www.jisudeng.com";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -240,17 +239,23 @@ export function useLoadData(enabled = true) {
     (async () => {
       if (clientConfig?.sub2apiManagedMode) {
         const bootstrap = await managedWorkspace.fetchBootstrap();
-        const groupModels = getManagedWorkspaceModelsForCurrentGroup(bootstrap);
-        const models = managedWorkspaceModelsToLLMModels(groupModels);
-        config.mergeModels(models);
-        const nextModel = bootstrap?.models?.default_model || models[0]?.name;
-        if (
-          nextModel &&
-          !models.some((m) => m.name === config.modelConfig.model)
-        ) {
-          config.update((nextConfig) => {
-            nextConfig.modelConfig.model = nextModel as any;
+        const models = getManagedWorkspaceLLMModelsForCurrentGroup(bootstrap);
+        const nextModel =
+          getManagedWorkspaceDefaultModelForCurrentGroup(bootstrap);
+        config.update((nextConfig) => {
+          nextConfig.models = models;
+          if (nextModel) {
+            nextConfig.modelConfig.model = nextModel as ModelType;
             nextConfig.modelConfig.providerName = ServiceProvider.OpenAI;
+          }
+        });
+        if (nextModel) {
+          const chatStore = useChatStore.getState();
+          const session = chatStore.currentSession();
+          chatStore.updateTargetSession(session, (session) => {
+            session.mask.modelConfig.model = nextModel as ModelType;
+            session.mask.modelConfig.providerName = ServiceProvider.OpenAI;
+            session.mask.syncGlobalConfig = false;
           });
         }
         return;
@@ -386,10 +391,10 @@ function ManagedLockedPage(props: { error?: string }) {
         <button
           className={styles["managed-lock-primary"]}
           onClick={() => {
-            window.location.href = JISUDENG_RETURN_URL;
+            window.location.replace(JISUDENG_DASHBOARD_URL);
           }}
         >
-          返回极速蹬
+          返回控制台
         </button>
       </div>
     </div>

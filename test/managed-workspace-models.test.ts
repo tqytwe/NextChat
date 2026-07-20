@@ -1,7 +1,10 @@
 import {
+  getManagedWorkspaceDefaultModelForCurrentGroup,
+  getManagedWorkspaceLLMModelsForCurrentGroup,
   getManagedWorkspaceCurrentGroup,
   getManagedWorkspaceModelsForCurrentGroup,
   managedWorkspaceModelsToLLMModels,
+  resolveManagedWorkspaceURL,
 } from "../app/store/managed-workspace";
 
 describe("Sub2API managed workspace model helpers", () => {
@@ -48,5 +51,57 @@ describe("Sub2API managed workspace model helpers", () => {
         }),
       }),
     ]);
+  });
+
+  test("ignores a default model that is not in the selected group", () => {
+    const bootstrap = {
+      models: {
+        source: "/v1/models",
+        default_model: "gpt-5.4-mini",
+        selected_group_id: 8,
+        groups: [
+          {
+            id: 7,
+            name: "OpenAI main",
+            models: [{ id: "gpt-5.4-mini", name: "gpt-5.4-mini" }],
+          },
+          {
+            id: 8,
+            name: "Grok only",
+            models: [{ id: "grok-4-fast", name: "grok-4-fast" }],
+          },
+        ],
+      },
+    } as any;
+
+    expect(getManagedWorkspaceDefaultModelForCurrentGroup(bootstrap)).toBe(
+      "grok-4-fast",
+    );
+    expect(
+      getManagedWorkspaceLLMModelsForCurrentGroup(bootstrap).map(
+        (model) => model.name,
+      ),
+    ).toEqual(["grok-4-fast"]);
+  });
+
+  test("resolves managed workspace actions away from the public homepage", () => {
+    expect(
+      resolveManagedWorkspaceURL(
+        "https://www.jisudeng.com",
+        "https://www.jisudeng.com/dashboard",
+      ),
+    ).toBe("https://www.jisudeng.com/dashboard");
+    expect(
+      resolveManagedWorkspaceURL(
+        "https://www.jisudeng.com/payment",
+        "https://www.jisudeng.com/purchase",
+      ),
+    ).toBe("https://www.jisudeng.com/purchase");
+    expect(
+      resolveManagedWorkspaceURL(
+        "https://console.example.com",
+        "https://www.jisudeng.com/dashboard",
+      ),
+    ).toBe("https://console.example.com/dashboard");
   });
 });

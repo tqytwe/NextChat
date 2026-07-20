@@ -385,15 +385,28 @@
 .sidebar-tail {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 10px;
   padding-top: 20px;
 }
 
 .sidebar-actions {
   display: inline-flex;
+  min-width: 0;
+  gap: 10px;
 }
 
 .sidebar-action:not(:last-child) {
-  margin-right: 15px;
+  margin-right: 0;
+}
+
+.managed-sidebar-tail {
+  justify-content: flex-start;
+
+  .sidebar-actions {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+  }
 }
 
 .loading-content {

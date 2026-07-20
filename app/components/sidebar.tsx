@@ -38,9 +38,12 @@ import clsx from "clsx";
 import { isMcpEnabled } from "../mcp/actions";
 import { getClientConfig } from "../config/client";
 import { withBasePath } from "../utils/api-path";
-import { useManagedWorkspaceStore } from "../store/managed-workspace";
-
-const JISUDENG_RETURN_URL = "https://www.jisudeng.com";
+import {
+  JISUDENG_DASHBOARD_URL,
+  JISUDENG_RECHARGE_URL,
+  resolveManagedWorkspaceURL,
+  useManagedWorkspaceStore,
+} from "../store/managed-workspace";
 
 const DISCOVERY = [
   { name: Locale.Plugin.Name, path: Path.Plugins },
@@ -222,15 +225,22 @@ export function SideBarBody(props: {
 export function SideBarTail(props: {
   primaryAction?: React.ReactNode;
   secondaryAction?: React.ReactNode;
+  className?: string;
 }) {
-  const { primaryAction, secondaryAction } = props;
+  const { className, primaryAction, secondaryAction } = props;
 
   return (
-    <div className={styles["sidebar-tail"]}>
+    <div className={clsx(styles["sidebar-tail"], className)}>
       <div className={styles["sidebar-actions"]}>{primaryAction}</div>
-      <div className={styles["sidebar-actions"]}>{secondaryAction}</div>
+      {secondaryAction ? (
+        <div className={styles["sidebar-actions"]}>{secondaryAction}</div>
+      ) : null}
     </div>
   );
+}
+
+function replaceLocation(url: string) {
+  window.location.replace(url);
 }
 
 export function SideBar(props: { className?: string }) {
@@ -243,9 +253,14 @@ export function SideBar(props: { className?: string }) {
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const managedMode = !!getClientConfig()?.sub2apiManagedMode;
   const managedBootstrap = useManagedWorkspaceStore((state) => state.bootstrap);
-  const managedReturnUrl =
-    managedBootstrap?.urls?.return_url || JISUDENG_RETURN_URL;
-  const managedRechargeUrl = managedBootstrap?.urls?.recharge_url;
+  const managedReturnUrl = resolveManagedWorkspaceURL(
+    managedBootstrap?.urls?.return_url,
+    JISUDENG_DASHBOARD_URL,
+  );
+  const managedRechargeUrl = resolveManagedWorkspaceURL(
+    managedBootstrap?.urls?.recharge_url,
+    JISUDENG_RECHARGE_URL,
+  );
   const managedBalance = managedBootstrap?.user?.balance;
   const managedSubtitle =
     typeof managedBalance === "number"
@@ -279,7 +294,7 @@ export function SideBar(props: { className?: string }) {
         credentials: "same-origin",
       });
     } finally {
-      window.location.href = withBasePath("/");
+      replaceLocation(managedReturnUrl);
     }
   };
 
@@ -369,6 +384,7 @@ export function SideBar(props: { className?: string }) {
         <ChatList narrow={shouldNarrow} />
       </SideBarBody>
       <SideBarTail
+        className={clsx({ [styles["managed-sidebar-tail"]]: managedMode })}
         primaryAction={
           <>
             <div className={clsx(styles["sidebar-action"], styles.mobile)}>
@@ -381,6 +397,16 @@ export function SideBar(props: { className?: string }) {
                 }}
               />
             </div>
+            {managedMode ? (
+              <div className={styles["sidebar-action"]}>
+                <IconButton
+                  aria={Locale.Home.NewChat}
+                  icon={<AddIcon />}
+                  onClick={newChat}
+                  shadow
+                />
+              </div>
+            ) : null}
             <div className={styles["sidebar-action"]}>
               <Link to={Path.Settings}>
                 <IconButton
@@ -393,27 +419,23 @@ export function SideBar(props: { className?: string }) {
             {managedMode ? (
               <>
                 <div className={styles["sidebar-action"]}>
-                  <a href={managedReturnUrl}>
-                    <IconButton
-                      aria="返回极速蹬"
-                      icon={<ReturnIcon />}
-                      text={shouldNarrow ? undefined : "返回"}
-                      shadow
-                    />
-                  </a>
+                  <IconButton
+                    aria="返回控制台"
+                    icon={<ReturnIcon />}
+                    text={shouldNarrow ? undefined : "返回"}
+                    onClick={() => replaceLocation(managedReturnUrl)}
+                    shadow
+                  />
                 </div>
-                {managedRechargeUrl ? (
-                  <div className={styles["sidebar-action"]}>
-                    <a href={managedRechargeUrl}>
-                      <IconButton
-                        aria="充值"
-                        icon={<LightningIcon />}
-                        text={shouldNarrow ? undefined : "充值"}
-                        shadow
-                      />
-                    </a>
-                  </div>
-                ) : null}
+                <div className={styles["sidebar-action"]}>
+                  <IconButton
+                    aria="充值"
+                    icon={<LightningIcon />}
+                    text={shouldNarrow ? undefined : "充值"}
+                    onClick={() => replaceLocation(managedRechargeUrl)}
+                    shadow
+                  />
+                </div>
                 <div className={styles["sidebar-action"]}>
                   <IconButton
                     aria="退出工作台"
@@ -438,12 +460,14 @@ export function SideBar(props: { className?: string }) {
           </>
         }
         secondaryAction={
-          <IconButton
-            icon={<AddIcon />}
-            text={shouldNarrow ? undefined : Locale.Home.NewChat}
-            onClick={newChat}
-            shadow
-          />
+          managedMode ? undefined : (
+            <IconButton
+              icon={<AddIcon />}
+              text={shouldNarrow ? undefined : Locale.Home.NewChat}
+              onClick={newChat}
+              shadow
+            />
+          )
         }
       />
     </SideBarContainer>

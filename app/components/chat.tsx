@@ -127,7 +127,8 @@ import clsx from "clsx";
 import { getAvailableClientsCount, isMcpEnabled } from "../mcp/actions";
 import {
   getManagedWorkspaceCurrentGroup,
-  managedWorkspaceModelsToLLMModels,
+  getManagedWorkspaceDefaultModelForCurrentGroup,
+  getManagedWorkspaceLLMModelsForCurrentGroup,
   useManagedWorkspaceStore,
 } from "../store/managed-workspace";
 
@@ -615,18 +616,20 @@ export function ChatActions(props: {
       return;
     }
     const group = getManagedWorkspaceCurrentGroup(bootstrap);
-    const llmModels = managedWorkspaceModelsToLLMModels(group?.models ?? []);
-    config.mergeModels(llmModels);
-    const nextModel = bootstrap.models.default_model || llmModels[0]?.name;
+    const llmModels = getManagedWorkspaceLLMModelsForCurrentGroup(bootstrap);
+    const nextModel = getManagedWorkspaceDefaultModelForCurrentGroup(bootstrap);
+    config.update((config) => {
+      config.models = llmModels;
+      if (nextModel) {
+        config.modelConfig.model = nextModel as ModelType;
+        config.modelConfig.providerName = ServiceProvider.OpenAI;
+      }
+    });
     if (nextModel) {
       chatStore.updateTargetSession(session, (session) => {
         session.mask.modelConfig.model = nextModel as ModelType;
         session.mask.modelConfig.providerName = ServiceProvider.OpenAI;
         session.mask.syncGlobalConfig = false;
-      });
-      config.update((config) => {
-        config.modelConfig.model = nextModel as ModelType;
-        config.modelConfig.providerName = ServiceProvider.OpenAI;
       });
       showToast(`${group?.name ?? "分组"} · ${nextModel}`);
     } else {

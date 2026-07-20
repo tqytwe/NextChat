@@ -3,6 +3,10 @@ import { LLMModel } from "../client/api";
 import { ServiceProvider } from "../constant";
 import { withBasePath } from "../utils/api-path";
 
+const JISUDENG_ORIGIN = "https://www.jisudeng.com";
+export const JISUDENG_DASHBOARD_URL = `${JISUDENG_ORIGIN}/dashboard`;
+export const JISUDENG_RECHARGE_URL = `${JISUDENG_ORIGIN}/purchase`;
+
 type Sub2APIEnvelope<T> = {
   code?: number;
   message?: string;
@@ -168,6 +172,27 @@ export function getManagedWorkspaceModelsForCurrentGroup(
   return getManagedWorkspaceCurrentGroup(bootstrap)?.models ?? [];
 }
 
+export function getManagedWorkspaceDefaultModelForCurrentGroup(
+  bootstrap?: ManagedWorkspaceBootstrap,
+) {
+  const models = getManagedWorkspaceModelsForCurrentGroup(bootstrap);
+  const defaultModel = bootstrap?.models?.default_model?.trim();
+  const selected =
+    models.find(
+      (model) => model.name === defaultModel || model.id === defaultModel,
+    ) || models[0];
+
+  return selected?.name || selected?.id || "";
+}
+
+export function getManagedWorkspaceLLMModelsForCurrentGroup(
+  bootstrap?: ManagedWorkspaceBootstrap,
+) {
+  return managedWorkspaceModelsToLLMModels(
+    getManagedWorkspaceModelsForCurrentGroup(bootstrap),
+  );
+}
+
 export function managedWorkspaceModelsToLLMModels(
   models: ManagedWorkspaceModel[],
 ): LLMModel[] {
@@ -183,6 +208,29 @@ export function managedWorkspaceModelsToLLMModels(
       sorted: 1,
     },
   }));
+}
+
+export function resolveManagedWorkspaceURL(
+  value: string | undefined,
+  fallback: string,
+) {
+  const fallbackURL = new URL(fallback, JISUDENG_ORIGIN);
+  const raw = value?.trim();
+  if (!raw) return fallbackURL.toString();
+
+  try {
+    const url = new URL(raw, JISUDENG_ORIGIN);
+    const normalizedPath = url.pathname.replace(/\/+$/g, "") || "/";
+    if (
+      normalizedPath === "/" ||
+      (fallbackURL.pathname === "/purchase" && normalizedPath === "/payment")
+    ) {
+      return new URL(fallbackURL.pathname, url.origin).toString();
+    }
+    return url.toString();
+  } catch {
+    return fallbackURL.toString();
+  }
 }
 
 async function fetchManagedWorkspace<T>(url: string, init?: RequestInit) {
