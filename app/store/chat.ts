@@ -231,7 +231,7 @@ const DEFAULT_CHAT_STATE = {
 
 const CHAT_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-function pruneExpiredSessions<T extends typeof DEFAULT_CHAT_STATE>(
+export function pruneExpiredSessions<T extends typeof DEFAULT_CHAT_STATE>(
   state: T,
 ): T {
   const cutoff = Date.now() - CHAT_SESSION_RETENTION_MS;
