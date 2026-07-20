@@ -1,5 +1,5 @@
 import styles from "./sd-panel.module.scss";
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { Select } from "@/app/components/ui-lib";
 import { IconButton } from "@/app/components/button";
 import Locale from "@/app/locales";
@@ -9,6 +9,10 @@ import {
   useSdStore,
 } from "@/app/store/sd";
 import clsx from "clsx";
+import UploadIcon from "@/app/icons/upload.svg";
+import DeleteIcon from "@/app/icons/clear.svg";
+import LoadingIcon from "@/app/icons/three-dots.svg";
+import { showToast } from "@/app/components/ui-lib";
 
 export const params = [
   {
@@ -189,9 +193,9 @@ export const sub2APIImageStudioParams = [
 
 export function ControlParamItem(props: {
   title: string;
-  subTitle?: string;
+  subTitle?: React.ReactNode;
   required?: boolean;
-  children?: JSX.Element | JSX.Element[];
+  children?: React.ReactNode;
   className?: string;
 }) {
   return (
@@ -346,6 +350,7 @@ export const getParams = (model: any, params: any) => {
 export function SdPanel() {
   const sdStore = useSdStore();
   const managedMode = isSub2APIManagedImageStudio();
+  const referenceInputRef = useRef<HTMLInputElement>(null);
   const currentModel = sdStore.currentModel;
   const setCurrentModel = sdStore.setCurrentModel;
   const params = sdStore.currentParams;
@@ -375,6 +380,21 @@ export function SdPanel() {
     setCurrentModel(model);
     setParams(getModelParamBasicData(getParams(model, params), params));
   };
+  const uploadReferences = async (files?: FileList | null) => {
+    if (!files || files.length === 0) return;
+    for (const file of Array.from(files).slice(0, 4)) {
+      const reference = await sdStore.uploadSub2APIImageStudioReference(file);
+      if (!reference) {
+        showToast(
+          sdStore.sub2apiImageStudioReferencesError || "引用图上传失败",
+        );
+        break;
+      }
+    }
+    if (referenceInputRef.current) {
+      referenceInputRef.current.value = "";
+    }
+  };
 
   return (
     <>
@@ -399,6 +419,61 @@ export function SdPanel() {
           )}
         </div>
       </ControlParamItem>
+      {managedMode && (
+        <ControlParamItem title="引用图">
+          <input
+            ref={referenceInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            style={{ display: "none" }}
+            onChange={(event) => uploadReferences(event.currentTarget.files)}
+          />
+          <div className={styles["reference-upload"]}>
+            <IconButton
+              icon={
+                sdStore.sub2apiImageStudioReferenceUploading ? (
+                  <LoadingIcon />
+                ) : (
+                  <UploadIcon />
+                )
+              }
+              text="上传引用图"
+              onClick={() => referenceInputRef.current?.click()}
+              shadow
+            />
+            {sdStore.sub2apiImageStudioReferences.length > 0 && (
+              <IconButton
+                icon={<DeleteIcon />}
+                text="清空"
+                onClick={sdStore.clearSub2APIImageStudioReferences}
+                shadow
+              />
+            )}
+          </div>
+          {sdStore.sub2apiImageStudioReferencesError && (
+            <div className={styles["reference-error"]}>
+              {sdStore.sub2apiImageStudioReferencesError}
+            </div>
+          )}
+          <div className={styles["reference-list"]}>
+            {sdStore.sub2apiImageStudioReferences.map((reference) => (
+              <div className={styles["reference-item"]} key={reference.id}>
+                <span title={reference.filename || reference.id}>
+                  {reference.filename || reference.id}
+                </span>
+                <IconButton
+                  icon={<DeleteIcon />}
+                  aria="删除引用图"
+                  onClick={() =>
+                    void sdStore.deleteSub2APIImageStudioReference(reference.id)
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </ControlParamItem>
+      )}
       <ControlParam
         columns={getParams?.(currentModel, params) as any[]}
         data={params}

@@ -1,7 +1,9 @@
 import Fuse from "fuse.js";
 import { nanoid } from "nanoid";
 import { StoreKey } from "../constant";
+import { getClientConfig } from "../config/client";
 import { getLang } from "../locales";
+import { loadManagedPromptCatalog } from "../utils/managed-prompts";
 import { createPersistStore } from "../utils/store";
 
 export interface Prompt {
@@ -23,9 +25,6 @@ export const SearchService = {
   builtinPrompts: [] as Prompt[],
 
   init(builtinPrompts: Prompt[], userPrompts: Prompt[]) {
-    if (this.ready) {
-      return;
-    }
     this.allPrompts = userPrompts.concat(builtinPrompts);
     this.builtinPrompts = builtinPrompts.slice();
     this.builtinEngine.setCollection(builtinPrompts);
@@ -152,42 +151,56 @@ export const usePromptStore = createPersistStore(
         return;
       }
 
-      const PROMPT_URL = "./prompts.json";
-
-      type PromptList = Array<[string, string]>;
-
-      fetch(PROMPT_URL)
-        .then((res) => res.json())
-        .then((res) => {
-          let fetchPrompts = [res?.en, res?.tw, res?.cn].filter(
-            Array.isArray,
-          ) as PromptList[];
-          if (getLang() === "cn") {
-            fetchPrompts = fetchPrompts.reverse();
-          }
-          const builtinPrompts = fetchPrompts.map((promptList: PromptList) => {
-            return promptList.map(
-              ([title, content]) =>
-                ({
-                  id: nanoid(),
-                  title,
-                  content,
-                  createdAt: Date.now(),
-                }) as Prompt,
-            );
-          });
-
-          const userPrompts = usePromptStore.getState().getUserPrompts() ?? [];
-
-          const allPromptsForSearch = builtinPrompts
-            .reduce((pre, cur) => pre.concat(cur), [])
-            .filter((v) => !!v.title && !!v.content);
-          SearchService.count.builtin =
-            (res?.en?.length ?? 0) +
-            (res?.cn?.length ?? 0) +
-            (res?.tw?.length ?? 0);
-          SearchService.init(allPromptsForSearch, userPrompts);
-        });
+      loadBuiltinPrompts().then((builtinPrompts) => {
+        const userPrompts = usePromptStore.getState().getUserPrompts() ?? [];
+        const allPromptsForSearch = builtinPrompts.filter(
+          (v) => !!v.title && !!v.content,
+        );
+        SearchService.count.builtin = allPromptsForSearch.length;
+        SearchService.init(allPromptsForSearch, userPrompts);
+      });
     },
   },
 );
+
+type PromptList = Array<[string, string]>;
+
+async function loadBuiltinPrompts() {
+  if (getClientConfig()?.sub2apiManagedMode) {
+    try {
+      const managedPrompts = await loadManagedPromptCatalog();
+      if (managedPrompts.length > 0) {
+        return managedPrompts;
+      }
+    } catch (error) {
+      console.warn("[Prompt] failed to load Sub2API prompt catalog", error);
+    }
+  }
+
+  return loadLocalPromptCatalog();
+}
+
+async function loadLocalPromptCatalog() {
+  const res = await fetch("./prompts.json");
+  const catalog = await res.json();
+  let fetchPrompts = [catalog?.en, catalog?.tw, catalog?.cn].filter(
+    Array.isArray,
+  ) as PromptList[];
+  if (getLang() === "cn") {
+    fetchPrompts = fetchPrompts.reverse();
+  }
+
+  return fetchPrompts
+    .map((promptList) => {
+      return promptList.map(
+        ([title, content]) =>
+          ({
+            id: nanoid(),
+            title,
+            content,
+            createdAt: Date.now(),
+          }) as Prompt,
+      );
+    })
+    .reduce((pre, cur) => pre.concat(cur), []);
+}

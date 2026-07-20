@@ -28,6 +28,15 @@ export type Sub2APIImageStudioModel = {
   display_name?: string;
 };
 
+export type Sub2APIImageStudioReference = {
+  id: string;
+  filename?: string;
+  content_type?: string;
+  byte_size?: number;
+  created_at?: string;
+  expires_at?: string;
+};
+
 export type Sub2APIImageStudioAsset = {
   id: string;
   url?: string;
@@ -60,6 +69,11 @@ const DEFAULT_SD_STATE = {
   sub2apiImageStudioModels: [] as Sub2APIImageStudioModel[],
   sub2apiImageStudioModelsLoading: false,
   sub2apiImageStudioModelsError: "",
+  sub2apiImageStudioReferences: [] as Sub2APIImageStudioReference[],
+  sub2apiImageStudioReferenceUploading: false,
+  sub2apiImageStudioReferencesError: "",
+  sub2apiImageStudioJobsLoading: false,
+  sub2apiImageStudioJobsError: "",
 };
 
 export const useSdStore = createPersistStore<
@@ -71,11 +85,22 @@ export const useSdStore = createPersistStore<
     sub2apiImageStudioModels: Sub2APIImageStudioModel[];
     sub2apiImageStudioModelsLoading: boolean;
     sub2apiImageStudioModelsError: string;
+    sub2apiImageStudioReferences: Sub2APIImageStudioReference[];
+    sub2apiImageStudioReferenceUploading: boolean;
+    sub2apiImageStudioReferencesError: string;
+    sub2apiImageStudioJobsLoading: boolean;
+    sub2apiImageStudioJobsError: string;
   },
   {
     getNextId: () => number;
     sendTask: (data: any, okCall?: Function) => void;
     fetchSub2APIImageStudioModels: () => Promise<Sub2APIImageStudioModel[]>;
+    uploadSub2APIImageStudioReference: (
+      file: File,
+    ) => Promise<Sub2APIImageStudioReference | undefined>;
+    deleteSub2APIImageStudioReference: (id: string) => Promise<void>;
+    clearSub2APIImageStudioReferences: () => void;
+    fetchSub2APIImageStudioJobs: () => Promise<Sub2APIImageStudioJob[]>;
     sub2apiImageStudioRequestCall: (data: any) => Promise<void>;
     pollSub2APIImageStudioJob: (
       data: any,
@@ -143,6 +168,92 @@ export const useSdStore = createPersistStore<
             sub2apiImageStudioModelsLoading: false,
             sub2apiImageStudioModelsError:
               error.message || "Failed to load image models",
+          });
+          return [];
+        }
+      },
+      async uploadSub2APIImageStudioReference(file: File) {
+        const references = _get().sub2apiImageStudioReferences ?? [];
+        if (references.length >= 4) {
+          set({ sub2apiImageStudioReferencesError: "最多上传 4 张引用图" });
+          return undefined;
+        }
+        set({
+          sub2apiImageStudioReferenceUploading: true,
+          sub2apiImageStudioReferencesError: "",
+        });
+        try {
+          const formData = new FormData();
+          formData.append("image", file);
+          const data = await fetchSub2APIImageStudio<{
+            reference: Sub2APIImageStudioReference;
+          }>("/references", {
+            method: "POST",
+            body: formData,
+          });
+          const reference = data.reference;
+          set({
+            sub2apiImageStudioReferences: [...references, reference],
+            sub2apiImageStudioReferenceUploading: false,
+          });
+          return reference;
+        } catch (error: any) {
+          set({
+            sub2apiImageStudioReferenceUploading: false,
+            sub2apiImageStudioReferencesError:
+              error.message || "Reference upload failed",
+          });
+          return undefined;
+        }
+      },
+      async deleteSub2APIImageStudioReference(id: string) {
+        try {
+          await fetchSub2APIImageStudio<{ deleted?: boolean }>(
+            `/references/${encodeURIComponent(id)}`,
+            { method: "DELETE" },
+          );
+        } finally {
+          set({
+            sub2apiImageStudioReferences: (
+              _get().sub2apiImageStudioReferences ?? []
+            ).filter((reference) => reference.id !== id),
+          });
+        }
+      },
+      clearSub2APIImageStudioReferences() {
+        set({
+          sub2apiImageStudioReferences: [],
+          sub2apiImageStudioReferencesError: "",
+        });
+      },
+      async fetchSub2APIImageStudioJobs() {
+        set({
+          sub2apiImageStudioJobsLoading: true,
+          sub2apiImageStudioJobsError: "",
+        });
+        try {
+          const data = await fetchSub2APIImageStudio<{
+            jobs: Sub2APIImageStudioJob[];
+          }>("/jobs?page=1&page_size=24");
+          const remoteDraws = (data.jobs ?? []).map(
+            toSub2APIImageStudioJobDraw,
+          );
+          const existing = new Set(
+            (_get().draw ?? []).map((item: any) => item.job_id || item.id),
+          );
+          set({
+            draw: [
+              ...(_get().draw ?? []),
+              ...remoteDraws.filter((item) => !existing.has(item.job_id)),
+            ],
+            sub2apiImageStudioJobsLoading: false,
+          });
+          return data.jobs ?? [];
+        } catch (error: any) {
+          set({
+            sub2apiImageStudioJobsLoading: false,
+            sub2apiImageStudioJobsError:
+              error.message || "Failed to load image jobs",
           });
           return [];
         }
@@ -318,7 +429,10 @@ export function toSub2APIImageStudioPanelModel(model: Sub2APIImageStudioModel) {
 
 export function buildSub2APIImageStudioGeneratePayload(data: any) {
   const params = data?.params ?? {};
-  return {
+  const referenceIDs = Array.isArray(params.reference_ids)
+    ? params.reference_ids.filter(Boolean)
+    : [];
+  const payload: any = {
     template_id: "free-create",
     user_prompt: params.prompt ?? "",
     size: params.size || "1024x1024",
@@ -328,6 +442,10 @@ export function buildSub2APIImageStudioGeneratePayload(data: any) {
     output_format: params.output_format || "png",
     retain_days: NEXTCHAT_IMAGE_STUDIO_RETAIN_DAYS,
   };
+  if (referenceIDs.length > 0) {
+    payload.reference_ids = referenceIDs;
+  }
+  return payload;
 }
 
 export function normalizeSub2APIImageStudioAssetURL(
@@ -365,6 +483,10 @@ function toSub2APIImageStudioDraw(data: any, job: Sub2APIImageStudioJob) {
     img_data: imgData || data.img_data,
     error: job.error_message || data.error,
     expires_at: job.expires_at,
+    image_asset_expired: isSub2APIManagedImageExpired({
+      ...data,
+      expires_at: job.expires_at,
+    }),
     assets: job.assets?.map((asset) => ({
       ...asset,
       url: normalizeSub2APIImageStudioAssetURL(asset.url, asset.id),
@@ -382,6 +504,31 @@ function toSub2APIImageStudioDraw(data: any, job: Sub2APIImageStudioJob) {
       ),
     })),
   };
+}
+
+function toSub2APIImageStudioJobDraw(job: Sub2APIImageStudioJob) {
+  return toSub2APIImageStudioDraw(
+    {
+      id: `job-${job.id}`,
+      job_id: job.id,
+      model: job.model,
+      model_name: job.model,
+      params: {
+        prompt: "历史图片任务",
+        size: (job as any).size,
+        count: (job as any).count,
+      },
+      created_at: (job as any).created_at,
+      img_data: "",
+    },
+    job,
+  );
+}
+
+export function isSub2APIManagedImageExpired(item: any, now = Date.now()) {
+  if (item?.image_asset_expired || item?.status === "expired") return true;
+  const expiresAt = Date.parse(item?.expires_at || "");
+  return Number.isFinite(expiresAt) && expiresAt <= now;
 }
 
 function normalizeSub2APIImageStudioTaskStatus(

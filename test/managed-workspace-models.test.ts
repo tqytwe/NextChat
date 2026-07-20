@@ -6,6 +6,7 @@ import {
   managedWorkspaceModelsToLLMModels,
   resolveManagedWorkspaceURL,
 } from "../app/store/managed-workspace";
+import { collectVisibleModelsForWorkspace } from "../app/utils/hooks";
 
 describe("Sub2API managed workspace model helpers", () => {
   test("selects the active group and converts its models", () => {
@@ -93,10 +94,22 @@ describe("Sub2API managed workspace model helpers", () => {
     ).toBe("https://www.jisudeng.com/dashboard");
     expect(
       resolveManagedWorkspaceURL(
+        "https://www.jisudeng.com/home",
+        "https://www.jisudeng.com/dashboard",
+      ),
+    ).toBe("https://www.jisudeng.com/dashboard");
+    expect(
+      resolveManagedWorkspaceURL(
         "https://www.jisudeng.com/payment",
         "https://www.jisudeng.com/purchase",
       ),
     ).toBe("https://www.jisudeng.com/purchase");
+    expect(
+      resolveManagedWorkspaceURL(
+        "https://www.jisudeng.com/payment?return=/ai",
+        "https://www.jisudeng.com/purchase",
+      ),
+    ).toBe("https://www.jisudeng.com/purchase?return=/ai");
     expect(
       resolveManagedWorkspaceURL(
         "https://console.example.com",
@@ -109,5 +122,51 @@ describe("Sub2API managed workspace model helpers", () => {
         "https://www.jisudeng.com/purchase",
       ),
     ).toBe("https://www.jisudeng.com/purchase");
+  });
+
+  test("uses only Sub2API current-group models in managed mode", () => {
+    const models = collectVisibleModelsForWorkspace(
+      {
+        models: managedWorkspaceModelsToLLMModels([
+          { id: "grok-4-fast", name: "grok-4-fast" },
+        ]),
+        customModels: "+gpt-5.4-mini@openai",
+        modelConfig: { model: "grok-4-fast" },
+      },
+      {
+        customModels: "+claude-4-sonnet@anthropic",
+        defaultModel: "gpt-5.4-mini",
+      },
+      true,
+    );
+
+    expect(models.map((model) => model.name)).toEqual(["grok-4-fast"]);
+    expect(models[0].isDefault).toBe(true);
+  });
+
+  test("keeps local custom models only outside managed mode", () => {
+    const models = collectVisibleModelsForWorkspace(
+      {
+        models: managedWorkspaceModelsToLLMModels([
+          { id: "grok-4-fast", name: "grok-4-fast" },
+        ]),
+        customModels: "+gpt-5.4-mini@openai",
+        modelConfig: { model: "grok-4-fast" },
+      },
+      {
+        customModels: "+claude-4-sonnet@anthropic",
+        defaultModel: "gpt-5.4-mini",
+      },
+      false,
+    );
+
+    expect(models.map((model) => model.name)).toEqual([
+      "gpt-5.4-mini",
+      "claude-4-sonnet",
+      "grok-4-fast",
+    ]);
+    expect(
+      models.find((model) => model.name === "gpt-5.4-mini")?.isDefault,
+    ).toBe(true);
   });
 });

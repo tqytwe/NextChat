@@ -23,6 +23,7 @@ export function IconButton(props: {
 }) {
   return (
     <button
+      type="button"
       className={clsx(
         "clickable",
         styles["icon-button"],

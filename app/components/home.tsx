@@ -11,7 +11,7 @@ import LoadingIcon from "../icons/three-dots.svg";
 import { getCSSVar, useMobileScreen } from "../utils";
 
 import dynamic from "next/dynamic";
-import { Path, ServiceProvider, SlotID } from "../constant";
+import { Path, SlotID } from "../constant";
 import { ErrorBoundary } from "./error";
 
 import { getISOLang, getLang } from "../locales";
@@ -27,16 +27,15 @@ import { useAppConfig } from "../store/config";
 import { AuthPage } from "./auth";
 import { getClientConfig } from "../config/client";
 import { type ClientApi, getClientApi } from "../client/api";
-import { ModelType, useAccessStore, useChatStore } from "../store";
+import { useAccessStore } from "../store";
 import {
-  getManagedWorkspaceDefaultModelForCurrentGroup,
-  getManagedWorkspaceLLMModelsForCurrentGroup,
   JISUDENG_DASHBOARD_URL,
   useManagedWorkspaceStore,
 } from "../store/managed-workspace";
 import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
 import { withBasePath } from "../utils/api-path";
+import { applyManagedWorkspaceModelsToStores } from "../utils/managed-workspace-models";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -167,6 +166,7 @@ export function WindowContent(props: { children: React.ReactNode }) {
 function Screen() {
   const config = useAppConfig();
   const location = useLocation();
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
   const isArtifact = location.pathname.includes(Path.Artifacts);
   const isHome = location.pathname === Path.Home;
   const isAuth = location.pathname === Path.Auth;
@@ -181,7 +181,7 @@ function Screen() {
     loadAsyncGoogleFont();
   }, []);
 
-  if (isArtifact) {
+  if (isArtifact && !managedMode) {
     return (
       <Routes>
         <Route path="/artifacts/:id" element={<Artifacts />} />
@@ -202,13 +202,26 @@ function Screen() {
         <WindowContent>
           <Routes>
             <Route path={Path.Home} element={<Chat />} />
-            <Route path={Path.NewChat} element={<NewChat />} />
-            <Route path={Path.Masks} element={<MaskPage />} />
-            <Route path={Path.Plugins} element={<PluginPage />} />
+            <Route
+              path={Path.NewChat}
+              element={managedMode ? <Chat /> : <NewChat />}
+            />
+            <Route
+              path={Path.Masks}
+              element={managedMode ? <Chat /> : <MaskPage />}
+            />
+            <Route
+              path={Path.Plugins}
+              element={managedMode ? <Chat /> : <PluginPage />}
+            />
             <Route path={Path.SearchChat} element={<SearchChat />} />
             <Route path={Path.Chat} element={<Chat />} />
             <Route path={Path.Settings} element={<Settings />} />
-            <Route path={Path.McpMarket} element={<McpMarketPage />} />
+            <Route
+              path={Path.McpMarket}
+              element={managedMode ? <Chat /> : <McpMarketPage />}
+            />
+            <Route path="*" element={<Chat />} />
           </Routes>
         </WindowContent>
       </>
@@ -239,25 +252,7 @@ export function useLoadData(enabled = true) {
     (async () => {
       if (clientConfig?.sub2apiManagedMode) {
         const bootstrap = await managedWorkspace.fetchBootstrap();
-        const models = getManagedWorkspaceLLMModelsForCurrentGroup(bootstrap);
-        const nextModel =
-          getManagedWorkspaceDefaultModelForCurrentGroup(bootstrap);
-        config.update((nextConfig) => {
-          nextConfig.models = models;
-          if (nextModel) {
-            nextConfig.modelConfig.model = nextModel as ModelType;
-            nextConfig.modelConfig.providerName = ServiceProvider.OpenAI;
-          }
-        });
-        if (nextModel) {
-          const chatStore = useChatStore.getState();
-          const session = chatStore.currentSession();
-          chatStore.updateTargetSession(session, (session) => {
-            session.mask.modelConfig.model = nextModel as ModelType;
-            session.mask.modelConfig.providerName = ServiceProvider.OpenAI;
-            session.mask.syncGlobalConfig = false;
-          });
-        }
+        applyManagedWorkspaceModelsToStores(bootstrap);
         return;
       }
       const models = await api.llm.models();

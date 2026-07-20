@@ -404,8 +404,23 @@
   justify-content: flex-start;
 
   .sidebar-actions {
-    flex: 1 1 auto;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .sidebar-action,
+  .sidebar-action > * {
+    min-width: 0;
+  }
+
+  .sidebar-action {
+    display: flex;
+  }
+
+  .sidebar-action button {
+    width: 100%;
   }
 }
 

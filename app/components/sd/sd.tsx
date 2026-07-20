@@ -20,9 +20,10 @@ import { getClientConfig } from "@/app/config/client";
 import { ChatAction } from "@/app/components/chat";
 import DeleteIcon from "@/app/icons/clear.svg";
 import CopyIcon from "@/app/icons/copy.svg";
+import DownloadIcon from "@/app/icons/download.svg";
 import PromptIcon from "@/app/icons/prompt.svg";
 import ResetIcon from "@/app/icons/reload.svg";
-import { useSdStore } from "@/app/store/sd";
+import { isSub2APIManagedImageExpired, useSdStore } from "@/app/store/sd";
 import LoadingIcon from "@/app/icons/three-dots.svg";
 import ErrorIcon from "@/app/icons/delete.svg";
 import SDIcon from "@/app/icons/sd.svg";
@@ -85,6 +86,39 @@ function getSdTaskStatus(item: any) {
       )}
     </p>
   );
+}
+
+function getManagedImageSources(item: any) {
+  const assets = (item.assets ?? []) as any[];
+  const sources = assets
+    .map((asset, index) => ({
+      id: asset.id || `${item.id}-${index}`,
+      preview: asset.preview_url || asset.url || asset.download_url,
+      download: asset.download_url || asset.url || asset.preview_url,
+    }))
+    .filter((asset) => !!asset.preview);
+
+  if (sources.length === 0 && item.img_data) {
+    sources.push({
+      id: `${item.id}-image`,
+      preview: item.img_data,
+      download: item.img_data,
+    });
+  }
+
+  return sources;
+}
+
+function downloadManagedImage(item: any) {
+  const source = getManagedImageSources(item)[0];
+  if (!source?.download) return;
+  const link = document.createElement("a");
+  link.href = source.download;
+  link.download = `${item.job_id || item.id || "image"}.png`;
+  link.target = "_blank";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 export function Sd() {
@@ -158,30 +192,77 @@ export function Sd() {
             <div className={styles["sd-img-list"]}>
               {sdImages.length > 0 ? (
                 sdImages.map((item: any) => {
+                  const managedExpired =
+                    managedMode && isSub2APIManagedImageExpired(item);
+                  const managedImageSources = managedMode
+                    ? getManagedImageSources(item)
+                    : [];
                   return (
                     <div
                       key={item.id}
                       style={{ display: "flex" }}
                       className={styles["sd-img-item"]}
                     >
-                      {item.status === "success" ? (
-                        <img
-                          className={styles["img"]}
-                          src={item.img_data}
-                          alt={item.id}
-                          onClick={(e) =>
-                            showImageModal(
-                              item.img_data,
-                              true,
-                              isMobileScreen
-                                ? { width: "100%", height: "fit-content" }
-                                : { maxWidth: "100%", maxHeight: "100%" },
-                              isMobileScreen
-                                ? { width: "100%", height: "fit-content" }
-                                : { width: "100%", height: "100%" },
-                            )
-                          }
-                        />
+                      {managedExpired ? (
+                        <div
+                          className={clsx(
+                            styles["pre-img"],
+                            styles["expired-img"],
+                          )}
+                        >
+                          图片已过期
+                        </div>
+                      ) : item.status === "success" ? (
+                        managedMode && managedImageSources.length > 1 ? (
+                          <div className={styles["managed-img-grid"]}>
+                            {managedImageSources.map((source) => (
+                              <img
+                                key={source.id}
+                                className={styles["img"]}
+                                src={source.preview}
+                                alt={source.id}
+                                onClick={() =>
+                                  showImageModal(
+                                    source.preview,
+                                    true,
+                                    isMobileScreen
+                                      ? { width: "100%", height: "fit-content" }
+                                      : { maxWidth: "100%", maxHeight: "100%" },
+                                    isMobileScreen
+                                      ? { width: "100%", height: "fit-content" }
+                                      : { width: "100%", height: "100%" },
+                                  )
+                                }
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <img
+                            className={styles["img"]}
+                            src={
+                              managedMode
+                                ? managedImageSources[0]?.preview ||
+                                  item.img_data
+                                : item.img_data
+                            }
+                            alt={item.id}
+                            onClick={() =>
+                              showImageModal(
+                                managedMode
+                                  ? managedImageSources[0]?.preview ||
+                                      item.img_data
+                                  : item.img_data,
+                                true,
+                                isMobileScreen
+                                  ? { width: "100%", height: "fit-content" }
+                                  : { maxWidth: "100%", maxHeight: "100%" },
+                                isMobileScreen
+                                  ? { width: "100%", height: "fit-content" }
+                                  : { width: "100%", height: "100%" },
+                              )
+                            }
+                          />
+                        )
                       ) : item.status === "error" ? (
                         <div className={styles["pre-img"]}>
                           <ErrorIcon />
@@ -219,6 +300,11 @@ export function Sd() {
                         </p>
                         {getSdTaskStatus(item)}
                         <p>{item.created_at}</p>
+                        {managedMode && item.expires_at && (
+                          <p className={styles["line-1"]}>
+                            保留至: {new Date(item.expires_at).toLocaleString()}
+                          </p>
+                        )}
                         <div className={chatStyles["chat-message-actions"]}>
                           <div className={chatStyles["chat-input-actions"]}>
                             <ChatAction
@@ -293,6 +379,15 @@ export function Sd() {
                                 )
                               }
                             />
+                            {managedMode &&
+                              !managedExpired &&
+                              managedImageSources.length > 0 && (
+                                <ChatAction
+                                  text="下载"
+                                  icon={<DownloadIcon />}
+                                  onClick={() => downloadManagedImage(item)}
+                                />
+                              )}
                             <ChatAction
                               text={Locale.Sd.Actions.Retry}
                               icon={<ResetIcon />}

@@ -7,6 +7,8 @@ const JISUDENG_ORIGIN = "https://www.jisudeng.com";
 export const JISUDENG_DASHBOARD_URL = `${JISUDENG_ORIGIN}/dashboard`;
 export const JISUDENG_RECHARGE_URL = `${JISUDENG_ORIGIN}/purchase`;
 const JISUDENG_LEGACY_HOSTS = new Set(["jisuodeng.zeabur.app"]);
+const HOMEPAGE_PATHS = new Set(["/", "/home", "/index"]);
+const LEGACY_RECHARGE_PATHS = new Set(["/payment", "/recharge", "/billing"]);
 
 type Sub2APIEnvelope<T> = {
   code?: number;
@@ -228,11 +230,16 @@ export function resolveManagedWorkspaceURL(
       return fallbackURL.toString();
     }
     const normalizedPath = url.pathname.replace(/\/+$/g, "") || "/";
-    if (
-      normalizedPath === "/" ||
-      (fallbackURL.pathname === "/purchase" && normalizedPath === "/payment")
-    ) {
+    if (HOMEPAGE_PATHS.has(normalizedPath)) {
       return new URL(fallbackURL.pathname, url.origin).toString();
+    }
+    if (
+      fallbackURL.pathname === "/purchase" &&
+      LEGACY_RECHARGE_PATHS.has(normalizedPath)
+    ) {
+      const rechargeURL = new URL(fallbackURL.pathname, url.origin);
+      rechargeURL.search = url.search;
+      return rechargeURL.toString();
     }
     return url.toString();
   } catch {

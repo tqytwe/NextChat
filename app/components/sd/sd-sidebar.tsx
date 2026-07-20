@@ -3,6 +3,7 @@ import GithubIcon from "@/app/icons/github.svg";
 import SDIcon from "@/app/icons/sd.svg";
 import ReturnIcon from "@/app/icons/return.svg";
 import HistoryIcon from "@/app/icons/history.svg";
+import ResetIcon from "@/app/icons/reload.svg";
 import Locale from "@/app/locales";
 
 import { Path, REPO_URL } from "@/app/constant";
@@ -63,6 +64,11 @@ export function SideBar(props: { className?: string }) {
         }
       }
     }
+    if (managedMode) {
+      reqParams.reference_ids = sdStore.sub2apiImageStudioReferences.map(
+        (reference) => reference.id,
+      );
+    }
     let data: any = {
       model: currentModel.value,
       model_name: currentModel.name,
@@ -73,6 +79,9 @@ export function SideBar(props: { className?: string }) {
     };
     sdStore.sendTask(data, () => {
       setParams(getModelParamBasicData(columns, params, true));
+      if (managedMode) {
+        sdStore.clearSub2APIImageStudioReferences();
+      }
       navigate(Path.SdNew);
     });
   };
@@ -132,9 +141,21 @@ export function SideBar(props: { className?: string }) {
       </SideBarBody>
       <SideBarTail
         primaryAction={
-          <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
-            <IconButton icon={<GithubIcon />} shadow />
-          </a>
+          managedMode ? (
+            <IconButton
+              icon={<ResetIcon />}
+              text={shouldNarrow ? undefined : "刷新任务"}
+              shadow
+              onClick={async () => {
+                const jobs = await sdStore.fetchSub2APIImageStudioJobs();
+                showToast(`已同步 ${jobs.length} 个图片任务`);
+              }}
+            />
+          ) : (
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+              <IconButton icon={<GithubIcon />} shadow />
+            </a>
+          )
         }
         secondaryAction={
           <IconButton

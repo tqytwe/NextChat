@@ -1,5 +1,6 @@
 import {
   buildSub2APIImageStudioGeneratePayload,
+  isSub2APIManagedImageExpired,
   normalizeSub2APIImageStudioAssetURL,
 } from "../app/store/sd";
 
@@ -28,6 +29,18 @@ describe("Sub2API managed image studio helpers", () => {
     });
   });
 
+  test("includes uploaded reference ids when generating", () => {
+    const payload = buildSub2APIImageStudioGeneratePayload({
+      model: "gpt-image-1.5",
+      params: {
+        prompt: "edit this product photo",
+        reference_ids: ["ref-1", "", "ref-2"],
+      },
+    });
+
+    expect(payload.reference_ids).toEqual(["ref-1", "ref-2"]);
+  });
+
   test("rewrites Sub2API asset paths through the NextChat BFF", () => {
     expect(
       normalizeSub2APIImageStudioAssetURL(
@@ -37,5 +50,16 @@ describe("Sub2API managed image studio helpers", () => {
     expect(normalizeSub2APIImageStudioAssetURL(undefined, "asset-2")).toBe(
       "/api/nextchat/image-studio/assets/asset-2/content",
     );
+  });
+
+  test("marks managed images expired when the asset ttl has passed", () => {
+    const now = Date.parse("2026-07-20T08:00:00Z");
+
+    expect(
+      isSub2APIManagedImageExpired({ expires_at: "2026-07-20T07:59:59Z" }, now),
+    ).toBe(true);
+    expect(
+      isSub2APIManagedImageExpired({ expires_at: "2026-07-20T08:30:00Z" }, now),
+    ).toBe(false);
   });
 });

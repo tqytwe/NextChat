@@ -94,26 +94,29 @@ Managed mode must hide or remove:
 - Custom endpoint switching.
 - WebDAV and Upstash cloud sync.
 - External plugin marketplace and MCP startup.
+- Direct `/plugins`, `/mcp-market`, and `/artifacts/*` routes.
 - NextChat GitHub/update prompts.
-- External DALL-E/SD entry points until the Sub2API image workspace is ready.
+- External DALL-E/SD entry points outside the Sub2API image workspace.
 
 Managed mode keeps:
 
 - Chat UI backed by Sub2API `/v1/chat/completions`.
+- Image creation backed by Sub2API `/api/v1/nextchat/image-studio/*`.
 - Local browser history.
-- Theme, language, prompt, model parameter, export/import, and local clear-data controls.
+- Theme, language, Sub2API prompt catalog, model parameter, workspace archive import/export, and local clear-data controls.
 - `返回极速蹬`.
+- `充值`.
 - `退出工作台`.
 
 ## Retention
 
 Current v1 defaults:
 
-- Text sessions stay in browser IndexedDB/local storage and are planned for 7-day local cleanup.
-- Image assets are owned and retained by Sub2API with a target TTL of 24 hours.
+- Text sessions stay in browser IndexedDB/local storage and are pruned after 7 days on local store hydration and migration.
+- Image assets are owned by Sub2API and NextChat image generation forces a 24-hour retention window.
 - Server-side plaintext chat history is not stored by default.
 
-Future export package shape:
+Managed workspace export package shape:
 
 ```text
 workspace-export.zip
@@ -124,6 +127,7 @@ workspace-export.zip
 ```
 
 Expired images export metadata only and render as `图片已过期` on import.
+Archived images are copied into `images/` and import back as local data URLs, so exported conversations remain readable after the Sub2API asset TTL passes.
 
 ## Sub2API BFF
 
@@ -132,11 +136,10 @@ NextChat. Current baseline:
 
 - `GET /api/v1/nextchat/bootstrap`
 - `GET /api/v1/nextchat/prompts`
-
-Planned for the professional image workspace:
-
+- `POST /api/v1/nextchat/group`
 - `POST /api/v1/nextchat/image-studio/*`
 - `GET /api/v1/nextchat/image-studio/*`
+- `DELETE /api/v1/nextchat/image-studio/*`
 
 Bootstrap should include:
 
@@ -160,6 +163,7 @@ NextChat must not create an independent user system, business database, balance 
 2. Use Sub2API console `AI 工作台` to launch `nexta.zeabur.app`.
 3. Verify direct access shows the lock page.
 4. Verify chat works and bills through Sub2API.
-5. Add the professional image workspace through Sub2API BFF.
-6. Grey release from admin-only to limited users to full users.
-7. Only after acceptance, hide old `/image-studio` navigation while keeping rollback access.
+5. Verify prompt catalog loads from Sub2API through `/api/nextchat/prompts`.
+6. Verify image creation, references, downloads, history refresh, and expired asset rendering.
+7. Verify workspace export/import before full release.
+8. Only after acceptance, hide old `/image-studio` navigation while keeping rollback access.

@@ -86,6 +86,11 @@ import { getClientConfig } from "../config/client";
 import { useSyncStore } from "../store/sync";
 import { nanoid } from "nanoid";
 import { useMaskStore } from "../store/mask";
+import { useSdStore } from "../store/sd";
+import {
+  exportManagedWorkspacePackage,
+  importManagedWorkspacePackage,
+} from "../utils/managed-workspace-export";
 import { ProviderType } from "../utils/cloud";
 import { TTSConfigList } from "./tts-config";
 import { RealtimeConfigList } from "./realtime-chat/realtime-config";
@@ -578,6 +583,72 @@ function SyncItems() {
         <SyncConfigModal onClose={() => setShowSyncConfigModal(false)} />
       )}
     </>
+  );
+}
+
+function ManagedWorkspaceArchiveItems() {
+  const chatStore = useChatStore();
+  const promptStore = usePromptStore();
+  const sdStore = useSdStore();
+  const [busy, setBusy] = useState(false);
+
+  const stateOverview = useMemo(() => {
+    const sessions = chatStore.sessions;
+    const messageCount = sessions.reduce((p, c) => p + c.messages.length, 0);
+    const imageCount = sdStore.draw.length;
+
+    return `${
+      sessions.length
+    } 会话 / ${messageCount} 消息 / ${imageCount} 图片 / ${
+      Object.keys(promptStore.prompts).length
+    } 提示词`;
+  }, [chatStore.sessions, promptStore.prompts, sdStore.draw]);
+
+  const exportWorkspace = async () => {
+    setBusy(true);
+    try {
+      await exportManagedWorkspacePackage();
+      showToast(Locale.Download.Success);
+    } catch (error) {
+      console.error("[Managed Workspace Export]", error);
+      showToast(Locale.Download.Failed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importWorkspace = async () => {
+    setBusy(true);
+    try {
+      await importManagedWorkspacePackage();
+      location.reload();
+    } catch (error) {
+      console.error("[Managed Workspace Import]", error);
+      showToast(Locale.Settings.Sync.ImportFailed);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <List>
+      <ListItem title="工作台归档" subTitle={stateOverview}>
+        <div style={{ display: "flex" }}>
+          <IconButton
+            aria="导出工作台"
+            icon={busy ? <LoadingIcon /> : <UploadIcon />}
+            text="导出"
+            onClick={exportWorkspace}
+          />
+          <IconButton
+            aria="导入工作台"
+            icon={busy ? <LoadingIcon /> : <DownloadIcon />}
+            text="导入"
+            onClick={importWorkspace}
+          />
+        </div>
+      </ListItem>
+    </List>
   );
 }
 
@@ -1749,7 +1820,7 @@ export function Settings() {
           </ListItem>
         </List>
 
-        {!managedMode && <SyncItems />}
+        {managedMode ? <ManagedWorkspaceArchiveItems /> : <SyncItems />}
 
         {!managedMode && (
           <List>

@@ -127,10 +127,9 @@ import clsx from "clsx";
 import { getAvailableClientsCount, isMcpEnabled } from "../mcp/actions";
 import {
   getManagedWorkspaceCurrentGroup,
-  getManagedWorkspaceDefaultModelForCurrentGroup,
-  getManagedWorkspaceLLMModelsForCurrentGroup,
   useManagedWorkspaceStore,
 } from "../store/managed-workspace";
+import { applyManagedWorkspaceModelsToStores } from "../utils/managed-workspace-models";
 
 const localStorage = safeLocalStorage();
 
@@ -144,8 +143,10 @@ const MCPAction = () => {
   const navigate = useNavigate();
   const [count, setCount] = useState<number>(0);
   const [mcpEnabled, setMcpEnabled] = useState(false);
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
 
   useEffect(() => {
+    if (managedMode) return;
     const checkMcpStatus = async () => {
       const enabled = await isMcpEnabled();
       setMcpEnabled(enabled);
@@ -155,9 +156,9 @@ const MCPAction = () => {
       }
     };
     checkMcpStatus();
-  }, []);
+  }, [managedMode]);
 
-  if (!mcpEnabled) return null;
+  if (managedMode || !mcpEnabled) return null;
 
   return (
     <ChatAction
@@ -591,7 +592,11 @@ export function ChatActions(props: {
 
     // if current model is not available
     // switch to first available model
-    const isUnavailableModel = !models.some((m) => m.name === currentModel);
+    const isUnavailableModel = !models.some(
+      (m) =>
+        m.name === currentModel &&
+        m?.provider?.providerName === currentProviderName,
+    );
     if (isUnavailableModel && models.length > 0) {
       // show next model to default model if exist
       let nextModel = models.find((model) => model.isDefault) || models[0];
@@ -606,7 +611,7 @@ export function ChatActions(props: {
           : nextModel.name,
       );
     }
-  }, [chatStore, currentModel, models, session]);
+  }, [chatStore, currentModel, currentProviderName, models, session]);
 
   const switchManagedGroup = async (groupId: number) => {
     if (!Number.isFinite(groupId) || groupId <= 0) return;
@@ -616,21 +621,14 @@ export function ChatActions(props: {
       return;
     }
     const group = getManagedWorkspaceCurrentGroup(bootstrap);
-    const llmModels = getManagedWorkspaceLLMModelsForCurrentGroup(bootstrap);
-    const nextModel = getManagedWorkspaceDefaultModelForCurrentGroup(bootstrap);
-    config.update((config) => {
-      config.models = llmModels;
-      if (nextModel) {
-        config.modelConfig.model = nextModel as ModelType;
-        config.modelConfig.providerName = ServiceProvider.OpenAI;
-      }
-    });
+    const { model: nextModel } = applyManagedWorkspaceModelsToStores(
+      bootstrap,
+      {
+        targetSession: session,
+        forceTargetSession: true,
+      },
+    );
     if (nextModel) {
-      chatStore.updateTargetSession(session, (session) => {
-        session.mask.modelConfig.model = nextModel as ModelType;
-        session.mask.modelConfig.providerName = ServiceProvider.OpenAI;
-        session.mask.syncGlobalConfig = false;
-      });
       showToast(`${group?.name ?? "分组"} · ${nextModel}`);
     } else {
       showToast(`${group?.name ?? "分组"} 暂无可用模型`);
@@ -877,7 +875,7 @@ export function ChatActions(props: {
           />
         )}
 
-        {showPlugins(currentProviderName, currentModel) && (
+        {!managedMode && showPlugins(currentProviderName, currentModel) && (
           <ChatAction
             onClick={() => {
               if (pluginStore.getAll().length == 0) {
@@ -914,10 +912,10 @@ export function ChatActions(props: {
             icon={<ShortcutkeyIcon />}
           />
         )}
-        {!isMobileScreen && <MCPAction />}
+        {!managedMode && !isMobileScreen && <MCPAction />}
       </>
       <div className={styles["chat-input-actions-end"]}>
-        {config.realtimeConfig.enable && (
+        {!managedMode && config.realtimeConfig.enable && (
           <ChatAction
             onClick={() => props.setShowChatSidePanel(true)}
             text={"Realtime Chat"}

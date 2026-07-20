@@ -5,6 +5,9 @@
   align-items: center;
   justify-content: center;
   padding: 10px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   cursor: pointer;
   transition: all 0.3s ease;
   overflow: hidden;
@@ -57,11 +60,21 @@
 }
 
 .icon-button-icon {
+  flex: 0 0 16px;
   width: 16px;
   height: 16px;
   display: flex;
   justify-content: center;
   align-items: center;
+
+  svg,
+  img {
+    width: 16px;
+    height: 16px;
+    max-width: 16px;
+    max-height: 16px;
+    flex: 0 0 16px;
+  }
 }
 
 @media only screen and (max-width: 600px) {
@@ -71,6 +84,7 @@
 }
 
 .icon-button-text {
+  min-width: 0;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
