@@ -19,7 +19,7 @@ import {
 } from "@/app/components/sidebar";
 
 import { getParams, getModelParamBasicData } from "./sd-panel";
-import { useSdStore } from "@/app/store/sd";
+import { isSub2APIManagedImageStudio, useSdStore } from "@/app/store/sd";
 import { showToast } from "@/app/components/ui-lib";
 import { useMobileScreen } from "@/app/utils";
 
@@ -39,8 +39,18 @@ export function SideBar(props: { className?: string }) {
   const currentModel = sdStore.currentModel;
   const params = sdStore.currentParams;
   const setParams = sdStore.setCurrentParams;
+  const managedMode = isSub2APIManagedImageStudio();
 
   const handleSubmit = () => {
+    if (
+      managedMode &&
+      !sdStore.sub2apiImageStudioModels.some(
+        (model) => model.id === currentModel.value,
+      )
+    ) {
+      showToast("暂无可用图片模型，请稍后重试");
+      return;
+    }
     const columns = getParams?.(currentModel, params);
     const reqParams: any = {};
     for (let i = 0; i < columns.length; i++) {

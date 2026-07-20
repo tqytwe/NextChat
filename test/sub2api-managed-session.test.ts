@@ -212,6 +212,221 @@ describe("Sub2API managed session status route", () => {
   });
 });
 
+describe("Sub2API managed BFF proxy", () => {
+  const originalEnv = process.env;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    jest.resetModules();
+    process.env = {
+      ...originalEnv,
+      SUB2API_MANAGED_MODE: "true",
+      SUB2API_BASE_URL: "https://sub2api.internal/",
+      SUB2API_NEXTCHAT_SECRET: "server-secret",
+      NEXTCHAT_SESSION_SECRET: "test-session-secret",
+      NEXTCHAT_BASE_PATH: "/",
+    };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+  });
+
+  test("rejects BFF requests without a managed session", async () => {
+    const managed = await import("../app/api/sub2api-managed");
+
+    const res = await managed.proxySub2APINextChatBFF(
+      nextSessionStatusRequest(),
+      "bootstrap",
+      { method: "GET" },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.msg).toContain("managed session");
+  });
+
+  test("forwards BFF requests with server controlled identity headers", async () => {
+    const managed = await import("../app/api/sub2api-managed");
+    const sealed = await managed.sealManagedSession(
+      {
+        userId: 42,
+        apiKey: "sk-managed-secret",
+        apiKeyId: 7,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      "test-session-secret",
+    );
+    const fetchMock = jest.fn(async () => {
+      return new Response(JSON.stringify({ code: 0, data: { ok: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+    });
+
+    const res = await managed.proxySub2APINextChatBFF(
+      nextSessionStatusRequest(sealed),
+      "bootstrap",
+      { method: "GET" },
+    );
+    const body = await res.json();
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ code: 0, data: { ok: true } });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://sub2api.internal/api/v1/nextchat/bootstrap",
+    );
+    expect(headers["X-NextChat-Secret"]).toBe("server-secret");
+    expect(headers["X-NextChat-User-ID"]).toBe("42");
+    expect(headers["X-NextChat-API-Key-ID"]).toBe("7");
+    expect(JSON.stringify(headers)).not.toContain("sk-managed-secret");
+  });
+
+  test("preserves binary BFF response bodies", async () => {
+    const managed = await import("../app/api/sub2api-managed");
+    const sealed = await managed.sealManagedSession(
+      {
+        userId: 42,
+        apiKey: "sk-managed-secret",
+        apiKeyId: 7,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      "test-session-secret",
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn(async () => {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        });
+      }),
+      configurable: true,
+    });
+
+    const res = await managed.proxySub2APINextChatBFF(
+      nextSessionStatusRequest(sealed),
+      "image-studio/assets/asset_1/content",
+      { method: "GET" },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([
+      1, 2, 3,
+    ]);
+  });
+
+  test("image studio catch-all route proxies allowed paths", async () => {
+    const managed = await import("../app/api/sub2api-managed");
+    const route = await import(
+      "../app/api/nextchat/image-studio/[...path]/route"
+    );
+    const sealed = await managed.sealManagedSession(
+      {
+        userId: 42,
+        apiKey: "sk-managed-secret",
+        apiKeyId: 7,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      "test-session-secret",
+    );
+    const fetchMock = jest.fn(async () => {
+      return new Response(JSON.stringify({ code: 0, data: { models: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+    });
+
+    const res = await route.GET(nextBFFRequest(sealed, "GET"), {
+      params: { path: ["models"] },
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://sub2api.internal/api/v1/nextchat/image-studio/models",
+    );
+    expect(headers["X-NextChat-User-ID"]).toBe("42");
+    expect(headers["X-NextChat-API-Key-ID"]).toBe("7");
+  });
+
+  test("image studio catch-all route forwards generate JSON bodies", async () => {
+    const managed = await import("../app/api/sub2api-managed");
+    const route = await import(
+      "../app/api/nextchat/image-studio/[...path]/route"
+    );
+    const sealed = await managed.sealManagedSession(
+      {
+        userId: 42,
+        apiKey: "sk-managed-secret",
+        apiKeyId: 7,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      "test-session-secret",
+    );
+    const fetchMock = jest.fn(async () => {
+      return new Response(JSON.stringify({ code: 0, data: { async: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+    });
+
+    const res = await route.POST(
+      nextBFFRequest(
+        sealed,
+        "POST",
+        "application/json",
+        JSON.stringify({ template_id: "free-create", user_prompt: "cat" }),
+      ),
+      { params: { path: ["generate"] } },
+    );
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = Buffer.from(init.body as ArrayBuffer).toString("utf8");
+
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://sub2api.internal/api/v1/nextchat/image-studio/generate",
+    );
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe(
+      "application/json",
+    );
+    expect(body).toContain('"user_prompt":"cat"');
+  });
+
+  test("image studio catch-all route rejects unknown paths", async () => {
+    const route = await import(
+      "../app/api/nextchat/image-studio/[...path]/route"
+    );
+
+    const res = await route.GET(nextBFFRequest(undefined, "GET"), {
+      params: { path: ["admin", "users"] },
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.msg).toContain("not allowed");
+  });
+});
+
 function nextSessionStatusRequest(cookieValue?: string) {
   return {
     cookies: {
@@ -222,5 +437,28 @@ function nextSessionStatusRequest(cookieValue?: string) {
         return { value: cookieValue };
       },
     },
+  } as any;
+}
+
+function nextBFFRequest(
+  cookieValue: string | undefined,
+  method: string,
+  contentType?: string,
+  body = "",
+) {
+  return {
+    method,
+    headers: new Headers(
+      contentType ? { "Content-Type": contentType } : undefined,
+    ),
+    cookies: {
+      get(name: string) {
+        if (name !== SUB2API_MANAGED_SESSION_COOKIE || !cookieValue) {
+          return undefined;
+        }
+        return { value: cookieValue };
+      },
+    },
+    arrayBuffer: async () => new TextEncoder().encode(body).buffer,
   } as any;
 }

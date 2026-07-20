@@ -14,6 +14,8 @@ import DragIcon from "../icons/drag.svg";
 import DiscoveryIcon from "../icons/discovery.svg";
 import ReturnIcon from "../icons/return.svg";
 import PowerIcon from "../icons/power.svg";
+import LightningIcon from "../icons/lightning.svg";
+import SDIcon from "../icons/sd.svg";
 
 import Locale from "../locales";
 
@@ -36,6 +38,7 @@ import clsx from "clsx";
 import { isMcpEnabled } from "../mcp/actions";
 import { getClientConfig } from "../config/client";
 import { withBasePath } from "../utils/api-path";
+import { useManagedWorkspaceStore } from "../store/managed-workspace";
 
 const JISUDENG_RETURN_URL = "https://www.jisudeng.com";
 
@@ -239,6 +242,15 @@ export function SideBar(props: { className?: string }) {
   const chatStore = useChatStore();
   const [mcpEnabled, setMcpEnabled] = useState(false);
   const managedMode = !!getClientConfig()?.sub2apiManagedMode;
+  const managedBootstrap = useManagedWorkspaceStore((state) => state.bootstrap);
+  const managedReturnUrl =
+    managedBootstrap?.urls?.return_url || JISUDENG_RETURN_URL;
+  const managedRechargeUrl = managedBootstrap?.urls?.recharge_url;
+  const managedBalance = managedBootstrap?.user?.balance;
+  const managedSubtitle =
+    typeof managedBalance === "number"
+      ? `余额 $${managedBalance.toFixed(2)}`
+      : "Sub2API 托管前台";
 
   useEffect(() => {
     if (managedMode) return;
@@ -280,12 +292,12 @@ export function SideBar(props: { className?: string }) {
       <SideBarHeader
         title={managedMode ? "极速蹬 AI 工作台" : "NextChat"}
         subTitle={
-          managedMode ? "Sub2API 托管前台" : "Build your own AI assistant."
+          managedMode ? managedSubtitle : "Build your own AI assistant."
         }
         logo={<ChatGptIcon />}
         shouldNarrow={shouldNarrow}
       >
-        {!managedMode && (
+        {!managedMode ? (
           <div className={styles["sidebar-header-bar"]}>
             <IconButton
               icon={<MaskIcon />}
@@ -316,6 +328,16 @@ export function SideBar(props: { className?: string }) {
               text={shouldNarrow ? undefined : Locale.Discovery.Name}
               className={styles["sidebar-bar-button"]}
               onClick={() => setshowDiscoverySelector(true)}
+              shadow
+            />
+          </div>
+        ) : (
+          <div className={styles["sidebar-header-bar"]}>
+            <IconButton
+              icon={<SDIcon />}
+              text={shouldNarrow ? undefined : "图片创作"}
+              className={styles["sidebar-bar-button"]}
+              onClick={() => navigate(Path.Sd, { state: { fromHome: true } })}
               shadow
             />
           </div>
@@ -371,7 +393,7 @@ export function SideBar(props: { className?: string }) {
             {managedMode ? (
               <>
                 <div className={styles["sidebar-action"]}>
-                  <a href={JISUDENG_RETURN_URL}>
+                  <a href={managedReturnUrl}>
                     <IconButton
                       aria="返回极速蹬"
                       icon={<ReturnIcon />}
@@ -380,6 +402,18 @@ export function SideBar(props: { className?: string }) {
                     />
                   </a>
                 </div>
+                {managedRechargeUrl ? (
+                  <div className={styles["sidebar-action"]}>
+                    <a href={managedRechargeUrl}>
+                      <IconButton
+                        aria="充值"
+                        icon={<LightningIcon />}
+                        text={shouldNarrow ? undefined : "充值"}
+                        shadow
+                      />
+                    </a>
+                  </div>
+                ) : null}
                 <div className={styles["sidebar-action"]}>
                   <IconButton
                     aria="退出工作台"

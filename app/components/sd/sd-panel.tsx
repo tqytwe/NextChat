@@ -1,9 +1,13 @@
 import styles from "./sd-panel.module.scss";
-import React from "react";
+import React, { useEffect, useMemo } from "react";
 import { Select } from "@/app/components/ui-lib";
 import { IconButton } from "@/app/components/button";
 import Locale from "@/app/locales";
-import { useSdStore } from "@/app/store/sd";
+import {
+  isSub2APIManagedImageStudio,
+  toSub2APIImageStudioPanelModel,
+  useSdStore,
+} from "@/app/store/sd";
 import clsx from "clsx";
 
 export const params = [
@@ -126,6 +130,60 @@ export const models = [
         );
       });
     },
+  },
+];
+
+export const sub2APIImageStudioParams = [
+  {
+    name: Locale.SdPanel.Prompt,
+    value: "prompt",
+    type: "textarea",
+    placeholder: "描述你要生成的图片",
+    required: true,
+    rows: 5,
+  },
+  {
+    name: "尺寸",
+    value: "size",
+    type: "select",
+    default: "1024x1024",
+    options: [
+      { name: "1:1 · 1024x1024", value: "1024x1024" },
+      { name: "3:4 · 1024x1536", value: "1024x1536" },
+      { name: "4:3 · 1536x1024", value: "1536x1024" },
+    ],
+  },
+  {
+    name: "张数",
+    value: "count",
+    type: "number",
+    default: 1,
+    min: 1,
+    max: 4,
+  },
+  {
+    name: "质量",
+    value: "quality",
+    type: "select",
+    default: "auto",
+    options: [
+      { name: "Auto", value: "auto" },
+      { name: "High", value: "high" },
+      { name: "Medium", value: "medium" },
+      { name: "Low", value: "low" },
+      { name: "Standard", value: "standard" },
+    ],
+  },
+  {
+    name: Locale.SdPanel.OutFormat,
+    value: "output_format",
+    type: "select",
+    default: "png",
+    options: [
+      { name: "PNG", value: "png" },
+      { name: "JPEG", value: "jpeg" },
+      { name: "WebP", value: "webp" },
+    ],
   },
 ];
 
@@ -273,15 +331,39 @@ export const getModelParamBasicData = (
 };
 
 export const getParams = (model: any, params: any) => {
+  if (typeof model?.params === "function") {
+    const directParams = model.params(params);
+    if (Array.isArray(directParams) && directParams.length > 0) {
+      return directParams;
+    }
+  }
+  if (isSub2APIManagedImageStudio()) {
+    return sub2APIImageStudioParams;
+  }
   return models.find((m) => m.value === model.value)?.params(params) || [];
 };
 
 export function SdPanel() {
   const sdStore = useSdStore();
+  const managedMode = isSub2APIManagedImageStudio();
   const currentModel = sdStore.currentModel;
   const setCurrentModel = sdStore.setCurrentModel;
   const params = sdStore.currentParams;
   const setParams = sdStore.setCurrentParams;
+  const modelOptions = useMemo(() => {
+    if (!managedMode) return models;
+    return sdStore.sub2apiImageStudioModels.map(toSub2APIImageStudioPanelModel);
+  }, [managedMode, sdStore.sub2apiImageStudioModels]);
+
+  useEffect(() => {
+    if (managedMode) {
+      void sdStore.fetchSub2APIImageStudioModels();
+      if (!params.size) {
+        setParams(getModelParamBasicData(sub2APIImageStudioParams, params));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managedMode]);
 
   const handleValueChange = (field: string, val: any) => {
     setParams({
@@ -291,14 +373,14 @@ export function SdPanel() {
   };
   const handleModelChange = (model: any) => {
     setCurrentModel(model);
-    setParams(getModelParamBasicData(model.params({}), params));
+    setParams(getModelParamBasicData(getParams(model, params), params));
   };
 
   return (
     <>
       <ControlParamItem title={Locale.SdPanel.AIModel}>
         <div className={styles["ai-models"]}>
-          {models.map((item) => {
+          {modelOptions.map((item) => {
             return (
               <IconButton
                 text={item.name}
@@ -309,6 +391,12 @@ export function SdPanel() {
               />
             );
           })}
+          {managedMode && sdStore.sub2apiImageStudioModelsLoading && (
+            <span>加载中...</span>
+          )}
+          {managedMode && sdStore.sub2apiImageStudioModelsError && (
+            <span>{sdStore.sub2apiImageStudioModelsError}</span>
+          )}
         </div>
       </ControlParamItem>
       <ControlParam

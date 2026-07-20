@@ -11,7 +11,7 @@ import LoadingIcon from "../icons/three-dots.svg";
 import { getCSSVar, useMobileScreen } from "../utils";
 
 import dynamic from "next/dynamic";
-import { Path, SlotID } from "../constant";
+import { Path, ServiceProvider, SlotID } from "../constant";
 import { ErrorBoundary } from "./error";
 
 import { getISOLang, getLang } from "../locales";
@@ -28,6 +28,11 @@ import { AuthPage } from "./auth";
 import { getClientConfig } from "../config/client";
 import { type ClientApi, getClientApi } from "../client/api";
 import { useAccessStore } from "../store";
+import {
+  getManagedWorkspaceModelsForCurrentGroup,
+  managedWorkspaceModelsToLLMModels,
+  useManagedWorkspaceStore,
+} from "../store/managed-workspace";
 import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
 import { withBasePath } from "../utils/api-path";
@@ -225,17 +230,36 @@ function Screen() {
 
 export function useLoadData(enabled = true) {
   const config = useAppConfig();
+  const clientConfig = useMemo(() => getClientConfig(), []);
+  const managedWorkspace = useManagedWorkspaceStore();
 
   const api: ClientApi = getClientApi(config.modelConfig.providerName);
 
   useEffect(() => {
     if (!enabled) return;
     (async () => {
+      if (clientConfig?.sub2apiManagedMode) {
+        const bootstrap = await managedWorkspace.fetchBootstrap();
+        const groupModels = getManagedWorkspaceModelsForCurrentGroup(bootstrap);
+        const models = managedWorkspaceModelsToLLMModels(groupModels);
+        config.mergeModels(models);
+        const nextModel = bootstrap?.models?.default_model || models[0]?.name;
+        if (
+          nextModel &&
+          !models.some((m) => m.name === config.modelConfig.model)
+        ) {
+          config.update((nextConfig) => {
+            nextConfig.modelConfig.model = nextModel as any;
+            nextConfig.modelConfig.providerName = ServiceProvider.OpenAI;
+          });
+        }
+        return;
+      }
       const models = await api.llm.models();
       config.mergeModels(models);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [enabled, clientConfig?.sub2apiManagedMode]);
 }
 
 type ManagedGateStatus =

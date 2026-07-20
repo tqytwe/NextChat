@@ -92,6 +92,7 @@ export function Sd() {
   const navigate = useNavigate();
   const location = useLocation();
   const clientConfig = useMemo(() => getClientConfig(), []);
+  const managedMode = !!clientConfig?.sub2apiManagedMode;
   const showMaxIcon = !isMobileScreen && !clientConfig?.isApp;
   const config = useAppConfig();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -127,7 +128,9 @@ export function Sd() {
                 chatStyles["chat-body-title"],
               )}
             >
-              <div className={`window-header-main-title`}>Stability AI</div>
+              <div className={`window-header-main-title`}>
+                {managedMode ? "极速蹬图片创作" : "Stability AI"}
+              </div>
               <div className="window-header-sub-title">
                 {Locale.Sd.SubTitle(sdImages.length || 0)}
               </div>
@@ -312,8 +315,10 @@ export function Sd() {
                                 if (
                                   await showConfirm(Locale.Sd.Danger.Delete)
                                 ) {
-                                  // remove img_data + remove item in list
-                                  removeImage(item.img_data).finally(() => {
+                                  const remove = managedMode
+                                    ? Promise.resolve()
+                                    : removeImage(item.img_data);
+                                  remove.finally(() => {
                                     sdStore.draw = sdImages.filter(
                                       (i: any) => i.id !== item.id,
                                     );

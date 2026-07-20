@@ -125,6 +125,11 @@ import { getModelProvider } from "../utils/model";
 import { RealtimeChat } from "@/app/components/realtime-chat";
 import clsx from "clsx";
 import { getAvailableClientsCount, isMcpEnabled } from "../mcp/actions";
+import {
+  getManagedWorkspaceCurrentGroup,
+  managedWorkspaceModelsToLLMModels,
+  useManagedWorkspaceStore,
+} from "../store/managed-workspace";
 
 const localStorage = safeLocalStorage();
 
@@ -509,6 +514,11 @@ export function ChatActions(props: {
   const chatStore = useChatStore();
   const pluginStore = usePluginStore();
   const session = chatStore.currentSession();
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
+  const managedWorkspace = useManagedWorkspaceStore();
+  const managedBootstrap = managedWorkspace.bootstrap;
+  const managedGroups = managedBootstrap?.models?.groups ?? [];
+  const currentManagedGroup = getManagedWorkspaceCurrentGroup(managedBootstrap);
 
   // switch themes
   const theme = config.theme;
@@ -553,6 +563,7 @@ export function ChatActions(props: {
     return model?.displayName ?? "";
   }, [models, currentModel, currentProviderName]);
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [showGroupSelector, setShowGroupSelector] = useState(false);
   const [showPluginSelector, setShowPluginSelector] = useState(false);
   const [showUploadImage, setShowUploadImage] = useState(false);
 
@@ -595,6 +606,33 @@ export function ChatActions(props: {
       );
     }
   }, [chatStore, currentModel, models, session]);
+
+  const switchManagedGroup = async (groupId: number) => {
+    if (!Number.isFinite(groupId) || groupId <= 0) return;
+    const bootstrap = await managedWorkspace.switchGroup(groupId);
+    if (!bootstrap) {
+      showToast(managedWorkspace.error || "切换分组失败");
+      return;
+    }
+    const group = getManagedWorkspaceCurrentGroup(bootstrap);
+    const llmModels = managedWorkspaceModelsToLLMModels(group?.models ?? []);
+    config.mergeModels(llmModels);
+    const nextModel = bootstrap.models.default_model || llmModels[0]?.name;
+    if (nextModel) {
+      chatStore.updateTargetSession(session, (session) => {
+        session.mask.modelConfig.model = nextModel as ModelType;
+        session.mask.modelConfig.providerName = ServiceProvider.OpenAI;
+        session.mask.syncGlobalConfig = false;
+      });
+      config.update((config) => {
+        config.modelConfig.model = nextModel as ModelType;
+        config.modelConfig.providerName = ServiceProvider.OpenAI;
+      });
+      showToast(`${group?.name ?? "分组"} · ${nextModel}`);
+    } else {
+      showToast(`${group?.name ?? "分组"} 暂无可用模型`);
+    }
+  };
 
   return (
     <div className={styles["chat-input-actions"]}>
@@ -650,13 +688,15 @@ export function ChatActions(props: {
           icon={<PromptIcon />}
         />
 
-        <ChatAction
-          onClick={() => {
-            navigate(Path.Masks);
-          }}
-          text={Locale.Chat.InputActions.Masks}
-          icon={<MaskIcon />}
-        />
+        {!managedMode && (
+          <ChatAction
+            onClick={() => {
+              navigate(Path.Masks);
+            }}
+            text={Locale.Chat.InputActions.Masks}
+            icon={<MaskIcon />}
+          />
+        )}
 
         <ChatAction
           text={Locale.Chat.InputActions.Clear}
@@ -673,9 +713,48 @@ export function ChatActions(props: {
           }}
         />
 
+        {managedMode && (
+          <ChatAction
+            onClick={() => setShowGroupSelector(true)}
+            text={currentManagedGroup?.name || "选择分组"}
+            icon={<SettingsIcon />}
+          />
+        )}
+
+        {showGroupSelector && (
+          <Selector
+            defaultSelectedValue={
+              currentManagedGroup ? String(currentManagedGroup.id) : undefined
+            }
+            items={managedGroups.map((group) => ({
+              title: group.name,
+              subTitle: `${group.platform || "分组"} · ${
+                group.models.length
+              } 个模型`,
+              value: String(group.id),
+            }))}
+            onClose={() => setShowGroupSelector(false)}
+            onSelection={(s) => {
+              if (s.length === 0) return;
+              void switchManagedGroup(Number(s[0]));
+            }}
+          />
+        )}
+
         <ChatAction
-          onClick={() => setShowModelSelector(true)}
-          text={currentModelName}
+          onClick={() => {
+            if (models.length === 0) {
+              showToast(
+                "当前分组暂无可用模型，请返回极速蹬检查 Key、分组或订阅",
+              );
+              return;
+            }
+            setShowModelSelector(true);
+          }}
+          text={
+            currentModelName ||
+            (models.length > 0 ? currentModel : "无可用模型")
+          }
           icon={<RobotIcon />}
         />
 

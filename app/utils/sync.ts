@@ -6,6 +6,7 @@ import {
 } from "../store";
 import { useMaskStore } from "../store/mask";
 import { usePromptStore } from "../store/prompt";
+import { useSdStore } from "../store/sd";
 import { StoreKey } from "../constant";
 import { merge } from "./merge";
 
@@ -36,6 +37,7 @@ const LocalStateSetters = {
   [StoreKey.Config]: useAppConfig.setState,
   [StoreKey.Mask]: useMaskStore.setState,
   [StoreKey.Prompt]: usePromptStore.setState,
+  [StoreKey.SdList]: useSdStore.setState,
 } as const;
 
 const LocalStateGetters = {
@@ -44,6 +46,7 @@ const LocalStateGetters = {
   [StoreKey.Config]: () => getNonFunctionFileds(useAppConfig.getState()),
   [StoreKey.Mask]: () => getNonFunctionFileds(useMaskStore.getState()),
   [StoreKey.Prompt]: () => getNonFunctionFileds(usePromptStore.getState()),
+  [StoreKey.SdList]: () => getNonFunctionFileds(useSdStore.getState()),
 } as const;
 
 export type AppState = {
@@ -116,6 +119,22 @@ const MergeStates: StateMerger = {
   },
   [StoreKey.Config]: mergeWithUpdate<AppState[StoreKey.Config]>,
   [StoreKey.Access]: mergeWithUpdate<AppState[StoreKey.Access]>,
+  [StoreKey.SdList]: (localState, remoteState) => {
+    const localDraws = new Map<string, any>();
+    (localState.draw ?? []).forEach((item: any) => {
+      if (item?.id) localDraws.set(item.id, item);
+    });
+    (remoteState.draw ?? []).forEach((item: any) => {
+      if (item?.id && !localDraws.has(item.id)) {
+        localState.draw.unshift(item);
+      }
+    });
+    localState.currentId = Math.max(
+      Number(localState.currentId || 0),
+      Number(remoteState.currentId || 0),
+    );
+    return localState;
+  },
 };
 
 export function getLocalAppState() {

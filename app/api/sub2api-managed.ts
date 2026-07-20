@@ -1,6 +1,6 @@
 import { getServerSideConfig } from "../config/server";
 import { ApiPath, ModelProvider } from "../constant";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 export const SUB2API_MANAGED_SESSION_COOKIE = "nextchat_sub2api_session";
 
@@ -121,6 +121,61 @@ export async function getManagedSessionFromRequest(
   );
 }
 
+export async function proxySub2APINextChatBFF(
+  req: NextRequest,
+  path: string,
+  init?: RequestInit,
+) {
+  const config = getServerSideConfig();
+  if (!isSub2APIManagedMode(config)) {
+    return NextResponse.json(
+      { error: true, msg: "Sub2API managed mode is disabled" },
+      { status: 404 },
+    );
+  }
+  const session = await getManagedSessionFromRequest(req);
+  if (!session) {
+    return NextResponse.json(
+      { error: true, msg: "missing or expired Sub2API managed session" },
+      { status: 401 },
+    );
+  }
+  const baseUrl = normalizeSub2APIOrigin(config.sub2apiBaseUrl);
+  if (!baseUrl || !config.sub2apiNextChatSecret) {
+    return NextResponse.json(
+      { error: true, msg: "Sub2API managed BFF is not configured" },
+      { status: 500 },
+    );
+  }
+
+  const upstream = await fetch(`${baseUrl}/api/v1/nextchat/${path}`, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-NextChat-Secret": config.sub2apiNextChatSecret,
+      "X-NextChat-User-ID": String(session.userId),
+      "X-NextChat-API-Key-ID": String(session.apiKeyId),
+      ...(init?.headers as Record<string, string> | undefined),
+    },
+    cache: "no-store",
+  });
+  const body = await upstream.arrayBuffer();
+  const headers: Record<string, string> = {
+    "Content-Type": upstream.headers.get("Content-Type") || "application/json",
+    "Cache-Control": "no-store",
+  };
+  for (const name of ["Content-Disposition", "Location"]) {
+    const value = upstream.headers.get(name);
+    if (value) headers[name] = value;
+  }
+  return new Response(body, {
+    status: upstream.status,
+    statusText: upstream.statusText,
+    headers,
+  });
+}
+
 async function deriveKey(secret: string): Promise<CryptoKey> {
   const digest = await getCrypto().subtle.digest(
     "SHA-256",
@@ -130,6 +185,12 @@ async function deriveKey(secret: string): Promise<CryptoKey> {
     "encrypt",
     "decrypt",
   ]);
+}
+
+function normalizeSub2APIOrigin(value?: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/g, "");
 }
 
 function getCrypto(): Crypto {
