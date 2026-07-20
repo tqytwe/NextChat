@@ -15,7 +15,8 @@ import DiscoveryIcon from "../icons/discovery.svg";
 import ReturnIcon from "../icons/return.svg";
 import PowerIcon from "../icons/power.svg";
 import LightningIcon from "../icons/lightning.svg";
-import SDIcon from "../icons/sd.svg";
+import PromptIcon from "../icons/prompt.svg";
+import ImageIcon from "../icons/image.svg";
 
 import Locale from "../locales";
 
@@ -44,6 +45,7 @@ import {
   resolveManagedWorkspaceURL,
   useManagedWorkspaceStore,
 } from "../store/managed-workspace";
+import { ManagedBrandLogo } from "./managed-brand";
 
 const DISCOVERY = [
   { name: Locale.Plugin.Name, path: Path.Plugins },
@@ -309,7 +311,7 @@ export function SideBar(props: { className?: string }) {
         subTitle={
           managedMode ? managedSubtitle : "Build your own AI assistant."
         }
-        logo={<ChatGptIcon />}
+        logo={managedMode ? <ManagedBrandLogo /> : <ChatGptIcon />}
         shouldNarrow={shouldNarrow}
       >
         {!managedMode ? (
@@ -349,7 +351,16 @@ export function SideBar(props: { className?: string }) {
         ) : (
           <div className={styles["sidebar-header-bar"]}>
             <IconButton
-              icon={<SDIcon />}
+              icon={<PromptIcon />}
+              text={shouldNarrow ? undefined : "提示词"}
+              className={styles["sidebar-bar-button"]}
+              onClick={() =>
+                navigate(Path.Prompts, { state: { fromHome: true } })
+              }
+              shadow
+            />
+            <IconButton
+              icon={<ImageIcon />}
               text={shouldNarrow ? undefined : "图片创作"}
               className={styles["sidebar-bar-button"]}
               onClick={() => navigate(Path.Sd, { state: { fromHome: true } })}

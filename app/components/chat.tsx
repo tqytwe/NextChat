@@ -98,7 +98,7 @@ import {
   showPrompt,
   showToast,
 } from "./ui-lib";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   CHAT_PAGE_SIZE,
   DEFAULT_TTS_ENGINE,
@@ -615,6 +615,15 @@ export function ChatActions(props: {
 
   const switchManagedGroup = async (groupId: number) => {
     if (!Number.isFinite(groupId) || groupId <= 0) return;
+    if (groupId === currentManagedGroup?.id) {
+      setShowGroupSelector(false);
+      return;
+    }
+    ChatControllerPool.stopAll();
+    chatStore.updateTargetSession(session, (session) => {
+      session.managedWorkspaceGeneration =
+        (session.managedWorkspaceGeneration ?? 0) + 1;
+    });
     const bootstrap = await managedWorkspace.switchGroup(groupId);
     if (!bootstrap) {
       showToast(managedWorkspace.error || "切换分组失败");
@@ -703,6 +712,9 @@ export function ChatActions(props: {
           text={Locale.Chat.InputActions.Clear}
           icon={<BreakIcon />}
           onClick={() => {
+            if (managedMode) {
+              ChatControllerPool.stopAll();
+            }
             chatStore.updateTargetSession(session, (session) => {
               if (managedMode) {
                 session.messages = [];
@@ -724,6 +736,7 @@ export function ChatActions(props: {
               }
             });
             if (managedMode) {
+              props.setUserInput("");
               showToast(Locale.Context.Clear);
             }
           }}
@@ -1126,12 +1139,27 @@ function _Chat() {
   const [hitBottom, setHitBottom] = useState(true);
   const isMobileScreen = useMobileScreen();
   const navigate = useNavigate();
+  const location = useLocation();
   const [attachImages, setAttachImages] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
 
   // prompt hints
   const promptStore = usePromptStore();
   const [promptHints, setPromptHints] = useState<RenderPrompt[]>([]);
+  useEffect(() => {
+    const state = location.state as
+      | {
+          managedPromptContent?: string;
+        }
+      | undefined;
+    const content = state?.managedPromptContent?.trim();
+    if (!content) return;
+    setUserInput(content);
+    setPromptHints([]);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.key, location.pathname, location.state, navigate]);
+
   const onSearch = useDebouncedCallback(
     (text: string) => {
       const matchedPrompts = promptStore.search(text);
@@ -1171,6 +1199,7 @@ function _Chat() {
     clear: () =>
       chatStore.updateTargetSession(session, (session) => {
         if (getClientConfig()?.sub2apiManagedMode) {
+          ChatControllerPool.stopAll();
           session.messages = [];
           session.memoryPrompt = "";
           session.clearContextIndex = undefined;
@@ -1765,6 +1794,9 @@ function _Chat() {
         event.key.toLowerCase() === "backspace"
       ) {
         event.preventDefault();
+        if (clientConfig?.sub2apiManagedMode) {
+          ChatControllerPool.stopAll();
+        }
         chatStore.updateTargetSession(session, (session) => {
           if (clientConfig?.sub2apiManagedMode) {
             session.messages = [];
@@ -1786,6 +1818,7 @@ function _Chat() {
           }
         });
         if (clientConfig?.sub2apiManagedMode) {
+          setUserInput("");
           showToast(Locale.Context.Clear);
         }
       }
@@ -1802,6 +1835,7 @@ function _Chat() {
     chatStore,
     navigate,
     session,
+    setUserInput,
   ]);
 
   const [showChatSidePanel, setShowChatSidePanel] = useState(false);

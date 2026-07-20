@@ -5,6 +5,7 @@ import ReturnIcon from "@/app/icons/return.svg";
 import HistoryIcon from "@/app/icons/history.svg";
 import ResetIcon from "@/app/icons/reload.svg";
 import Locale from "@/app/locales";
+import homeStyles from "@/app/components/home.module.scss";
 
 import { Path, REPO_URL } from "@/app/constant";
 
@@ -28,6 +29,8 @@ import {
   resolveManagedWorkspaceURL,
   useManagedWorkspaceStore,
 } from "@/app/store/managed-workspace";
+import { ManagedBrandLogo } from "@/app/components/managed-brand";
+import { getImageStudioBackPath } from "@/app/utils/managed-image-studio-ui";
 
 const SdPanel = dynamic(
   async () => (await import("@/app/components/sd")).SdPanel,
@@ -55,22 +58,23 @@ export function SideBar(props: { className?: string }) {
     managedBootstrap?.urls?.return_url,
     JISUDENG_DASHBOARD_URL,
   );
-  const returnFromImageStudio = () => {
-    if (managedMode) {
-      replaceLocation(managedReturnUrl);
-      return;
-    }
-    navigate(Path.Home);
+  const returnToPreviousImageStudioPage = () => {
+    navigate(getImageStudioBackPath(managedMode));
   };
+  const returnToManagedConsole = () => replaceLocation(managedReturnUrl);
 
   const handleSubmit = () => {
+    if (managedMode && sdStore.sub2apiImageStudioModelsLoading) {
+      showToast("图片模型正在加载");
+      return;
+    }
     if (
       managedMode &&
       !sdStore.sub2apiImageStudioModels.some(
         (model) => model.id === currentModel.value,
       )
     ) {
-      showToast("暂无可用图片模型，请稍后重试");
+      showToast("当前分组暂无图片模型，请先切换分组");
       return;
     }
     const columns = getParams?.(currentModel, params);
@@ -86,6 +90,7 @@ export function SideBar(props: { className?: string }) {
       }
     }
     if (managedMode) {
+      reqParams.template_id = params.template_id || "free-create";
       reqParams.reference_ids = sdStore.sub2apiImageStudioReferences.map(
         (reference) => reference.id,
       );
@@ -128,11 +133,15 @@ export function SideBar(props: { className?: string }) {
                 icon={<ReturnIcon />}
                 bordered
                 title={Locale.Sd.Actions.ReturnHome}
-                onClick={returnFromImageStudio}
+                onClick={returnToPreviousImageStudioPage}
               />
             </div>
           </div>
-          <SDIcon width={50} height={50} />
+          {managedMode ? (
+            <ManagedBrandLogo compact />
+          ) : (
+            <SDIcon width={50} height={50} />
+          )}
           <div className="window-actions">
             <div className="window-action-button">
               <IconButton
@@ -152,7 +161,7 @@ export function SideBar(props: { className?: string }) {
                 icon={<ReturnIcon />}
                 bordered
                 title={Locale.Sd.Actions.ReturnHome}
-                onClick={returnFromImageStudio}
+                onClick={returnToPreviousImageStudioPage}
               />
               {managedMode && !shouldNarrow ? <span>图片创作</span> : null}
             </div>
@@ -162,31 +171,60 @@ export function SideBar(props: { className?: string }) {
               ? `余额 $${managedBootstrap.user.balance.toFixed(2)}`
               : undefined
           }
-          logo={<SDIcon width={38} height={"100%"} />}
+          logo={
+            managedMode ? (
+              <ManagedBrandLogo compact />
+            ) : (
+              <SDIcon width={38} height={"100%"} />
+            )
+          }
         ></SideBarHeader>
       )}
       <SideBarBody>
         <SdPanel />
       </SideBarBody>
       <SideBarTail
+        className={managedMode ? homeStyles["managed-sidebar-tail"] : undefined}
         primaryAction={
           managedMode ? (
             <>
-              <IconButton
-                icon={<ReturnIcon />}
-                text={shouldNarrow ? undefined : "返回"}
-                shadow
-                onClick={returnFromImageStudio}
-              />
-              <IconButton
-                icon={<ResetIcon />}
-                text={shouldNarrow ? undefined : "刷新任务"}
-                shadow
-                onClick={async () => {
-                  const jobs = await sdStore.fetchSub2APIImageStudioJobs();
-                  showToast(`已同步 ${jobs.length} 个图片任务`);
-                }}
-              />
+              <div className={homeStyles["sidebar-action"]}>
+                <IconButton
+                  icon={<ReturnIcon />}
+                  text={shouldNarrow ? undefined : "返回上级"}
+                  shadow
+                  onClick={returnToPreviousImageStudioPage}
+                />
+              </div>
+              <div className={homeStyles["sidebar-action"]}>
+                <IconButton
+                  icon={<ReturnIcon />}
+                  text={shouldNarrow ? undefined : "控制台"}
+                  shadow
+                  onClick={returnToManagedConsole}
+                />
+              </div>
+              <div className={homeStyles["sidebar-action"]}>
+                <IconButton
+                  icon={<ResetIcon />}
+                  text={shouldNarrow ? undefined : "刷新任务"}
+                  shadow
+                  onClick={async () => {
+                    const jobs = await sdStore.fetchSub2APIImageStudioJobs();
+                    const error =
+                      useSdStore.getState().sub2apiImageStudioJobsError;
+                    showToast(error || `已同步 ${jobs.length} 个图片任务`);
+                  }}
+                />
+              </div>
+              <div className={homeStyles["sidebar-action"]}>
+                <IconButton
+                  text={Locale.SdPanel.Submit}
+                  type="primary"
+                  shadow
+                  onClick={handleSubmit}
+                ></IconButton>
+              </div>
             </>
           ) : (
             <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
@@ -195,12 +233,14 @@ export function SideBar(props: { className?: string }) {
           )
         }
         secondaryAction={
-          <IconButton
-            text={Locale.SdPanel.Submit}
-            type="primary"
-            shadow
-            onClick={handleSubmit}
-          ></IconButton>
+          managedMode ? undefined : (
+            <IconButton
+              text={Locale.SdPanel.Submit}
+              type="primary"
+              shadow
+              onClick={handleSubmit}
+            ></IconButton>
+          )
         }
       />
     </SideBarContainer>

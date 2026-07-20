@@ -88,6 +88,25 @@
   font-size: 12px;
 }
 
+.managed-group-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+
+  button {
+    min-width: 0;
+  }
+}
+
+.managed-inline-error {
+  display: block;
+  margin-top: 6px;
+  color: #d22;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
 .managed-balance {
   width: fit-content;
   min-width: 92px;

@@ -136,6 +136,13 @@
         transform: scale(1.5);
       }
 
+      .managed-logo {
+        top: 14px;
+        left: 14px;
+        height: 56px;
+        transform: none;
+      }
+
       .main-title {
         font-size: 20px;
         font-weight: bolder;
@@ -206,7 +213,7 @@
         }
 
         @media screen and (max-width: 600px) {
-          $image-width: calc(calc(100vw/2)/var(--image-count));
+          $image-width: calc(calc(100vw / 2) / var(--image-count));
 
           .message-image-multi {
             width: $image-width;
@@ -214,13 +221,13 @@
           }
 
           .message-image {
-            max-width: calc(100vw/3*2);
+            max-width: calc(100vw / 3 * 2);
           }
         }
 
         @media screen and (min-width: 600px) {
-          $max-image-width: calc(900px/3*2/var(--image-count));
-          $image-width: calc(80vw/3*2/var(--image-count));
+          $max-image-width: calc(900px / 3 * 2 / var(--image-count));
+          $image-width: calc(80vw / 3 * 2 / var(--image-count));
 
           .message-image-multi {
             width: $image-width;
@@ -230,7 +237,7 @@
           }
 
           .message-image {
-            max-width: calc(100vw/3*2);
+            max-width: calc(100vw / 3 * 2);
           }
         }
 
@@ -267,5 +274,6 @@
     }
   }
 
-  .default-theme {}
+  .default-theme {
+  }
 }

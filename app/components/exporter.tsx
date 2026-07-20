@@ -40,6 +40,7 @@ import { type ClientApi, getClientApi } from "../client/api";
 import { getMessageTextContent } from "../utils";
 import { MaskAvatar } from "./mask";
 import clsx from "clsx";
+import { ManagedBrandLogo } from "./managed-brand";
 
 const Markdown = dynamic(async () => (await import("./markdown")).Markdown, {
   loading: () => <LoadingIcon />,
@@ -310,6 +311,7 @@ export function PreviewActions(props: {
   const [loading, setLoading] = useState(false);
   const [shouldExport, setShouldExport] = useState(false);
   const config = useAppConfig();
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
   const onRenderMsgs = (msgs: ChatMessage[]) => {
     setShouldExport(false);
 
@@ -380,13 +382,15 @@ export function PreviewActions(props: {
           icon={<DownloadIcon />}
           onClick={props.download}
         ></IconButton>
-        <IconButton
-          text={Locale.Export.Share}
-          bordered
-          shadow
-          icon={loading ? <LoadingIcon /> : <ShareIcon />}
-          onClick={share}
-        ></IconButton>
+        {!managedMode && (
+          <IconButton
+            text={Locale.Export.Share}
+            bordered
+            shadow
+            icon={loading ? <LoadingIcon /> : <ShareIcon />}
+            onClick={share}
+          ></IconButton>
+        )}
       </div>
       <div
         style={{
@@ -414,6 +418,7 @@ export function ImagePreviewer(props: {
   const session = chatStore.currentSession();
   const mask = session.mask;
   const config = useAppConfig();
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
 
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -514,19 +519,33 @@ export function ImagePreviewer(props: {
         ref={previewRef}
       >
         <div className={styles["chat-info"]}>
-          <div className={clsx(styles["logo"], "no-dark")}>
-            <NextImage
-              src={ChatGptIcon.src}
-              alt="logo"
-              width={50}
-              height={50}
-            />
+          <div
+            className={clsx(
+              styles["logo"],
+              { [styles["managed-logo"]]: managedMode },
+              "no-dark",
+            )}
+          >
+            {managedMode ? (
+              <ManagedBrandLogo large />
+            ) : (
+              <NextImage
+                src={ChatGptIcon.src}
+                alt="logo"
+                width={50}
+                height={50}
+              />
+            )}
           </div>
 
           <div>
-            <div className={styles["main-title"]}>NextChat</div>
+            <div className={styles["main-title"]}>
+              {managedMode ? "极速蹬 AI 工作台" : "NextChat"}
+            </div>
             <div className={styles["sub-title"]}>
-              github.com/ChatGPTNextWeb/ChatGPT-Next-Web
+              {managedMode
+                ? "jisudeng.com"
+                : "github.com/ChatGPTNextWeb/ChatGPT-Next-Web"}
             </div>
             <div className={styles["icons"]}>
               <MaskAvatar avatar={config.avatar} />

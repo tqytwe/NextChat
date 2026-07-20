@@ -11,12 +11,16 @@ import { nanoid } from "nanoid";
 import { uploadImage, base64Image2Blob } from "@/app/utils/chat";
 import { models, getModelParamBasicData } from "@/app/components/sd/sd-panel";
 import { useAccessStore } from "./access";
-import { useManagedWorkspaceStore } from "./managed-workspace";
+import {
+  getManagedWorkspaceCurrentGroup,
+  useManagedWorkspaceStore,
+} from "./managed-workspace";
 import { withBasePath } from "@/app/utils/api-path";
 
 const NEXTCHAT_IMAGE_STUDIO_RETAIN_DAYS = 1;
 const NEXTCHAT_IMAGE_STUDIO_POLL_MS = 2500;
 const NEXTCHAT_IMAGE_STUDIO_MAX_POLLS = 120;
+const sub2apiImageStudioPollingJobs = new Set<string>();
 
 type Sub2APIEnvelope<T> = {
   code?: number;
@@ -66,7 +70,12 @@ export type Sub2APIImageStudioJob = {
   status: string;
   error_message?: string;
   assets?: Sub2APIImageStudioAsset[];
+  created_at?: string;
   expires_at?: string;
+  prompt?: string;
+  user_prompt?: string;
+  size?: string;
+  count?: number;
 };
 
 const defaultModel = {
@@ -89,6 +98,7 @@ const DEFAULT_SD_STATE = {
   sub2apiImageStudioReferencesError: "",
   sub2apiImageStudioJobsLoading: false,
   sub2apiImageStudioJobsError: "",
+  sub2apiImageStudioRequestGeneration: 0,
 };
 
 export const useSdStore = createPersistStore<
@@ -105,6 +115,7 @@ export const useSdStore = createPersistStore<
     sub2apiImageStudioReferencesError: string;
     sub2apiImageStudioJobsLoading: boolean;
     sub2apiImageStudioJobsError: string;
+    sub2apiImageStudioRequestGeneration: number;
   },
   {
     getNextId: () => number;
@@ -115,12 +126,16 @@ export const useSdStore = createPersistStore<
     ) => Promise<Sub2APIImageStudioReference | undefined>;
     deleteSub2APIImageStudioReference: (id: string) => Promise<void>;
     clearSub2APIImageStudioReferences: () => void;
+    beginSub2APIImageStudioGroupSwitch: () => void;
+    resetSub2APIImageStudioForGroupSwitch: () => void;
     fetchSub2APIImageStudioJobs: () => Promise<Sub2APIImageStudioJob[]>;
+    deleteSub2APIImageStudioJob: (jobId: string) => Promise<void>;
     sub2apiImageStudioRequestCall: (data: any) => Promise<void>;
     pollSub2APIImageStudioJob: (
       data: any,
       jobId: string,
       attempt?: number,
+      requestGeneration?: number,
     ) => void;
     stabilityRequestCall: (data: any) => void;
     updateDraw: (draw: any) => void;
@@ -155,7 +170,9 @@ export const useSdStore = createPersistStore<
         okCall?.();
       },
       async fetchSub2APIImageStudioModels() {
+        const requestGeneration = _get().sub2apiImageStudioRequestGeneration;
         set({
+          sub2apiImageStudioModels: [],
           sub2apiImageStudioModelsLoading: true,
           sub2apiImageStudioModelsError: "",
         });
@@ -163,6 +180,11 @@ export const useSdStore = createPersistStore<
           const data = await fetchSub2APIImageStudio<{
             models: Sub2APIImageStudioModel[];
           }>("/models");
+          if (
+            _get().sub2apiImageStudioRequestGeneration !== requestGeneration
+          ) {
+            return [];
+          }
           const models = data.models ?? [];
           set({
             sub2apiImageStudioModels: models,
@@ -176,10 +198,19 @@ export const useSdStore = createPersistStore<
             set({
               currentModel: toSub2APIImageStudioPanelModel(models[0]) as any,
             });
+          } else if (models.length === 0) {
+            set({ currentModel: defaultModel });
           }
           return models;
         } catch (error: any) {
+          if (
+            _get().sub2apiImageStudioRequestGeneration !== requestGeneration
+          ) {
+            return [];
+          }
           set({
+            sub2apiImageStudioModels: [],
+            currentModel: defaultModel,
             sub2apiImageStudioModelsLoading: false,
             sub2apiImageStudioModelsError:
               error.message || "Failed to load image models",
@@ -241,7 +272,39 @@ export const useSdStore = createPersistStore<
           sub2apiImageStudioReferencesError: "",
         });
       },
+      beginSub2APIImageStudioGroupSwitch() {
+        set({
+          sub2apiImageStudioRequestGeneration:
+            _get().sub2apiImageStudioRequestGeneration + 1,
+          sub2apiImageStudioModelsLoading: false,
+          sub2apiImageStudioJobsLoading: false,
+          sub2apiImageStudioModelsError: "",
+          sub2apiImageStudioJobsError: "",
+        });
+      },
+      resetSub2APIImageStudioForGroupSwitch() {
+        for (const item of _get().draw ?? []) {
+          if (item?.job_id) {
+            sub2apiImageStudioPollingJobs.delete(item.job_id);
+          }
+        }
+        set({
+          draw: [],
+          sub2apiImageStudioModels: [],
+          sub2apiImageStudioModelsLoading: false,
+          sub2apiImageStudioModelsError: "",
+          sub2apiImageStudioReferences: [],
+          sub2apiImageStudioReferenceUploading: false,
+          sub2apiImageStudioReferencesError: "",
+          sub2apiImageStudioJobsError: "",
+          sub2apiImageStudioRequestGeneration:
+            _get().sub2apiImageStudioRequestGeneration + 1,
+          currentModel: defaultModel,
+          currentId: _get().currentId + 1,
+        });
+      },
       async fetchSub2APIImageStudioJobs() {
+        const requestGeneration = _get().sub2apiImageStudioRequestGeneration;
         set({
           sub2apiImageStudioJobsLoading: true,
           sub2apiImageStudioJobsError: "",
@@ -253,19 +316,36 @@ export const useSdStore = createPersistStore<
           const remoteDraws = (data.jobs ?? []).map(
             toSub2APIImageStudioJobDraw,
           );
-          const existing = new Set(
-            (_get().draw ?? []).map((item: any) => item.job_id || item.id),
-          );
+          if (
+            _get().sub2apiImageStudioRequestGeneration !== requestGeneration
+          ) {
+            return [];
+          }
+          const draw = mergeSub2APIImageStudioDraws(_get().draw, remoteDraws);
           set({
-            draw: [
-              ...(_get().draw ?? []),
-              ...remoteDraws.filter((item) => !existing.has(item.job_id)),
-            ],
+            draw,
+            currentId: _get().currentId + 1,
             sub2apiImageStudioJobsLoading: false,
+          });
+          remoteDraws.forEach((draw, index) => {
+            const job = data.jobs?.[index];
+            if (job && isSub2APIImageStudioRunning(job.status)) {
+              this.pollSub2APIImageStudioJob(
+                draw,
+                job.id,
+                0,
+                requestGeneration,
+              );
+            }
           });
           refreshManagedWorkspaceBootstrap();
           return data.jobs ?? [];
         } catch (error: any) {
+          if (
+            _get().sub2apiImageStudioRequestGeneration !== requestGeneration
+          ) {
+            return [];
+          }
           set({
             sub2apiImageStudioJobsLoading: false,
             sub2apiImageStudioJobsError:
@@ -274,7 +354,29 @@ export const useSdStore = createPersistStore<
           return [];
         }
       },
+      async deleteSub2APIImageStudioJob(jobId: string) {
+        if (!jobId) return;
+        try {
+          await fetchSub2APIImageStudio<{ deleted?: boolean }>(
+            `/jobs/${encodeURIComponent(jobId)}`,
+            { method: "DELETE" },
+          );
+          set({
+            draw: (_get().draw ?? []).filter(
+              (item: any) => item.job_id !== jobId && item.id !== jobId,
+            ),
+            sub2apiImageStudioJobsError: "",
+          });
+          sub2apiImageStudioPollingJobs.delete(jobId);
+          this.getNextId();
+        } catch (error: any) {
+          const message = error.message || "Failed to delete image job";
+          set({ sub2apiImageStudioJobsError: message });
+          throw error;
+        }
+      },
       async sub2apiImageStudioRequestCall(data: any) {
+        const requestGroupID = currentSub2APIImageStudioGroupID();
         try {
           const result = await fetchSub2APIImageStudio<{
             job: Sub2APIImageStudioJob;
@@ -287,6 +389,9 @@ export const useSdStore = createPersistStore<
             },
             body: JSON.stringify(buildSub2APIImageStudioGeneratePayload(data)),
           });
+          if (currentSub2APIImageStudioGroupID() !== requestGroupID) {
+            return;
+          }
           const job = result.job;
           this.updateDraw(toSub2APIImageStudioDraw(data, job));
           if (isSub2APIImageStudioRunning(job.status)) {
@@ -295,6 +400,9 @@ export const useSdStore = createPersistStore<
             refreshManagedWorkspaceBootstrap();
           }
         } catch (error: any) {
+          if (currentSub2APIImageStudioGroupID() !== requestGroupID) {
+            return;
+          }
           this.updateDraw({
             ...data,
             status: "error",
@@ -303,8 +411,24 @@ export const useSdStore = createPersistStore<
           this.getNextId();
         }
       },
-      pollSub2APIImageStudioJob(data: any, jobId: string, attempt = 0) {
+      pollSub2APIImageStudioJob(
+        data: any,
+        jobId: string,
+        attempt = 0,
+        requestGeneration = _get().sub2apiImageStudioRequestGeneration,
+      ) {
+        if (_get().sub2apiImageStudioRequestGeneration !== requestGeneration) {
+          sub2apiImageStudioPollingJobs.delete(jobId);
+          return;
+        }
+        if (attempt === 0 && sub2apiImageStudioPollingJobs.has(jobId)) {
+          return;
+        }
+        if (attempt === 0) {
+          sub2apiImageStudioPollingJobs.add(jobId);
+        }
         if (!jobId || attempt >= NEXTCHAT_IMAGE_STUDIO_MAX_POLLS) {
+          sub2apiImageStudioPollingJobs.delete(jobId);
           this.updateDraw({
             ...data,
             status: "error",
@@ -314,18 +438,37 @@ export const useSdStore = createPersistStore<
           return;
         }
         setTimeout(async () => {
+          if (
+            _get().sub2apiImageStudioRequestGeneration !== requestGeneration
+          ) {
+            sub2apiImageStudioPollingJobs.delete(jobId);
+            return;
+          }
           try {
             const job = await fetchSub2APIImageStudio<Sub2APIImageStudioJob>(
               `/jobs/${encodeURIComponent(jobId)}`,
             );
+            if (
+              _get().sub2apiImageStudioRequestGeneration !== requestGeneration
+            ) {
+              sub2apiImageStudioPollingJobs.delete(jobId);
+              return;
+            }
             this.updateDraw(toSub2APIImageStudioDraw(data, job));
             this.getNextId();
             if (isSub2APIImageStudioRunning(job.status)) {
-              this.pollSub2APIImageStudioJob(data, jobId, attempt + 1);
+              this.pollSub2APIImageStudioJob(
+                data,
+                jobId,
+                attempt + 1,
+                requestGeneration,
+              );
             } else {
+              sub2apiImageStudioPollingJobs.delete(jobId);
               refreshManagedWorkspaceBootstrap();
             }
           } catch (error: any) {
+            sub2apiImageStudioPollingJobs.delete(jobId);
             this.updateDraw({
               ...data,
               status: "error",
@@ -408,10 +551,17 @@ export const useSdStore = createPersistStore<
           });
       },
       updateDraw(_draw: any) {
-        const draw = _get().draw || [];
+        const draw = [...(_get().draw || [])];
+        const nextJobId = _draw?.job_id;
         draw.some((item, index) => {
-          if (item.id === _draw.id) {
-            draw[index] = _draw;
+          if (
+            item.id === _draw.id ||
+            (nextJobId && item.job_id === nextJobId)
+          ) {
+            draw[index] = {
+              ..._draw,
+              id: item.id || _draw.id,
+            };
             set(() => ({ draw }));
             return true;
           }
@@ -460,7 +610,7 @@ export function buildSub2APIImageStudioGeneratePayload(data: any) {
     "1024x1024";
   const inferredSize = inferSub2APIImageStudioAspectTier(size);
   const payload: any = {
-    template_id: "free-create",
+    template_id: params.template_id || "free-create",
     user_prompt: params.prompt ?? "",
     size,
     aspect: params.aspect || inferredSize.aspect,
@@ -605,6 +755,11 @@ function toSub2APIImageStudioDraw(data: any, job: Sub2APIImageStudioJob) {
 }
 
 function toSub2APIImageStudioJobDraw(job: Sub2APIImageStudioJob) {
+  const prompt =
+    job.prompt ||
+    job.user_prompt ||
+    (job as any).params?.prompt ||
+    "历史图片任务";
   return toSub2APIImageStudioDraw(
     {
       id: `job-${job.id}`,
@@ -612,15 +767,23 @@ function toSub2APIImageStudioJobDraw(job: Sub2APIImageStudioJob) {
       model: job.model,
       model_name: job.model,
       params: {
-        prompt: "历史图片任务",
-        size: (job as any).size,
-        count: (job as any).count,
+        prompt,
+        size: job.size,
+        count: job.count,
       },
-      created_at: (job as any).created_at,
+      created_at: job.created_at,
       img_data: "",
     },
     job,
   );
+}
+
+export function mergeSub2APIImageStudioDraws(
+  existing: any[] = [],
+  remote: any[] = [],
+) {
+  const localPending = existing.filter((item: any) => !item?.job_id);
+  return [...localPending, ...remote];
 }
 
 export function isSub2APIManagedImageExpired(item: any, now = Date.now()) {
@@ -647,6 +810,12 @@ function normalizeSub2APIImageStudioTaskStatus(
 
 function isSub2APIImageStudioRunning(status: string) {
   return status === "pending" || status === "running";
+}
+
+function currentSub2APIImageStudioGroupID() {
+  return getManagedWorkspaceCurrentGroup(
+    useManagedWorkspaceStore.getState().bootstrap,
+  )?.id;
 }
 
 function refreshManagedWorkspaceBootstrap() {

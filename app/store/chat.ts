@@ -14,6 +14,7 @@ import type {
 } from "../client/api";
 import { getClientApi } from "../client/api";
 import { ChatControllerPool } from "../client/controller";
+import { getClientConfig } from "../config/client";
 import { showToast } from "../components/ui-lib";
 import {
   DEFAULT_INPUT_TEMPLATE,
@@ -91,6 +92,7 @@ export interface ChatSession {
   lastUpdate: number;
   lastSummarizeIndex: number;
   clearContextIndex?: number;
+  managedWorkspaceGeneration?: number;
 
   mask: Mask;
 }
@@ -463,6 +465,16 @@ export const useChatStore = createPersistStore(
         const recentMessages = await get().getMessagesWithMemory();
         const sendMessages = recentMessages.concat(userMessage);
         const messageIndex = session.messages.length + 1;
+        const managedWorkspaceGeneration =
+          session.managedWorkspaceGeneration ?? 0;
+        const isStaleManagedWorkspaceResponse = () => {
+          if (!getClientConfig()?.sub2apiManagedMode) return false;
+          const latestSession = get().sessions.find((s) => s.id === session.id);
+          return (
+            (latestSession?.managedWorkspaceGeneration ?? 0) !==
+            managedWorkspaceGeneration
+          );
+        };
 
         // save user's and bot's message
         get().updateTargetSession(session, (session) => {
@@ -482,6 +494,7 @@ export const useChatStore = createPersistStore(
           messages: sendMessages,
           config: { ...modelConfig, stream: true },
           onUpdate(message) {
+            if (isStaleManagedWorkspaceResponse()) return;
             botMessage.streaming = true;
             if (message) {
               botMessage.content = message;
@@ -491,6 +504,10 @@ export const useChatStore = createPersistStore(
             });
           },
           async onFinish(message) {
+            if (isStaleManagedWorkspaceResponse()) {
+              ChatControllerPool.remove(session.id, botMessage.id);
+              return;
+            }
             botMessage.streaming = false;
             if (message) {
               botMessage.content = message;
@@ -500,12 +517,14 @@ export const useChatStore = createPersistStore(
             ChatControllerPool.remove(session.id, botMessage.id);
           },
           onBeforeTool(tool: ChatMessageTool) {
+            if (isStaleManagedWorkspaceResponse()) return;
             (botMessage.tools = botMessage?.tools || []).push(tool);
             get().updateTargetSession(session, (session) => {
               session.messages = session.messages.concat();
             });
           },
           onAfterTool(tool: ChatMessageTool) {
+            if (isStaleManagedWorkspaceResponse()) return;
             botMessage?.tools?.forEach((t, i, tools) => {
               if (tool.id == t.id) {
                 tools[i] = { ...tool };
@@ -516,6 +535,13 @@ export const useChatStore = createPersistStore(
             });
           },
           onError(error) {
+            if (isStaleManagedWorkspaceResponse()) {
+              ChatControllerPool.remove(
+                session.id,
+                botMessage.id ?? messageIndex,
+              );
+              return;
+            }
             const isAborted = error.message?.includes?.("aborted");
             botMessage.content +=
               "\n\n" +

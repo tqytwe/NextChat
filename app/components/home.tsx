@@ -36,6 +36,7 @@ import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
 import { withBasePath } from "../utils/api-path";
 import { applyManagedWorkspaceModelsToStores } from "../utils/managed-workspace-models";
+import { ManagedBrandLogo } from "./managed-brand";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -83,6 +84,13 @@ const Sd = dynamic(async () => (await import("./sd")).Sd, {
 
 const McpMarketPage = dynamic(
   async () => (await import("./mcp-market")).McpMarketPage,
+  {
+    loading: () => <Loading noLogo />,
+  },
+);
+
+const ManagedPromptSquare = dynamic(
+  async () => (await import("./managed-prompt-square")).ManagedPromptSquare,
   {
     loading: () => <Loading noLogo />,
   },
@@ -215,6 +223,10 @@ function Screen() {
               element={managedMode ? <Chat /> : <PluginPage />}
             />
             <Route path={Path.SearchChat} element={<SearchChat />} />
+            <Route
+              path={Path.Prompts}
+              element={managedMode ? <ManagedPromptSquare /> : <Chat />}
+            />
             <Route path={Path.Chat} element={<Chat />} />
             <Route path={Path.Settings} element={<Settings />} />
             <Route
@@ -373,7 +385,7 @@ function ManagedLockedPage(props: { error?: string }) {
   return (
     <div className={clsx("no-dark", styles["managed-lock-page"])}>
       <div className={styles["managed-lock-logo"]}>
-        <BotIcon />
+        <ManagedBrandLogo large />
       </div>
       <div className={styles["managed-lock-title"]}>极速蹬 AI 工作台</div>
       <div className={styles["managed-lock-subtitle"]}>

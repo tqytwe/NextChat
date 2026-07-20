@@ -19,6 +19,7 @@ import Locale from "../locales";
 import { Modal, showToast } from "./ui-lib";
 import { copyToClipboard, downloadAs } from "../utils";
 import { Path, ApiPath, REPO_URL } from "@/app/constant";
+import { getClientConfig } from "@/app/config/client";
 import { Loading } from "./home";
 import styles from "./artifacts.module.scss";
 
@@ -117,6 +118,7 @@ export function ArtifactsShareButton({
   style?: any;
   fileName?: string;
 }) {
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState(id);
   const [show, setShow] = useState(false);
@@ -141,6 +143,10 @@ export function ArtifactsShareButton({
           .catch((e) => {
             showToast(Locale.Export.Artifacts.Error);
           });
+  if (managedMode) {
+    return null;
+  }
+
   return (
     <>
       <div className="window-action-button" style={style}>
@@ -208,6 +214,7 @@ export function Artifacts() {
   const [loading, setLoading] = useState(true);
   const [fileName, setFileName] = useState("");
   const previewRef = useRef<HTMLPreviewHandler>(null);
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
 
   useEffect(() => {
     if (id) {
@@ -229,17 +236,21 @@ export function Artifacts() {
   return (
     <div className={styles["artifacts"]}>
       <div className={styles["artifacts-header"]}>
-        <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
-          <IconButton bordered icon={<GithubIcon />} shadow />
-        </a>
+        {!managedMode && (
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+            <IconButton bordered icon={<GithubIcon />} shadow />
+          </a>
+        )}
         <IconButton
           bordered
-          style={{ marginLeft: 20 }}
+          style={{ marginLeft: managedMode ? 0 : 20 }}
           icon={<ReloadButtonIcon />}
           shadow
           onClick={() => previewRef.current?.reload()}
         />
-        <div className={styles["artifacts-title"]}>NextChat Artifacts</div>
+        <div className={styles["artifacts-title"]}>
+          {managedMode ? "极速蹬 Artifacts" : "NextChat Artifacts"}
+        </div>
         <ArtifactsShareButton
           id={id}
           getCode={() => code}

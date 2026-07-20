@@ -601,7 +601,7 @@ function ManagedWorkspaceArchiveItems() {
       sessions.length
     } 会话 / ${messageCount} 消息 / ${imageCount} 图片 / ${
       Object.keys(promptStore.prompts).length
-    } 提示词`;
+    } 提示词 · 对话保留 7 天，图片资产保留 24 小时，导出包会归档未过期图片`;
   }, [chatStore.sessions, promptStore.prompts, sdStore.draw]);
 
   const exportWorkspace = async () => {

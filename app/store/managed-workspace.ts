@@ -7,8 +7,10 @@ const JISUDENG_ORIGIN = "https://www.jisudeng.com";
 export const JISUDENG_DASHBOARD_URL = `${JISUDENG_ORIGIN}/dashboard`;
 export const JISUDENG_RECHARGE_URL = `${JISUDENG_ORIGIN}/purchase`;
 const JISUDENG_LEGACY_HOSTS = new Set(["jisuodeng.zeabur.app"]);
+const NEXTCHAT_MANAGED_FRONTEND_HOSTS = new Set(["nexta.zeabur.app"]);
 const HOMEPAGE_PATHS = new Set(["/", "/home", "/index"]);
 const LEGACY_RECHARGE_PATHS = new Set(["/payment", "/recharge", "/billing"]);
+let managedWorkspaceRequestSeq = 0;
 
 type Sub2APIEnvelope<T> = {
   code?: number;
@@ -99,15 +101,22 @@ export const useManagedWorkspaceStore = create<ManagedWorkspaceState>(
     switchingGroup: false,
     error: "",
     async fetchBootstrap() {
+      const requestSeq = ++managedWorkspaceRequestSeq;
       set({ loading: true, error: "" });
       try {
         const bootstrap =
           await fetchManagedWorkspace<ManagedWorkspaceBootstrap>(
             withBasePath("/api/nextchat/bootstrap"),
           );
+        if (requestSeq !== managedWorkspaceRequestSeq) {
+          return get().bootstrap;
+        }
         set({ bootstrap, loading: false });
         return bootstrap;
       } catch (error: any) {
+        if (requestSeq !== managedWorkspaceRequestSeq) {
+          return get().bootstrap;
+        }
         set({
           loading: false,
           error: error.message || "Failed to load workspace",
@@ -116,7 +125,8 @@ export const useManagedWorkspaceStore = create<ManagedWorkspaceState>(
       }
     },
     async switchGroup(groupId: number) {
-      set({ switchingGroup: true, error: "" });
+      const requestSeq = ++managedWorkspaceRequestSeq;
+      set({ loading: false, switchingGroup: true, error: "" });
       try {
         const result = await fetchManagedWorkspace<{
           managed_api_key: ManagedWorkspaceBootstrap["managed_api_key"];
@@ -125,10 +135,19 @@ export const useManagedWorkspaceStore = create<ManagedWorkspaceState>(
           method: "POST",
           body: JSON.stringify({ group_id: groupId }),
         });
+        if (requestSeq !== managedWorkspaceRequestSeq) {
+          return get().bootstrap;
+        }
         const previous = get().bootstrap;
         if (!previous) {
-          const bootstrap = await get().fetchBootstrap();
-          set({ switchingGroup: false });
+          const bootstrap =
+            await fetchManagedWorkspace<ManagedWorkspaceBootstrap>(
+              withBasePath("/api/nextchat/bootstrap"),
+            );
+          if (requestSeq !== managedWorkspaceRequestSeq) {
+            return get().bootstrap;
+          }
+          set({ bootstrap, loading: false, switchingGroup: false });
           return bootstrap;
         }
         const bootstrap = {
@@ -136,10 +155,17 @@ export const useManagedWorkspaceStore = create<ManagedWorkspaceState>(
           managed_api_key: result.managed_api_key,
           models: result.models,
         };
-        set({ bootstrap, switchingGroup: false });
+        if (requestSeq !== managedWorkspaceRequestSeq) {
+          return get().bootstrap;
+        }
+        set({ bootstrap, loading: false, switchingGroup: false });
         return bootstrap;
       } catch (error: any) {
+        if (requestSeq !== managedWorkspaceRequestSeq) {
+          return get().bootstrap;
+        }
         set({
+          loading: false,
           switchingGroup: false,
           error: error.message || "Failed to switch group",
         });
@@ -147,6 +173,7 @@ export const useManagedWorkspaceStore = create<ManagedWorkspaceState>(
       }
     },
     reset() {
+      managedWorkspaceRequestSeq++;
       set({
         bootstrap: undefined,
         loading: false,
@@ -235,12 +262,35 @@ export function resolveManagedWorkspaceModelProvider(
   platform?: string,
   modelName?: string,
 ): LLMModel["provider"] {
-  const providerName =
-    resolveManagedWorkspaceKnownServiceProvider(platform) ||
-    resolveManagedWorkspaceKnownServiceProvider(
-      inferManagedWorkspacePlatformFromModel(modelName),
-    ) ||
-    ServiceProvider.OpenAI;
+  const knownProviderName =
+    resolveManagedWorkspaceKnownServiceProvider(platform);
+  if (knownProviderName) {
+    return buildManagedWorkspaceProvider(knownProviderName);
+  }
+
+  const customProvider = normalizeManagedWorkspaceCustomProvider(platform);
+  if (customProvider) {
+    return {
+      id: customProvider,
+      providerName: labelManagedWorkspaceCustomProvider(platform),
+      providerType: customProvider,
+      sorted: 100,
+    };
+  }
+
+  const inferredProviderName = resolveManagedWorkspaceKnownServiceProvider(
+    inferManagedWorkspacePlatformFromModel(modelName),
+  );
+  if (inferredProviderName) {
+    return buildManagedWorkspaceProvider(inferredProviderName);
+  }
+
+  return buildManagedWorkspaceProvider(ServiceProvider.OpenAI);
+}
+
+function buildManagedWorkspaceProvider(
+  providerName: ServiceProvider,
+): LLMModel["provider"] {
   return {
     id: managedWorkspaceProviderId(providerName),
     providerName,
@@ -315,6 +365,15 @@ function resolveManagedWorkspaceKnownServiceProvider(
 function inferManagedWorkspacePlatformFromModel(modelName?: string) {
   const model = (modelName || "").trim().toLowerCase();
   if (!model) return "";
+  if (
+    model.startsWith("gpt-") ||
+    model.startsWith("o1") ||
+    model.startsWith("o3") ||
+    model.startsWith("o4") ||
+    model.startsWith("dall-e")
+  ) {
+    return "openai";
+  }
   if (model.startsWith("claude") || model.includes("-claude-")) {
     return "anthropic";
   }
@@ -353,7 +412,25 @@ function inferManagedWorkspacePlatformFromModel(modelName?: string) {
   if (model.startsWith("ernie")) {
     return "baidu";
   }
-  return "openai";
+  return "";
+}
+
+function normalizeManagedWorkspaceCustomProvider(platform?: string) {
+  return (platform || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function labelManagedWorkspaceCustomProvider(platform?: string) {
+  const normalized = normalizeManagedWorkspaceCustomProvider(platform);
+  if (!normalized) return "Sub2API";
+  return normalized
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function managedWorkspaceProviderId(providerName: ServiceProvider) {
@@ -420,6 +497,9 @@ export function resolveManagedWorkspaceURL(
       return fallbackURL.toString();
     }
     const normalizedPath = url.pathname.replace(/\/+$/g, "") || "/";
+    if (NEXTCHAT_MANAGED_FRONTEND_HOSTS.has(url.hostname)) {
+      return fallbackURL.toString();
+    }
     if (HOMEPAGE_PATHS.has(normalizedPath)) {
       return new URL(fallbackURL.pathname, url.origin).toString();
     }

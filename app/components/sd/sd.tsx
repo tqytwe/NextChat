@@ -32,12 +32,18 @@ import {
   showConfirm,
   showImageModal,
   showModal,
+  showToast,
 } from "@/app/components/ui-lib";
 import { removeImage } from "@/app/utils/chat";
 import { SideBar } from "./sd-sidebar";
 import { WindowContent } from "@/app/components/home";
 import { params } from "./sd-panel";
 import clsx from "clsx";
+import { ManagedBrandLogo } from "@/app/components/managed-brand";
+import {
+  downloadManagedImage,
+  getManagedImageSources,
+} from "@/app/utils/managed-image-studio-ui";
 
 function getSdTaskStatus(item: any) {
   let s: string;
@@ -88,39 +94,6 @@ function getSdTaskStatus(item: any) {
   );
 }
 
-function getManagedImageSources(item: any) {
-  const assets = (item.assets ?? []) as any[];
-  const sources = assets
-    .map((asset, index) => ({
-      id: asset.id || `${item.id}-${index}`,
-      preview: asset.preview_url || asset.url || asset.download_url,
-      download: asset.download_url || asset.url || asset.preview_url,
-    }))
-    .filter((asset) => !!asset.preview);
-
-  if (sources.length === 0 && item.img_data) {
-    sources.push({
-      id: `${item.id}-image`,
-      preview: item.img_data,
-      download: item.img_data,
-    });
-  }
-
-  return sources;
-}
-
-function downloadManagedImage(item: any) {
-  const source = getManagedImageSources(item)[0];
-  if (!source?.download) return;
-  const link = document.createElement("a");
-  link.href = source.download;
-  link.download = `${item.job_id || item.id || "image"}.png`;
-  link.target = "_blank";
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
 export function Sd() {
   const isMobileScreen = useMobileScreen();
   const navigate = useNavigate();
@@ -131,12 +104,29 @@ export function Sd() {
   const config = useAppConfig();
   const scrollRef = useRef<HTMLDivElement>(null);
   const sdStore = useSdStore();
-  const [sdImages, setSdImages] = useState(sdStore.draw);
+  const sdImages = sdStore.draw ?? [];
+  const [statusFilter, setStatusFilter] = useState("all");
   const isSd = location.pathname === Path.Sd;
 
   useEffect(() => {
-    setSdImages(sdStore.draw);
-  }, [sdStore.currentId]);
+    if (managedMode) {
+      void sdStore.fetchSub2APIImageStudioJobs();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managedMode]);
+
+  const visibleSdImages = useMemo(() => {
+    return sdImages.filter((item: any) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "expired") {
+        return managedMode && isSub2APIManagedImageExpired(item);
+      }
+      if (statusFilter === "running") {
+        return ["wait", "running"].includes(item.status);
+      }
+      return item.status === statusFilter;
+    });
+  }, [managedMode, sdImages, statusFilter]);
 
   return (
     <>
@@ -163,10 +153,10 @@ export function Sd() {
               )}
             >
               <div className={`window-header-main-title`}>
-                {managedMode ? "极速蹬图片创作" : "Stability AI"}
+                {managedMode ? "创作库" : "Stability AI"}
               </div>
               <div className="window-header-sub-title">
-                {Locale.Sd.SubTitle(sdImages.length || 0)}
+                {Locale.Sd.SubTitle(visibleSdImages.length || 0)}
               </div>
             </div>
 
@@ -185,13 +175,65 @@ export function Sd() {
                   />
                 </div>
               )}
-              {isMobileScreen && <SDIcon width={50} height={50} />}
+              {isMobileScreen &&
+                (managedMode ? (
+                  <ManagedBrandLogo compact />
+                ) : (
+                  <SDIcon width={50} height={50} />
+                ))}
             </div>
           </div>
           <div className={chatStyles["chat-body"]} ref={scrollRef}>
+            {managedMode && (
+              <div className={styles["library-toolbar"]}>
+                <div className={styles["library-tabs"]}>
+                  {[
+                    ["all", "全部"],
+                    ["running", "生成中"],
+                    ["success", "成功"],
+                    ["error", "失败"],
+                    ["expired", "已过期"],
+                  ].map(([value, label]) => (
+                    <IconButton
+                      key={value}
+                      text={label}
+                      type={statusFilter === value ? "primary" : null}
+                      onClick={() => setStatusFilter(value)}
+                      shadow
+                    />
+                  ))}
+                </div>
+                <IconButton
+                  icon={<ResetIcon />}
+                  text={
+                    sdStore.sub2apiImageStudioJobsLoading ? "同步中" : "刷新"
+                  }
+                  onClick={async () => {
+                    const jobs = await sdStore.fetchSub2APIImageStudioJobs();
+                    const error =
+                      useSdStore.getState().sub2apiImageStudioJobsError;
+                    showModal({
+                      title: "创作库",
+                      children: (
+                        <div>
+                          {error ? error : `已同步 ${jobs.length} 个图片任务`}
+                        </div>
+                      ),
+                    });
+                  }}
+                  shadow
+                  disabled={sdStore.sub2apiImageStudioJobsLoading}
+                />
+              </div>
+            )}
+            {managedMode && sdStore.sub2apiImageStudioJobsError && (
+              <div className={styles["library-error"]}>
+                {sdStore.sub2apiImageStudioJobsError}
+              </div>
+            )}
             <div className={styles["sd-img-list"]}>
-              {sdImages.length > 0 ? (
-                sdImages.map((item: any) => {
+              {visibleSdImages.length > 0 ? (
+                visibleSdImages.map((item: any) => {
                   const managedExpired =
                     managedMode && isSub2APIManagedImageExpired(item);
                   const managedImageSources = managedMode
@@ -385,7 +427,11 @@ export function Sd() {
                                 <ChatAction
                                   text="下载"
                                   icon={<DownloadIcon />}
-                                  onClick={() => downloadManagedImage(item)}
+                                  onClick={() =>
+                                    downloadManagedImage(item, (count) =>
+                                      showToast(`已开始下载 ${count} 张图片`),
+                                    )
+                                  }
                                 />
                               )}
                             <ChatAction
@@ -410,15 +456,21 @@ export function Sd() {
                                 if (
                                   await showConfirm(Locale.Sd.Danger.Delete)
                                 ) {
-                                  const remove = managedMode
-                                    ? Promise.resolve()
-                                    : removeImage(item.img_data);
-                                  remove.finally(() => {
+                                  try {
+                                    if (managedMode && item.job_id) {
+                                      await sdStore.deleteSub2APIImageStudioJob(
+                                        item.job_id,
+                                      );
+                                      return;
+                                    }
+                                    await removeImage(item.img_data);
                                     sdStore.draw = sdImages.filter(
                                       (i: any) => i.id !== item.id,
                                     );
                                     sdStore.getNextId();
-                                  });
+                                  } catch (error: any) {
+                                    showToast(error.message || "删除失败");
+                                  }
                                 }
                               }}
                             />
@@ -429,7 +481,9 @@ export function Sd() {
                   );
                 })
               ) : (
-                <div>{Locale.Sd.EmptyRecord}</div>
+                <div>
+                  {managedMode ? "暂无创作记录" : Locale.Sd.EmptyRecord}
+                </div>
               )}
             </div>
           </div>

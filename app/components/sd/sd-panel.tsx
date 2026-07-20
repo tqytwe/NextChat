@@ -1,6 +1,6 @@
 import styles from "./sd-panel.module.scss";
-import React, { useEffect, useMemo, useRef } from "react";
-import { Select } from "@/app/components/ui-lib";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Select, Selector } from "@/app/components/ui-lib";
 import { IconButton } from "@/app/components/button";
 import Locale from "@/app/locales";
 import {
@@ -11,12 +11,16 @@ import {
   toSub2APIImageStudioPanelModel,
   useSdStore,
 } from "@/app/store/sd";
-import { useManagedWorkspaceStore } from "@/app/store/managed-workspace";
+import {
+  getManagedWorkspaceCurrentGroup,
+  useManagedWorkspaceStore,
+} from "@/app/store/managed-workspace";
 import clsx from "clsx";
 import UploadIcon from "@/app/icons/upload.svg";
 import DeleteIcon from "@/app/icons/clear.svg";
 import LoadingIcon from "@/app/icons/three-dots.svg";
 import { showToast } from "@/app/components/ui-lib";
+import { applyManagedWorkspaceModelsToStores } from "@/app/utils/managed-workspace-models";
 
 export const params = [
   {
@@ -586,6 +590,9 @@ export const getModelParamBasicData = (
       newParams[item.value] = data[item.value] || item.default || "";
     }
   });
+  if (data?.template_id) {
+    newParams.template_id = data.template_id;
+  }
   return newParams;
 };
 
@@ -624,7 +631,11 @@ export const getParams = (model: any, params: any) => {
 export function SdPanel() {
   const sdStore = useSdStore();
   const managedMode = isSub2APIManagedImageStudio();
-  const managedBootstrap = useManagedWorkspaceStore((state) => state.bootstrap);
+  const managedWorkspace = useManagedWorkspaceStore();
+  const managedBootstrap = managedWorkspace.bootstrap;
+  const managedGroups = managedBootstrap?.models?.groups ?? [];
+  const currentManagedGroup = getManagedWorkspaceCurrentGroup(managedBootstrap);
+  const [showGroupSelector, setShowGroupSelector] = useState(false);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const currentModel = sdStore.currentModel;
   const setCurrentModel = sdStore.setCurrentModel;
@@ -657,9 +668,10 @@ export function SdPanel() {
   useEffect(() => {
     if (managedMode) {
       void sdStore.fetchSub2APIImageStudioModels();
+      void sdStore.fetchSub2APIImageStudioJobs();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [managedMode]);
+  }, [managedMode, currentManagedGroup?.id]);
 
   useEffect(() => {
     if (!managedMode || modelOptions.length === 0) return;
@@ -687,6 +699,30 @@ export function SdPanel() {
     setCurrentModel(model);
     setParams(normalizeModelParamData(getParams(model, params), params));
   };
+  const switchManagedImageGroup = async (groupId: number) => {
+    if (!Number.isFinite(groupId) || groupId <= 0) return;
+    if (groupId === currentManagedGroup?.id) {
+      setShowGroupSelector(false);
+      return;
+    }
+    setShowGroupSelector(false);
+    sdStore.beginSub2APIImageStudioGroupSwitch();
+    const bootstrap = await managedWorkspace.switchGroup(groupId);
+    if (!bootstrap) {
+      showToast(managedWorkspace.error || "切换分组失败");
+      return;
+    }
+    sdStore.resetSub2APIImageStudioForGroupSwitch();
+    applyManagedWorkspaceModelsToStores(bootstrap);
+    const models = await sdStore.fetchSub2APIImageStudioModels();
+    await sdStore.fetchSub2APIImageStudioJobs();
+    const group = getManagedWorkspaceCurrentGroup(bootstrap);
+    showToast(
+      models.length > 0
+        ? `${group?.name ?? "分组"} · ${models.length} 个图片模型`
+        : `${group?.name ?? "分组"} 暂无图片模型`,
+    );
+  };
   const uploadReferences = async (files?: FileList | null) => {
     if (!files || files.length === 0) return;
     for (const file of Array.from(files).slice(0, 4)) {
@@ -705,6 +741,54 @@ export function SdPanel() {
 
   return (
     <>
+      {managedMode && (
+        <ControlParamItem
+          title="创作分组"
+          subTitle={
+            currentManagedGroup?.platform
+              ? `协议 ${currentManagedGroup.platform}`
+              : undefined
+          }
+        >
+          <div className={styles["managed-group-row"]}>
+            <IconButton
+              text={currentManagedGroup?.name || "选择分组"}
+              type="primary"
+              shadow
+              onClick={() => setShowGroupSelector(true)}
+              disabled={managedWorkspace.switchingGroup}
+            />
+            <IconButton
+              text={managedWorkspace.switchingGroup ? "切换中" : "切换"}
+              shadow
+              onClick={() => setShowGroupSelector(true)}
+              disabled={managedWorkspace.switchingGroup}
+            />
+          </div>
+          {managedWorkspace.error && (
+            <div className={styles["managed-inline-error"]}>
+              {managedWorkspace.error}
+            </div>
+          )}
+          {showGroupSelector && (
+            <Selector
+              defaultSelectedValue={
+                currentManagedGroup ? String(currentManagedGroup.id) : undefined
+              }
+              items={managedGroups.map((group) => ({
+                title: group.name,
+                subTitle: `${group.platform || "分组"} · 切换后读取图片模型`,
+                value: String(group.id),
+              }))}
+              onClose={() => setShowGroupSelector(false)}
+              onSelection={(selection) => {
+                if (selection.length === 0) return;
+                void switchManagedImageGroup(Number(selection[0]));
+              }}
+            />
+          )}
+        </ControlParamItem>
+      )}
       {managedMode && (
         <ControlParamItem title="账户余额">
           <div className={styles["managed-balance"]}>{managedBalanceLabel}</div>
@@ -727,8 +811,18 @@ export function SdPanel() {
             <span>加载中...</span>
           )}
           {managedMode && sdStore.sub2apiImageStudioModelsError && (
-            <span>{sdStore.sub2apiImageStudioModelsError}</span>
+            <span className={styles["managed-inline-error"]}>
+              {sdStore.sub2apiImageStudioModelsError}
+            </span>
           )}
+          {managedMode &&
+            !sdStore.sub2apiImageStudioModelsLoading &&
+            !sdStore.sub2apiImageStudioModelsError &&
+            modelOptions.length === 0 && (
+              <span className={styles["managed-inline-error"]}>
+                当前分组暂无图片模型
+              </span>
+            )}
         </div>
       </ControlParamItem>
       {managedMode && (

@@ -6,11 +6,13 @@ import {
   managedWorkspaceModelsToLLMModels,
   resolveManagedWorkspaceServiceProvider,
   resolveManagedWorkspaceURL,
+  useManagedWorkspaceStore,
 } from "../app/store/managed-workspace";
 import { useChatStore } from "../app/store/chat";
 import { useAppConfig } from "../app/store/config";
 import { applyManagedWorkspaceModelsToStores } from "../app/utils/managed-workspace-models";
 import { collectVisibleModelsForWorkspace } from "../app/utils/hooks";
+import { jest } from "@jest/globals";
 
 describe("Sub2API managed workspace model helpers", () => {
   test("selects the active group and converts its models", () => {
@@ -83,7 +85,7 @@ describe("Sub2API managed workspace model helpers", () => {
     ]);
   });
 
-  test("falls back to model-name provider inference for unknown group platforms", () => {
+  test("uses unknown group platforms as custom providers instead of guessing from model names", () => {
     const models = managedWorkspaceModelsToLLMModels(
       [
         { id: "claude-fable-5", name: "claude-fable-5" },
@@ -93,9 +95,22 @@ describe("Sub2API managed workspace model helpers", () => {
     );
 
     expect(models.map((model) => model.provider.providerName)).toEqual([
-      "Anthropic",
-      "XAI",
+      "Krio",
+      "Krio",
     ]);
+  });
+
+  test("labels unknown group platforms without pretending they are OpenAI", () => {
+    const models = managedWorkspaceModelsToLLMModels(
+      [{ id: "krio-chat-fast", name: "krio-chat-fast" }],
+      "krio",
+    );
+
+    expect(models[0].provider).toMatchObject({
+      id: "krio",
+      providerName: "Krio",
+      providerType: "krio",
+    });
   });
 
   test("ignores a default model that is not in the selected group", () => {
@@ -163,6 +178,12 @@ describe("Sub2API managed workspace model helpers", () => {
     expect(
       resolveManagedWorkspaceURL(
         "https://jisuodeng.zeabur.app",
+        "https://www.jisudeng.com/purchase",
+      ),
+    ).toBe("https://www.jisudeng.com/purchase");
+    expect(
+      resolveManagedWorkspaceURL(
+        "https://nexta.zeabur.app",
         "https://www.jisudeng.com/purchase",
       ),
     ).toBe("https://www.jisudeng.com/purchase");
@@ -268,6 +289,121 @@ describe("Sub2API managed workspace model helpers", () => {
       providerName: "Anthropic",
     });
   });
+
+  test("does not let a stale bootstrap response overwrite a switched group", async () => {
+    const originalFetch = globalThis.fetch;
+    let resolveBootstrap: (value: any) => void = () => {};
+    const grokGroup = {
+      managed_api_key: {
+        id: 3,
+        name: "Managed Grok",
+        group_id: 8,
+        group_name: "Grok only",
+        group_platform: "grok",
+      },
+      models: {
+        source: "/v1/models",
+        selected_group_id: 8,
+        default_model: "grok-4-fast",
+        groups: [
+          {
+            id: 8,
+            name: "Grok only",
+            platform: "grok",
+            models: [{ id: "grok-4-fast", name: "grok-4-fast" }],
+          },
+        ],
+      },
+    };
+
+    useManagedWorkspaceStore.getState().reset();
+    useManagedWorkspaceStore.setState({
+      bootstrap: {
+        managed_api_key: {
+          id: 3,
+          name: "Managed OpenAI",
+          group_id: 7,
+          group_name: "OpenAI main",
+          group_platform: "openai",
+        },
+        models: {
+          source: "/v1/models",
+          selected_group_id: 7,
+          default_model: "gpt-5.4-mini",
+          groups: [
+            {
+              id: 7,
+              name: "OpenAI main",
+              platform: "openai",
+              models: [{ id: "gpt-5.4-mini", name: "gpt-5.4-mini" }],
+            },
+          ],
+        },
+      } as any,
+      loading: false,
+      switchingGroup: false,
+      error: "",
+    } as any);
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn((url: string, init?: RequestInit) => {
+        if (url.includes("/api/nextchat/bootstrap")) {
+          return new Promise((resolve) => {
+            resolveBootstrap = resolve;
+          });
+        }
+        if (url.includes("/api/nextchat/group") && init?.method === "POST") {
+          return Promise.resolve(makeManagedWorkspaceResponse(grokGroup));
+        }
+        return Promise.reject(new Error(`unexpected request ${url}`));
+      }),
+      configurable: true,
+    });
+
+    const staleBootstrap = useManagedWorkspaceStore.getState().fetchBootstrap();
+    const switched = await useManagedWorkspaceStore.getState().switchGroup(8);
+    resolveBootstrap(
+      makeManagedWorkspaceResponse({
+        managed_api_key: {
+          id: 3,
+          name: "Managed OpenAI",
+          group_id: 7,
+          group_name: "OpenAI main",
+          group_platform: "openai",
+        },
+        models: {
+          source: "/v1/models",
+          selected_group_id: 7,
+          default_model: "gpt-5.4-mini",
+          groups: [
+            {
+              id: 7,
+              name: "OpenAI main",
+              platform: "openai",
+              models: [{ id: "gpt-5.4-mini", name: "gpt-5.4-mini" }],
+            },
+          ],
+        },
+      }),
+    );
+    await staleBootstrap;
+
+    const state = useManagedWorkspaceStore.getState();
+    expect(switched?.models.selected_group_id).toBe(8);
+    expect(state.bootstrap?.models.selected_group_id).toBe(8);
+    expect(
+      getManagedWorkspaceModelsForCurrentGroup(state.bootstrap).map(
+        (model) => model.name,
+      ),
+    ).toEqual(["grok-4-fast"]);
+    expect(state.loading).toBe(false);
+    expect(state.switchingGroup).toBe(false);
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+  });
 });
 
 function makeChatSession(id: string, model: string, providerName: string) {
@@ -289,4 +425,14 @@ function makeChatSession(id: string, model: string, providerName: string) {
       syncGlobalConfig: true,
     },
   } as any;
+}
+
+function makeManagedWorkspaceResponse(data: any) {
+  return {
+    ok: true,
+    json: async () => ({
+      code: 0,
+      data,
+    }),
+  };
 }

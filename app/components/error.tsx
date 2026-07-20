@@ -9,6 +9,7 @@ import Locale from "../locales";
 import { showConfirm } from "./ui-lib";
 import { useSyncStore } from "../store/sync";
 import { useChatStore } from "../store/chat";
+import { getClientConfig } from "../config/client";
 
 interface IErrorBoundaryState {
   hasError: boolean;
@@ -37,26 +38,31 @@ export class ErrorBoundary extends React.Component<any, IErrorBoundaryState> {
 
   render() {
     if (this.state.hasError) {
+      const managedMode = !!getClientConfig()?.sub2apiManagedMode;
       // Render error message
       return (
         <div className="error">
-          <h2>Oops, something went wrong!</h2>
+          <h2>
+            {managedMode ? "工作台发生错误" : "Oops, something went wrong!"}
+          </h2>
           <pre>
             <code>{this.state.error?.toString()}</code>
             <code>{this.state.info?.componentStack}</code>
           </pre>
 
           <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <a href={ISSUE_URL} className="report">
-              <IconButton
-                text="Report This Error"
-                icon={<GithubIcon />}
-                bordered
-              />
-            </a>
+            {!managedMode && (
+              <a href={ISSUE_URL} className="report">
+                <IconButton
+                  text="Report This Error"
+                  icon={<GithubIcon />}
+                  bordered
+                />
+              </a>
+            )}
             <IconButton
               icon={<ResetIcon />}
-              text="Clear All Data"
+              text={managedMode ? "清理本地数据" : "Clear All Data"}
               onClick={async () => {
                 if (await showConfirm(Locale.Settings.Danger.Reset.Confirm)) {
                   this.clearAndSaveData();
