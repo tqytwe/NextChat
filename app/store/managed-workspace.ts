@@ -6,6 +6,7 @@ import { withBasePath } from "../utils/api-path";
 const JISUDENG_ORIGIN = "https://www.jisudeng.com";
 export const JISUDENG_DASHBOARD_URL = `${JISUDENG_ORIGIN}/dashboard`;
 export const JISUDENG_RECHARGE_URL = `${JISUDENG_ORIGIN}/purchase`;
+const JISUDENG_LEGACY_HOSTS = new Set(["jisuodeng.zeabur.app"]);
 
 type Sub2APIEnvelope<T> = {
   code?: number;
@@ -220,6 +221,12 @@ export function resolveManagedWorkspaceURL(
 
   try {
     const url = new URL(raw, JISUDENG_ORIGIN);
+    if (
+      fallbackURL.origin === JISUDENG_ORIGIN &&
+      JISUDENG_LEGACY_HOSTS.has(url.hostname)
+    ) {
+      return fallbackURL.toString();
+    }
     const normalizedPath = url.pathname.replace(/\/+$/g, "") || "/";
     if (
       normalizedPath === "/" ||

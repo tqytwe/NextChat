@@ -103,5 +103,11 @@ describe("Sub2API managed workspace model helpers", () => {
         "https://www.jisudeng.com/dashboard",
       ),
     ).toBe("https://console.example.com/dashboard");
+    expect(
+      resolveManagedWorkspaceURL(
+        "https://jisuodeng.zeabur.app",
+        "https://www.jisudeng.com/purchase",
+      ),
+    ).toBe("https://www.jisudeng.com/purchase");
   });
 });
