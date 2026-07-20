@@ -1,9 +1,20 @@
 import md5 from "spark-md5";
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSideConfig } from "@/app/config/server";
+import { isSub2APIManagedMode } from "@/app/api/sub2api-managed";
 
 async function handle(req: NextRequest, res: NextResponse) {
   const serverConfig = getServerSideConfig();
+  if (isSub2APIManagedMode(serverConfig)) {
+    return NextResponse.json(
+      {
+        error: true,
+        msg: "Artifacts sharing is disabled in Sub2API managed mode",
+      },
+      { status: 403 },
+    );
+  }
+
   const storeUrl = () =>
     `https://api.cloudflare.com/client/v4/accounts/${serverConfig.cloudflareAccountId}/storage/kv/namespaces/${serverConfig.cloudflareKVNamespaceId}`;
   const storeHeaders = () => ({

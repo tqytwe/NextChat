@@ -8,11 +8,18 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import { GoogleTagManager, GoogleAnalytics } from "@next/third-parties/google";
 import { getServerSideConfig } from "./config/server";
 
+const managedMode = ["1", "true", "yes", "on"].includes(
+  (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
+);
+const appTitle = managedMode ? "极速蹬 AI 工作台" : "NextChat";
+
 export const metadata: Metadata = {
-  title: "NextChat",
-  description: "Your personal ChatGPT Chat Bot.",
+  title: appTitle,
+  description: managedMode
+    ? "极速蹬 Sub2API 托管 AI 工作台。"
+    : "Your personal ChatGPT Chat Bot.",
   appleWebApp: {
-    title: "NextChat",
+    title: appTitle,
     statusBarStyle: "default",
   },
 };

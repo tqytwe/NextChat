@@ -4,6 +4,10 @@ import { prettyObject } from "@/app/utils/format";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/app/api/auth";
 import { getHeader } from "@/app/utils/tencent";
+import {
+  getManagedModeApiBlockMessage,
+  isSub2APIManagedMode,
+} from "@/app/api/sub2api-managed";
 
 const serverConfig = getServerSideConfig();
 
@@ -12,6 +16,16 @@ async function handle(
   { params }: { params: { path: string[] } },
 ) {
   console.log("[Tencent Route] params ", params);
+
+  if (isSub2APIManagedMode(getServerSideConfig())) {
+    return NextResponse.json(
+      {
+        error: true,
+        msg: getManagedModeApiBlockMessage("/api/tencent"),
+      },
+      { status: 403 },
+    );
+  }
 
   if (req.method === "OPTIONS") {
     return NextResponse.json({ body: "OK" }, { status: 200 });

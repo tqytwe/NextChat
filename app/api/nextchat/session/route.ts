@@ -2,6 +2,7 @@ import { getServerSideConfig } from "@/app/config/server";
 import {
   SUB2API_MANAGED_SESSION_COOKIE,
   getSub2APIManagedCookiePath,
+  getManagedSessionFromRequest,
   isSub2APIManagedMode,
   sealManagedSession,
 } from "@/app/api/sub2api-managed";
@@ -121,9 +122,55 @@ export async function POST(req: NextRequest) {
   return res;
 }
 
+export async function GET(req: NextRequest) {
+  const config = getServerSideConfig();
+  if (!isSub2APIManagedMode(config)) {
+    return NextResponse.json(
+      { error: true, msg: "Sub2API managed mode is disabled" },
+      { status: 404 },
+    );
+  }
+
+  const session = await getManagedSessionFromRequest(req);
+  if (!session) {
+    return NextResponse.json(
+      { ok: true, authenticated: false },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  }
+
+  return NextResponse.json(
+    {
+      ok: true,
+      authenticated: true,
+      user_id: session.userId,
+      api_key_id: session.apiKeyId,
+      expires_at: session.expiresAt,
+    },
+    {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    },
+  );
+}
+
 export async function DELETE() {
   const config = getServerSideConfig();
-  const res = NextResponse.json({ ok: true });
+  const res = NextResponse.json(
+    { ok: true },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    },
+  );
   res.cookies.set({
     name: SUB2API_MANAGED_SESSION_COOKIE,
     value: "",

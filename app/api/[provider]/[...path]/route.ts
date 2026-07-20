@@ -16,6 +16,13 @@ import { handle as xaiHandler } from "../../xai";
 import { handle as chatglmHandler } from "../../glm";
 import { handle as proxyHandler } from "../../proxy";
 import { handle as ai302Handler } from "../../302ai";
+import {
+  canUseProviderApiInManagedMode,
+  getManagedModeApiBlockMessage,
+  isSub2APIManagedMode,
+} from "../../sub2api-managed";
+import { getServerSideConfig } from "@/app/config/server";
+import { NextResponse } from "next/server";
 
 async function handle(
   req: NextRequest,
@@ -23,6 +30,19 @@ async function handle(
 ) {
   const apiPath = `/api/${params.provider}`;
   console.log(`[${params.provider} Route] params `, params);
+  if (
+    isSub2APIManagedMode(getServerSideConfig()) &&
+    !canUseProviderApiInManagedMode(apiPath)
+  ) {
+    return NextResponse.json(
+      {
+        error: true,
+        msg: getManagedModeApiBlockMessage(apiPath),
+      },
+      { status: 403 },
+    );
+  }
+
   switch (apiPath) {
     case ApiPath.Azure:
       return azureHandler(req, { params });

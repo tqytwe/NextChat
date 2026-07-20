@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { STORAGE_KEY, internalAllowedWebDavEndpoints } from "../../../constant";
 import { getServerSideConfig } from "@/app/config/server";
+import { isSub2APIManagedMode } from "@/app/api/sub2api-managed";
 
 const config = getServerSideConfig();
 
@@ -21,6 +22,13 @@ async function handle(
   req: NextRequest,
   { params }: { params: { path: string[] } },
 ) {
+  if (isSub2APIManagedMode(config)) {
+    return NextResponse.json(
+      { error: true, msg: "WebDAV sync is disabled in Sub2API managed mode" },
+      { status: 403 },
+    );
+  }
+
   if (req.method === "OPTIONS") {
     return NextResponse.json({ body: "OK" }, { status: 200 });
   }

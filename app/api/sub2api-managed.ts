@@ -1,5 +1,5 @@
 import { getServerSideConfig } from "../config/server";
-import { ModelProvider } from "../constant";
+import { ApiPath, ModelProvider } from "../constant";
 import { NextRequest } from "next/server";
 
 export const SUB2API_MANAGED_SESSION_COOKIE = "nextchat_sub2api_session";
@@ -35,6 +35,14 @@ export function canHandleManagedProvider(
     modelProvider === ModelProvider.GPT &&
     req.nextUrl.pathname.includes("/api/openai/")
   );
+}
+
+export function canUseProviderApiInManagedMode(apiPath: string): boolean {
+  return apiPath === ApiPath.OpenAI;
+}
+
+export function getManagedModeApiBlockMessage(apiPath: string): string {
+  return `Sub2API managed mode does not allow ${apiPath}`;
 }
 
 export async function sealManagedSession(

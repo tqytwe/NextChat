@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSideConfig } from "@/app/config/server";
+import { isSub2APIManagedMode } from "@/app/api/sub2api-managed";
 
 async function handle(
   req: NextRequest,
   { params }: { params: { action: string; key: string[] } },
 ) {
+  if (isSub2APIManagedMode(getServerSideConfig())) {
+    return NextResponse.json(
+      { error: true, msg: "Upstash sync is disabled in Sub2API managed mode" },
+      { status: 403 },
+    );
+  }
+
   const requestUrl = new URL(req.url);
   const endpoint = requestUrl.searchParams.get("endpoint");
 

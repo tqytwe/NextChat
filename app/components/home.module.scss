@@ -105,6 +105,67 @@
   display: none;
 }
 
+.managed-lock-page {
+  min-height: var(--full-height);
+  width: 100vw;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 32px 20px;
+  color: var(--black);
+  background: var(--white);
+  text-align: center;
+}
+
+.managed-lock-logo {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.managed-lock-title {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.managed-lock-subtitle {
+  font-size: 15px;
+  color: var(--black);
+  opacity: 0.72;
+}
+
+.managed-lock-error {
+  max-width: min(520px, 100%);
+  padding: 10px 12px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  color: #9f1239;
+  background: #fff1f2;
+  word-break: break-word;
+}
+
+.managed-lock-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.managed-lock-primary {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 18px;
+  color: var(--white);
+  background: var(--primary);
+  cursor: pointer;
+  font-size: 14px;
+}
+
 @media only screen and (max-width: 600px) {
   .container {
     min-height: unset;

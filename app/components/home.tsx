@@ -32,6 +32,8 @@ import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
 import { withBasePath } from "../utils/api-path";
 
+const JISUDENG_RETURN_URL = "https://www.jisudeng.com";
+
 export function Loading(props: { noLogo?: boolean }) {
   return (
     <div className={clsx("no-dark", styles["loading-content"])}>
@@ -236,82 +238,153 @@ export function useLoadData(enabled = true) {
   }, [enabled]);
 }
 
-function useSub2APIManagedLaunch() {
+type ManagedGateStatus =
+  | "authenticated"
+  | "checking"
+  | "launching"
+  | "locked"
+  | "error";
+
+function readLaunchToken() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search)
+    .get("launch_token")
+    ?.trim();
+}
+
+function removeLaunchTokenFromLocation() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("launch_token");
+  window.history.replaceState(
+    null,
+    "",
+    `${url.pathname}${url.search}${url.hash}`,
+  );
+}
+
+function useSub2APIManagedGate() {
   const clientConfig = useMemo(() => getClientConfig(), []);
-  const [launching, setLaunching] = useState(() => {
+  const managedMode = !!clientConfig?.sub2apiManagedMode;
+  const [status, setStatus] = useState<ManagedGateStatus>(() => {
     if (!clientConfig?.sub2apiManagedMode || typeof window === "undefined") {
-      return false;
+      return "authenticated";
     }
-    return new URLSearchParams(window.location.search).has("launch_token");
+    return readLaunchToken() ? "launching" : "checking";
   });
-  const [launchError, setLaunchError] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!clientConfig?.sub2apiManagedMode || typeof window === "undefined") {
+    if (!managedMode || typeof window === "undefined") {
       return;
     }
 
-    const params = new URLSearchParams(window.location.search);
-    const launchToken = params.get("launch_token")?.trim();
-    if (!launchToken) return;
-
     const controller = new AbortController();
-    setLaunching(true);
-    setLaunchError("");
 
-    fetch(withBasePath("/api/nextchat/session"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ launch_token: launchToken }),
-      credentials: "same-origin",
-      signal: controller.signal,
-    })
-      .then(async (res) => {
+    const start = async () => {
+      const launchToken = readLaunchToken();
+      setError("");
+      setStatus(launchToken ? "launching" : "checking");
+
+      try {
+        if (launchToken) {
+          const res = await fetch(withBasePath("/api/nextchat/session"), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify({ launch_token: launchToken }),
+            credentials: "same-origin",
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.msg || "Failed to start managed session");
+          }
+          removeLaunchTokenFromLocation();
+          setStatus("authenticated");
+          return;
+        }
+
+        const res = await fetch(withBasePath("/api/nextchat/session"), {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+        });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.msg || "Failed to start managed session");
+          throw new Error(body.msg || "Failed to check managed session");
         }
-        return res.json();
-      })
-      .then(() => {
-        const url = new URL(window.location.href);
-        url.searchParams.delete("launch_token");
-        window.history.replaceState(
-          null,
-          "",
-          `${url.pathname}${url.search}${url.hash}`,
-        );
-      })
-      .catch((error) => {
+        const body = (await res.json()) as { authenticated?: boolean };
+        setStatus(body.authenticated ? "authenticated" : "locked");
+      } catch (error: any) {
         if (!controller.signal.aborted) {
-          console.error("[Sub2API Managed] launch failed", error);
-          setLaunchError(error.message || "Failed to start managed session");
+          console.error("[Sub2API Managed] session gate failed", error);
+          setError(error.message || "Failed to start managed session");
+          setStatus("error");
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLaunching(false);
-        }
-      });
+      }
+    };
+
+    start();
 
     return () => controller.abort();
-  }, [clientConfig?.sub2apiManagedMode]);
+  }, [managedMode]);
 
-  return { launching, launchError };
+  return {
+    managedMode,
+    authenticated: !managedMode || status === "authenticated",
+    pending: managedMode && (status === "checking" || status === "launching"),
+    locked: managedMode && status === "locked",
+    error,
+  };
+}
+
+function ManagedLockedPage(props: { error?: string }) {
+  return (
+    <div className={clsx("no-dark", styles["managed-lock-page"])}>
+      <div className={styles["managed-lock-logo"]}>
+        <BotIcon />
+      </div>
+      <div className={styles["managed-lock-title"]}>极速蹬 AI 工作台</div>
+      <div className={styles["managed-lock-subtitle"]}>
+        请从极速蹬控制台进入
+      </div>
+      {props.error ? (
+        <div className={styles["managed-lock-error"]}>{props.error}</div>
+      ) : null}
+      <div className={styles["managed-lock-actions"]}>
+        <button
+          className={styles["managed-lock-primary"]}
+          onClick={() => {
+            window.location.href = JISUDENG_RETURN_URL;
+          }}
+        >
+          返回极速蹬
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function Home() {
   useSwitchTheme();
-  const launchState = useSub2APIManagedLaunch();
-  useLoadData(!launchState.launching && !launchState.launchError);
+  const clientConfig = useMemo(() => getClientConfig(), []);
+  const managedGate = useSub2APIManagedGate();
+  const hasHydrated = useHasHydrated();
+  useLoadData(managedGate.authenticated);
   useHtmlLang();
 
   useEffect(() => {
+    if (!managedGate.authenticated) return;
     console.log("[Config] got config from build time", getClientConfig());
     useAccessStore.getState().fetch();
+    if (clientConfig?.sub2apiManagedMode) return;
 
     const initMcp = async () => {
       try {
@@ -326,19 +399,14 @@ export function Home() {
       }
     };
     initMcp();
-  }, []);
+  }, [clientConfig?.sub2apiManagedMode, managedGate.authenticated]);
 
-  if (!useHasHydrated() || launchState.launching) {
+  if (!hasHydrated || managedGate.pending) {
     return <Loading />;
   }
 
-  if (launchState.launchError) {
-    return (
-      <div className={clsx("no-dark", styles["loading-content"])}>
-        <BotIcon />
-        <div>{launchState.launchError}</div>
-      </div>
-    );
+  if (managedGate.locked || managedGate.error) {
+    return <ManagedLockedPage error={managedGate.error} />;
   }
 
   return (

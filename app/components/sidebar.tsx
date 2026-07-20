@@ -12,6 +12,8 @@ import MaskIcon from "../icons/mask.svg";
 import McpIcon from "../icons/mcp.svg";
 import DragIcon from "../icons/drag.svg";
 import DiscoveryIcon from "../icons/discovery.svg";
+import ReturnIcon from "../icons/return.svg";
+import PowerIcon from "../icons/power.svg";
 
 import Locale from "../locales";
 
@@ -32,6 +34,10 @@ import dynamic from "next/dynamic";
 import { Selector, showConfirm } from "./ui-lib";
 import clsx from "clsx";
 import { isMcpEnabled } from "../mcp/actions";
+import { getClientConfig } from "../config/client";
+import { withBasePath } from "../utils/api-path";
+
+const JISUDENG_RETURN_URL = "https://www.jisudeng.com";
 
 const DISCOVERY = [
   { name: Locale.Plugin.Name, path: Path.Plugins },
@@ -232,8 +238,10 @@ export function SideBar(props: { className?: string }) {
   const config = useAppConfig();
   const chatStore = useChatStore();
   const [mcpEnabled, setMcpEnabled] = useState(false);
+  const managedMode = !!getClientConfig()?.sub2apiManagedMode;
 
   useEffect(() => {
+    if (managedMode) return;
     // 检查 MCP 是否启用
     const checkMcpStatus = async () => {
       const enabled = await isMcpEnabled();
@@ -241,7 +249,27 @@ export function SideBar(props: { className?: string }) {
       console.log("[SideBar] MCP enabled:", enabled);
     };
     checkMcpStatus();
-  }, []);
+  }, [managedMode]);
+
+  const newChat = () => {
+    if (config.dontShowMaskSplashScreen || managedMode) {
+      chatStore.newSession();
+      navigate(Path.Chat);
+    } else {
+      navigate(Path.NewChat);
+    }
+  };
+
+  const logoutManagedWorkspace = async () => {
+    try {
+      await fetch(withBasePath("/api/nextchat/session"), {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+    } finally {
+      window.location.href = withBasePath("/");
+    }
+  };
 
   return (
     <SideBarContainer
@@ -250,44 +278,48 @@ export function SideBar(props: { className?: string }) {
       {...props}
     >
       <SideBarHeader
-        title="NextChat"
-        subTitle="Build your own AI assistant."
+        title={managedMode ? "极速蹬 AI 工作台" : "NextChat"}
+        subTitle={
+          managedMode ? "Sub2API 托管前台" : "Build your own AI assistant."
+        }
         logo={<ChatGptIcon />}
         shouldNarrow={shouldNarrow}
       >
-        <div className={styles["sidebar-header-bar"]}>
-          <IconButton
-            icon={<MaskIcon />}
-            text={shouldNarrow ? undefined : Locale.Mask.Name}
-            className={styles["sidebar-bar-button"]}
-            onClick={() => {
-              if (config.dontShowMaskSplashScreen !== true) {
-                navigate(Path.NewChat, { state: { fromHome: true } });
-              } else {
-                navigate(Path.Masks, { state: { fromHome: true } });
-              }
-            }}
-            shadow
-          />
-          {mcpEnabled && (
+        {!managedMode && (
+          <div className={styles["sidebar-header-bar"]}>
             <IconButton
-              icon={<McpIcon />}
-              text={shouldNarrow ? undefined : Locale.Mcp.Name}
+              icon={<MaskIcon />}
+              text={shouldNarrow ? undefined : Locale.Mask.Name}
               className={styles["sidebar-bar-button"]}
               onClick={() => {
-                navigate(Path.McpMarket, { state: { fromHome: true } });
+                if (config.dontShowMaskSplashScreen !== true) {
+                  navigate(Path.NewChat, { state: { fromHome: true } });
+                } else {
+                  navigate(Path.Masks, { state: { fromHome: true } });
+                }
               }}
               shadow
             />
-          )}
-          <IconButton
-            icon={<DiscoveryIcon />}
-            text={shouldNarrow ? undefined : Locale.Discovery.Name}
-            className={styles["sidebar-bar-button"]}
-            onClick={() => setshowDiscoverySelector(true)}
-            shadow
-          />
-        </div>
+            {mcpEnabled && (
+              <IconButton
+                icon={<McpIcon />}
+                text={shouldNarrow ? undefined : Locale.Mcp.Name}
+                className={styles["sidebar-bar-button"]}
+                onClick={() => {
+                  navigate(Path.McpMarket, { state: { fromHome: true } });
+                }}
+                shadow
+              />
+            )}
+            <IconButton
+              icon={<DiscoveryIcon />}
+              text={shouldNarrow ? undefined : Locale.Discovery.Name}
+              className={styles["sidebar-bar-button"]}
+              onClick={() => setshowDiscoverySelector(true)}
+              shadow
+            />
+          </div>
+        )}
         {showDiscoverySelector && (
           <Selector
             items={[
@@ -336,29 +368,46 @@ export function SideBar(props: { className?: string }) {
                 />
               </Link>
             </div>
-            <div className={styles["sidebar-action"]}>
-              <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
-                <IconButton
-                  aria={Locale.Export.MessageFromChatGPT}
-                  icon={<GithubIcon />}
-                  shadow
-                />
-              </a>
-            </div>
+            {managedMode ? (
+              <>
+                <div className={styles["sidebar-action"]}>
+                  <a href={JISUDENG_RETURN_URL}>
+                    <IconButton
+                      aria="返回极速蹬"
+                      icon={<ReturnIcon />}
+                      text={shouldNarrow ? undefined : "返回"}
+                      shadow
+                    />
+                  </a>
+                </div>
+                <div className={styles["sidebar-action"]}>
+                  <IconButton
+                    aria="退出工作台"
+                    icon={<PowerIcon />}
+                    text={shouldNarrow ? undefined : "退出"}
+                    onClick={logoutManagedWorkspace}
+                    shadow
+                  />
+                </div>
+              </>
+            ) : (
+              <div className={styles["sidebar-action"]}>
+                <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+                  <IconButton
+                    aria={Locale.Export.MessageFromChatGPT}
+                    icon={<GithubIcon />}
+                    shadow
+                  />
+                </a>
+              </div>
+            )}
           </>
         }
         secondaryAction={
           <IconButton
             icon={<AddIcon />}
             text={shouldNarrow ? undefined : Locale.Home.NewChat}
-            onClick={() => {
-              if (config.dontShowMaskSplashScreen) {
-                chatStore.newSession();
-                navigate(Path.Chat);
-              } else {
-                navigate(Path.NewChat);
-              }
-            }}
+            onClick={newChat}
             shadow
           />
         }
