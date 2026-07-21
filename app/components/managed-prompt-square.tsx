@@ -21,15 +21,17 @@ import {
   useManagedImagePrompt as recordManagedImagePromptUse,
   type ManagedImagePrompt,
   type ManagedImagePromptPage,
-  type ManagedImagePromptUseResult,
   type ManagedImageTemplate,
   type ManagedPrompt,
 } from "../utils/managed-prompts";
 import {
+  prepareManagedImagePromptUse,
+  type ManagedImagePromptCompatibilityFailureReason,
+} from "../utils/managed-image-prompt-compat";
+import {
   canSub2APIImageStudioUseReferences,
   inferSub2APIImageStudioAspectTier,
   toSub2APIImageStudioPanelModel,
-  type Sub2APIImageStudioModel,
   useSdStore,
 } from "../store/sd";
 
@@ -246,39 +248,33 @@ export function ManagedPromptSquare() {
     }
 
     try {
-      const result = await recordManagedImagePromptUse(prompt.id);
-      const model = selectManagedImagePromptModel(
-        result,
-        useSdStore.getState().sub2apiImageStudioModels,
-        useSdStore.getState().currentModel?.value,
+      const studioState = useSdStore.getState();
+      const prepared = await prepareManagedImagePromptUse(
+        prompt,
+        studioState.sub2apiImageStudioModels ?? [],
+        studioState.currentModel?.value,
+        canSub2APIImageStudioUseReferences,
+        recordManagedImagePromptUse,
       );
-      if (!model) {
-        showToast("当前分组没有兼容的图片模型");
-        return false;
-      }
-      if (
-        requiresPromptReference(result) &&
-        !canSub2APIImageStudioUseReferences(model)
-      ) {
-        showToast("当前分组没有支持引用图的兼容模型");
+      if (!prepared.ok) {
+        showToast(managedImagePromptCompatibilityMessage(prepared.reason));
         return false;
       }
       const nextParams: any = {
         ...(useSdStore.getState().currentParams ?? {}),
         template_id: "free-create",
         prompt: renderManagedImagePromptWithVariables(
-          result.promptText,
+          prepared.result.promptText,
           variableValues,
         ),
       };
-      const size = selectManagedImagePromptSize(result, model);
-      if (size) {
-        const inferred = inferSub2APIImageStudioAspectTier(size);
-        nextParams.size = size;
+      if (prepared.size) {
+        const inferred = inferSub2APIImageStudioAspectTier(prepared.size);
+        nextParams.size = prepared.size;
         nextParams.aspect = inferred.aspect;
         nextParams.resolution = inferred.tier;
       }
-      sdStore.setCurrentModel(toSub2APIImageStudioPanelModel(model));
+      sdStore.setCurrentModel(toSub2APIImageStudioPanelModel(prepared.model));
       sdStore.setCurrentParams(nextParams);
       navigate(Path.Sd, {
         state: {
@@ -709,39 +705,15 @@ function updateManagedImagePromptFavorite(
   };
 }
 
-function selectManagedImagePromptModel(
-  prompt: ManagedImagePromptUseResult,
-  models: Sub2APIImageStudioModel[],
-  currentModelID?: string,
+function managedImagePromptCompatibilityMessage(
+  reason: ManagedImagePromptCompatibilityFailureReason,
 ) {
-  const recommended = prompt.models ?? [];
-  if (recommended.length > 0) {
-    const match = models.find((model) => recommended.includes(model.id));
-    if (match) return match;
+  switch (reason) {
+    case "missing-reference-model":
+      return "当前分组没有支持引用图的兼容模型";
+    case "missing-size":
+      return "当前分组没有支持该提示词尺寸的兼容模型";
+    default:
+      return "当前分组没有兼容的图片模型";
   }
-  if (requiresPromptReference(prompt)) {
-    return models.find((model) => canSub2APIImageStudioUseReferences(model));
-  }
-  return models.find((model) => model.id === currentModelID) || models[0];
-}
-
-function selectManagedImagePromptSize(
-  prompt: ManagedImagePromptUseResult,
-  model: Sub2APIImageStudioModel,
-) {
-  const sizes = prompt.sizes ?? [];
-  if (sizes.length === 0) return undefined;
-  const supported = model.supported_sizes ?? [];
-  return sizes.find(
-    (size) => supported.length === 0 || supported.includes(size),
-  );
-}
-
-function requiresPromptReference(
-  prompt: ManagedImagePromptUseResult | ManagedImagePrompt,
-) {
-  return (
-    prompt.requiresReference ||
-    String(prompt.referenceRequirement || "").toLowerCase() === "required"
-  );
 }
