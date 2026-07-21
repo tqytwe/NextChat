@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { LLMModel } from "../client/api";
 import { ServiceProvider } from "../constant";
 import { withBasePath } from "../utils/api-path";
+import type { SupportContactConfig } from "../utils/support-contact";
 
 const JISUDENG_ORIGIN = "https://www.jisudeng.com";
 export const JISUDENG_DASHBOARD_URL = `${JISUDENG_ORIGIN}/dashboard`;
@@ -83,6 +84,7 @@ export type ManagedWorkspaceBootstrap = {
     image_reference_hours?: number;
     server_chat_log?: boolean;
   };
+  support_contact?: SupportContactConfig;
 };
 
 type ManagedWorkspaceState = {

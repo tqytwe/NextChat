@@ -10,6 +10,8 @@ import { showConfirm } from "./ui-lib";
 import { useSyncStore } from "../store/sync";
 import { useChatStore } from "../store/chat";
 import { getClientConfig } from "../config/client";
+import { useManagedWorkspaceStore } from "../store/managed-workspace";
+import { ManagedSupportContact } from "./managed-support-contact";
 
 interface IErrorBoundaryState {
   hasError: boolean;
@@ -39,6 +41,9 @@ export class ErrorBoundary extends React.Component<any, IErrorBoundaryState> {
   render() {
     if (this.state.hasError) {
       const managedMode = !!getClientConfig()?.sub2apiManagedMode;
+      const supportContact = managedMode
+        ? useManagedWorkspaceStore.getState().bootstrap?.support_contact
+        : undefined;
       // Render error message
       return (
         <div className="error">
@@ -71,6 +76,13 @@ export class ErrorBoundary extends React.Component<any, IErrorBoundaryState> {
               bordered
             />
           </div>
+          {managedMode ? (
+            <ManagedSupportContact
+              config={supportContact}
+              compact
+              className="error-support-contact"
+            />
+          ) : null}
         </div>
       );
     }

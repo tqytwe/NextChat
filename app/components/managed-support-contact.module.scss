@@ -1,0 +1,275 @@
+.panel {
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--black);
+}
+
+.header {
+  margin-bottom: 12px;
+
+  p {
+    margin: 8px 0 0;
+    color: var(--black);
+    opacity: 0.68;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  h3 {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.3;
+  }
+}
+
+.titleIcon {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--hover-color);
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.qrGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.qrCard {
+  min-width: 0;
+  padding: 10px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: var(--white);
+}
+
+.qrImage {
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: var(--border-in-light);
+  border-radius: 7px;
+  background: var(--second);
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+}
+
+.contactMeta {
+  min-width: 0;
+  margin-top: 9px;
+
+  code {
+    display: block;
+    margin-top: 4px;
+    overflow: hidden;
+    color: var(--black);
+    opacity: 0.72;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  p {
+    margin: 4px 0 0;
+    color: var(--black);
+    opacity: 0.62;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+}
+
+.contactNameLine {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+
+  span {
+    flex: 0 0 auto;
+    border-radius: 6px;
+    background: var(--hover-color);
+    padding: 2px 5px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+
+  button {
+    min-width: 0;
+    flex: 1;
+    display: inline-flex;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: var(--border-in-light);
+    border-radius: 7px;
+    background: var(--white);
+    color: var(--black);
+    cursor: pointer;
+    font-size: 12px;
+
+    svg {
+      width: 13px;
+      height: 13px;
+    }
+  }
+}
+
+.more {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.moreWithPrimary {
+  margin-top: 12px;
+}
+
+.moreTitle {
+  color: var(--black);
+  opacity: 0.5;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.contactRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  padding: 9px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: var(--white);
+}
+
+.rowIcon {
+  flex: 0 0 auto;
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--hover-color);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rowBody {
+  min-width: 0;
+  flex: 1;
+
+  code {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--black);
+    opacity: 0.68;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  p {
+    margin: 2px 0 0;
+    color: var(--black);
+    opacity: 0.58;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+}
+
+.rowTitle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+
+  strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    flex: 0 0 auto;
+    color: var(--black);
+    opacity: 0.46;
+    font-size: 10px;
+  }
+}
+
+.rowActions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+
+  button {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--black);
+    cursor: pointer;
+
+    &:hover {
+      background: var(--hover-color);
+    }
+
+    svg {
+      width: 14px;
+      height: 14px;
+    }
+  }
+}
+
+.compact {
+  .header {
+    margin-bottom: 10px;
+  }
+}
+
+@media only screen and (max-width: 600px) {
+  .qrGrid {
+    grid-template-columns: 1fr;
+  }
+}

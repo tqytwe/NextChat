@@ -37,6 +37,8 @@ import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
 import { withBasePath } from "../utils/api-path";
 import { applyManagedWorkspaceModelsToStores } from "../utils/managed-workspace-models";
 import { ManagedBrandLogo } from "./managed-brand";
+import { ManagedSupportContact } from "./managed-support-contact";
+import type { SupportContactConfig } from "../utils/support-contact";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -382,6 +384,28 @@ function useSub2APIManagedGate() {
 }
 
 function ManagedLockedPage(props: { error?: string }) {
+  const [supportContact, setSupportContact] = useState<
+    SupportContactConfig | undefined
+  >();
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(withBasePath("/api/nextchat/public-settings"), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : undefined))
+      .then((body) => setSupportContact(body?.support_contact))
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          console.warn("[Sub2API Managed] support contact load failed", error);
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
   return (
     <div className={clsx("no-dark", styles["managed-lock-page"])}>
       <div className={styles["managed-lock-logo"]}>
@@ -404,6 +428,11 @@ function ManagedLockedPage(props: { error?: string }) {
           返回控制台
         </button>
       </div>
+      <ManagedSupportContact
+        config={supportContact}
+        compact
+        className={styles["managed-lock-support"]}
+      />
     </div>
   );
 }
