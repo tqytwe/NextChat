@@ -70,6 +70,15 @@ export type ManagedImagePromptUseResult = {
   requiresReference: boolean;
 };
 
+export type ManagedImagePromptVariable = {
+  name: string;
+  label: string;
+  description?: string;
+  defaultValue?: string;
+  placeholder?: string;
+  required: boolean;
+};
+
 export type ManagedPromptSquareCatalog = {
   chatPrompts: ManagedPrompt[];
   imageTemplates: ManagedImageTemplate[];
@@ -287,6 +296,88 @@ export async function useManagedImagePrompt(
   return parseManagedImagePromptUseResult(envelope.data);
 }
 
+export function getManagedImagePromptVariables(
+  variables?: unknown,
+  promptText = "",
+): ManagedImagePromptVariable[] {
+  const byName = new Map<string, ManagedImagePromptVariable>();
+  const addVariable = (
+    name: string,
+    value?: unknown,
+    fallbackLabel?: string,
+  ) => {
+    const normalizedName = String(name || "").trim();
+    if (!normalizedName) return;
+    const normalized = normalizeManagedImagePromptVariable(
+      normalizedName,
+      value,
+      fallbackLabel,
+    );
+    const existing = byName.get(normalized.name);
+    byName.set(
+      normalized.name,
+      existing
+        ? {
+            ...normalized,
+            ...existing,
+            description: existing.description || normalized.description,
+            defaultValue: existing.defaultValue || normalized.defaultValue,
+            placeholder: existing.placeholder || normalized.placeholder,
+            required: existing.required || normalized.required,
+          }
+        : normalized,
+    );
+  };
+
+  if (Array.isArray(variables)) {
+    variables.forEach((value, index) => {
+      if (typeof value === "string") {
+        addVariable(value, undefined, value);
+        return;
+      }
+      if (value && typeof value === "object") {
+        const data = value as Record<string, unknown>;
+        addVariable(
+          String(data.name || data.key || `variable_${index + 1}`),
+          data,
+        );
+      }
+    });
+  } else if (variables && typeof variables === "object") {
+    Object.entries(variables as Record<string, unknown>).forEach(
+      ([name, value]) => addVariable(name, value),
+    );
+  }
+
+  extractManagedImagePromptPlaceholders(promptText).forEach((name) =>
+    addVariable(name, undefined, name),
+  );
+
+  return Array.from(byName.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+}
+
+export function renderManagedImagePromptWithVariables(
+  promptText: string,
+  values: Record<string, string> = {},
+) {
+  return Object.entries(values).reduce((text, [name, value]) => {
+    const normalizedName = name.trim();
+    if (!normalizedName) return text;
+    const replacement = value ?? "";
+    return text
+      .replace(
+        new RegExp(`{{\\s*${escapeRegExp(normalizedName)}\\s*}}`, "g"),
+        replacement,
+      )
+      .replace(
+        new RegExp(`{\\s*${escapeRegExp(normalizedName)}\\s*}`, "g"),
+        replacement,
+      );
+  }, promptText);
+}
+
 function parseManagedChatPrompts(
   prompts: NonNullable<NextChatPromptCatalogEnvelope["data"]>["chat_prompts"],
 ): ManagedPrompt[] {
@@ -406,4 +497,51 @@ function parseManagedImagePromptUseResult(
     referenceInstructions: result.reference_instructions?.trim() || undefined,
     requiresReference: !!result.requires_reference,
   };
+}
+
+function normalizeManagedImagePromptVariable(
+  name: string,
+  value?: unknown,
+  fallbackLabel?: string,
+): ManagedImagePromptVariable {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const data = value as Record<string, unknown>;
+    return {
+      name,
+      label: stringValue(data.label || data.title || data.name) || name,
+      description: stringValue(data.description || data.help || data.note),
+      defaultValue: stringValue(
+        data.default || data.defaultValue || data.example,
+      ),
+      placeholder: stringValue(data.placeholder || data.example),
+      required: data.required === true,
+    };
+  }
+
+  const textValue = stringValue(value);
+  return {
+    name,
+    label: fallbackLabel || textValue || name,
+    defaultValue: textValue && textValue !== fallbackLabel ? textValue : "",
+    required: false,
+  };
+}
+
+function extractManagedImagePromptPlaceholders(promptText: string) {
+  const names = new Set<string>();
+  const pattern = /{{\s*([a-zA-Z0-9_.-]+)\s*}}|{\s*([a-zA-Z0-9_.-]+)\s*}/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(promptText))) {
+    const name = (match[1] || match[2] || "").trim();
+    if (name) names.add(name);
+  }
+  return Array.from(names);
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

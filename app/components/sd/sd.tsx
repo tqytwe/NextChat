@@ -46,7 +46,12 @@ import clsx from "clsx";
 import { ManagedBrandLogo } from "@/app/components/managed-brand";
 import {
   downloadManagedImage,
+  fetchManagedImageAssetBlob,
+  getManagedImageAssetMessage,
   getManagedImageSources,
+  summarizeManagedImageItems,
+  type ManagedImageItemStatusSummary,
+  type ManagedImageSource,
 } from "@/app/utils/managed-image-studio-ui";
 
 function getSdTaskStatus(item: any) {
@@ -102,6 +107,144 @@ function getSdTaskStatus(item: any) {
       )}
     </p>
   );
+}
+
+function ManagedImagePreview(props: {
+  source: ManagedImageSource;
+  isMobileScreen: boolean;
+  compact?: boolean;
+}) {
+  const { source, isMobileScreen, compact } = props;
+  const [state, setState] = useState<{
+    loading: boolean;
+    url: string;
+    error: string;
+  }>({ loading: true, url: "", error: "" });
+
+  useEffect(() => {
+    let alive = true;
+    let objectURL = "";
+    const previewURL = source.preview || "";
+
+    setState({ loading: true, url: "", error: "" });
+    if (!previewURL) {
+      setState({ loading: false, url: "", error: "图片不可用" });
+      return;
+    }
+
+    if (isLocalManagedImageURL(previewURL)) {
+      setState({ loading: false, url: previewURL, error: "" });
+      return;
+    }
+
+    fetchManagedImageAssetBlob(previewURL, { kind: "image", retries: 1 })
+      .then((asset) => {
+        if (typeof URL.createObjectURL !== "function") {
+          if (alive) setState({ loading: false, url: previewURL, error: "" });
+          return;
+        }
+        objectURL = URL.createObjectURL(asset.blob);
+        if (!alive) {
+          URL.revokeObjectURL(objectURL);
+          return;
+        }
+        setState({ loading: false, url: objectURL, error: "" });
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setState({
+          loading: false,
+          url: "",
+          error: getManagedImageAssetMessage(error),
+        });
+      });
+
+    return () => {
+      alive = false;
+      if (objectURL && typeof URL.revokeObjectURL === "function") {
+        URL.revokeObjectURL(objectURL);
+      }
+    };
+  }, [source.preview]);
+
+  if (state.loading) {
+    return (
+      <div
+        className={clsx(styles["pre-img"], {
+          [styles["asset-preview-compact"]]: compact,
+        })}
+      >
+        <LoadingIcon />
+      </div>
+    );
+  }
+
+  if (state.error) {
+    return (
+      <div
+        className={clsx(
+          styles["pre-img"],
+          styles["asset-error-img"],
+          compact && styles["asset-preview-compact"],
+        )}
+        title={state.error}
+      >
+        {state.error}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      className={styles["img"]}
+      src={state.url}
+      alt={source.filename || source.id}
+      onClick={() =>
+        showImageModal(
+          state.url,
+          true,
+          isMobileScreen
+            ? { width: "100%", height: "fit-content" }
+            : { maxWidth: "100%", maxHeight: "100%" },
+          isMobileScreen
+            ? { width: "100%", height: "fit-content" }
+            : { width: "100%", height: "100%" },
+        )
+      }
+    />
+  );
+}
+
+function isLocalManagedImageURL(url: string) {
+  return url.startsWith("data:") || url.startsWith("blob:");
+}
+
+function showManagedImageItemDetails(
+  item: any,
+  summary: ManagedImageItemStatusSummary,
+) {
+  showModal({
+    title: "图片子任务",
+    children: (
+      <div className={styles["item-detail"]}>
+        <div>sub2api_status: {item.sub2api_status || item.status}</div>
+        <div>items: {summary.label}</div>
+        {summary.failedItems.length > 0 && (
+          <div className={styles["item-detail-failures"]}>
+            {summary.failedItems.map((failed, index) => (
+              <div key={`${failed.id || failed.status}-${index}`}>
+                <strong>{failed.id || `item-${index + 1}`}</strong>
+                <span>status: {failed.status}</span>
+                {failed.assetID && <span>asset: {failed.assetID}</span>}
+                {failed.error && <span>error: {failed.error}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+        <pre>{JSON.stringify(item.items ?? [], null, 2)}</pre>
+      </div>
+    ),
+  });
 }
 
 export function Sd() {
@@ -251,6 +394,9 @@ export function Sd() {
                   const managedImageSources = managedMode
                     ? getManagedImageSources(item)
                     : [];
+                  const managedItemSummary = managedMode
+                    ? summarizeManagedImageItems(item.items)
+                    : undefined;
                   return (
                     <div
                       key={item.id}
@@ -270,42 +416,38 @@ export function Sd() {
                         managedMode && managedImageSources.length > 1 ? (
                           <div className={styles["managed-img-grid"]}>
                             {managedImageSources.map((source) => (
-                              <img
+                              <ManagedImagePreview
                                 key={source.id}
-                                className={styles["img"]}
-                                src={source.preview}
-                                alt={source.id}
-                                onClick={() =>
-                                  showImageModal(
-                                    source.preview,
-                                    true,
-                                    isMobileScreen
-                                      ? { width: "100%", height: "fit-content" }
-                                      : { maxWidth: "100%", maxHeight: "100%" },
-                                    isMobileScreen
-                                      ? { width: "100%", height: "fit-content" }
-                                      : { width: "100%", height: "100%" },
-                                  )
-                                }
+                                source={source}
+                                isMobileScreen={isMobileScreen}
+                                compact
                               />
                             ))}
                           </div>
+                        ) : managedMode ? (
+                          managedImageSources[0] ? (
+                            <ManagedImagePreview
+                              source={managedImageSources[0]}
+                              isMobileScreen={isMobileScreen}
+                            />
+                          ) : (
+                            <div
+                              className={clsx(
+                                styles["pre-img"],
+                                styles["asset-error-img"],
+                              )}
+                            >
+                              图片不可用
+                            </div>
+                          )
                         ) : (
                           <img
                             className={styles["img"]}
-                            src={
-                              managedMode
-                                ? managedImageSources[0]?.preview ||
-                                  item.img_data
-                                : item.img_data
-                            }
+                            src={item.img_data}
                             alt={item.id}
                             onClick={() =>
                               showImageModal(
-                                managedMode
-                                  ? managedImageSources[0]?.preview ||
-                                      item.img_data
-                                  : item.img_data,
+                                item.img_data,
                                 true,
                                 isMobileScreen
                                   ? { width: "100%", height: "fit-content" }
@@ -353,6 +495,26 @@ export function Sd() {
                           {Locale.SdPanel.AIModel}: {item.model_name}
                         </p>
                         {getSdTaskStatus(item)}
+                        {managedItemSummary && (
+                          <p
+                            className={styles["line-1"]}
+                            title={managedItemSummary.label}
+                          >
+                            items: {managedItemSummary.label}
+                            <span
+                              className="clickable"
+                              onClick={() =>
+                                showManagedImageItemDetails(
+                                  item,
+                                  managedItemSummary,
+                                )
+                              }
+                            >
+                              {" "}
+                              - 明细
+                            </span>
+                          </p>
+                        )}
                         <p>{item.created_at}</p>
                         {managedMode && item.expires_at && (
                           <p className={styles["line-1"]}>

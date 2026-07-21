@@ -8,6 +8,18 @@ export type ManagedImageSource = {
   filename?: string;
 };
 
+export type ManagedImageItemStatusSummary = {
+  total: number;
+  counts: Record<string, number>;
+  label: string;
+  failedItems: Array<{
+    id?: string;
+    status: string;
+    error?: string;
+    assetID?: string;
+  }>;
+};
+
 export class ManagedImageAssetError extends Error {
   status: number;
   code?: string;
@@ -55,6 +67,60 @@ export function getManagedImageSources(item: any): ManagedImageSource[] {
   }
 
   return sources;
+}
+
+export function getManagedImageAssetMessage(error: any) {
+  const status = Number(error?.status || 0);
+  const code = String(error?.code || "");
+
+  if (status === 401) return "登录已失效，请重新进入工作台";
+  if (status === 404) return "图片不可用";
+  if (status === 410 || code === "IMAGE_STUDIO_ASSET_EXPIRED") {
+    return "图片已过期";
+  }
+  if (status === 503 || code === "IMAGE_STUDIO_ASSET_UNAVAILABLE") {
+    return "图片暂时不可用";
+  }
+
+  return error?.message || "图片加载失败";
+}
+
+export function isManagedImageAssetExpiredError(error: any) {
+  return (
+    Number(error?.status || 0) === 410 ||
+    String(error?.code || "") === "IMAGE_STUDIO_ASSET_EXPIRED"
+  );
+}
+
+export function summarizeManagedImageItems(
+  items: any[] | undefined,
+): ManagedImageItemStatusSummary | undefined {
+  if (!Array.isArray(items) || items.length === 0) return undefined;
+
+  const counts: Record<string, number> = {};
+  const failedItems: ManagedImageItemStatusSummary["failedItems"] = [];
+  items.forEach((item) => {
+    const status = String(item?.status || "unknown");
+    counts[status] = (counts[status] || 0) + 1;
+    if (["failed", "error", "cancelled"].includes(status)) {
+      failedItems.push({
+        id: item?.id,
+        status,
+        error: item?.error,
+        assetID: item?.asset_id,
+      });
+    }
+  });
+
+  return {
+    total: items.length,
+    counts,
+    failedItems,
+    label: Object.keys(counts)
+      .sort()
+      .map((status) => `${status}: ${counts[status]}`)
+      .join(" · "),
+  };
 }
 
 export async function downloadManagedImage(

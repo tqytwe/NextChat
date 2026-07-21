@@ -113,7 +113,7 @@ export function Loading() {
 
 interface ModalProps {
   title: string;
-  children?: any;
+  children?: React.ReactNode | ((close: () => void) => React.ReactNode);
   actions?: React.ReactNode[];
   defaultMax?: boolean;
   footer?: React.ReactNode;
@@ -136,6 +136,10 @@ export function Modal(props: ModalProps) {
   }, []);
 
   const [isMax, setMax] = useState(!!props.defaultMax);
+  const content =
+    typeof props.children === "function"
+      ? props.children(() => props.onClose?.())
+      : props.children;
 
   return (
     <div
@@ -162,7 +166,7 @@ export function Modal(props: ModalProps) {
         </div>
       </div>
 
-      <div className={styles["modal-content"]}>{props.children}</div>
+      <div className={styles["modal-content"]}>{content}</div>
 
       <div className={styles["modal-footer"]}>
         {props.footer}

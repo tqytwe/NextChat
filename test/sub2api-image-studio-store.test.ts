@@ -13,8 +13,11 @@ import { Path } from "../app/constant";
 import {
   fetchManagedImageAssetBlob,
   downloadManagedImage,
+  getManagedImageAssetMessage,
   getImageStudioBackPath,
+  isManagedImageAssetExpiredError,
   ManagedImageAssetError,
+  summarizeManagedImageItems,
 } from "../app/utils/managed-image-studio-ui";
 import {
   getModelParamBasicData,
@@ -374,6 +377,38 @@ describe("Sub2API managed image studio helpers", () => {
       value: originalFetch,
       configurable: true,
     });
+  });
+
+  test("maps managed asset errors to user-facing preview messages", () => {
+    expect(
+      getManagedImageAssetMessage(
+        new ManagedImageAssetError("asset expired", {
+          status: 410,
+          code: "IMAGE_STUDIO_ASSET_EXPIRED",
+        }),
+      ),
+    ).toBe("图片已过期");
+    expect(
+      getManagedImageAssetMessage(
+        new ManagedImageAssetError("storage unavailable", {
+          status: 503,
+          code: "IMAGE_STUDIO_ASSET_UNAVAILABLE",
+        }),
+      ),
+    ).toBe("图片暂时不可用");
+    expect(
+      getManagedImageAssetMessage(
+        new ManagedImageAssetError("unauthorized", { status: 401 }),
+      ),
+    ).toBe("登录已失效，请重新进入工作台");
+    expect(
+      isManagedImageAssetExpiredError(
+        new ManagedImageAssetError("asset expired", {
+          status: 410,
+          code: "IMAGE_STUDIO_ASSET_EXPIRED",
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("rejects successful asset responses with the wrong MIME type", async () => {
@@ -1156,6 +1191,19 @@ describe("Sub2API managed image studio helpers", () => {
       items: [
         { id: "item-ok", status: "success" },
         { id: "item-failed", status: "failed", error: "upstream failed" },
+      ],
+    });
+    expect(summarizeManagedImageItems(merged[0].items)).toEqual({
+      total: 2,
+      counts: { failed: 1, success: 1 },
+      label: "failed: 1 · success: 1",
+      failedItems: [
+        {
+          id: "item-failed",
+          status: "failed",
+          error: "upstream failed",
+          assetID: undefined,
+        },
       ],
     });
   });

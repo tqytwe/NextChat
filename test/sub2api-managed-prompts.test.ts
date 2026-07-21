@@ -1,9 +1,11 @@
 import { jest } from "@jest/globals";
 import {
+  getManagedImagePromptVariables,
   getManagedImagePrompt,
   listManagedImagePrompts,
   loadManagedPromptCatalog,
   loadManagedPromptSquareCatalog,
+  renderManagedImagePromptWithVariables,
   setManagedImagePromptFavorite,
   useManagedImagePrompt,
 } from "../app/utils/managed-prompts";
@@ -260,5 +262,49 @@ describe("Sub2API managed prompts", () => {
       "/api/nextchat/image-prompts/88/use",
     ]);
     expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe("POST");
+  });
+
+  test("extracts image prompt variables and renders filled prompt text", () => {
+    const variables = getManagedImagePromptVariables(
+      {
+        product: {
+          label: "商品",
+          description: "商品名称或卖点",
+          default: "玻璃水杯",
+          required: true,
+        },
+        scene: "使用场景",
+      },
+      "为 {{ product }} 生成 {scene} 海报，背景 {background}",
+    );
+
+    expect(variables).toEqual([
+      expect.objectContaining({
+        name: "background",
+        label: "background",
+        required: false,
+      }),
+      expect.objectContaining({
+        name: "product",
+        label: "商品",
+        defaultValue: "玻璃水杯",
+        required: true,
+      }),
+      expect.objectContaining({
+        name: "scene",
+        label: "使用场景",
+        required: false,
+      }),
+    ]);
+    expect(
+      renderManagedImagePromptWithVariables(
+        "为 {{ product }} 生成 {scene} 海报，背景 {background}",
+        {
+          product: "陶瓷香薰",
+          scene: "节日礼盒",
+          background: "暖色桌面",
+        },
+      ),
+    ).toBe("为 陶瓷香薰 生成 节日礼盒 海报，背景 暖色桌面");
   });
 });

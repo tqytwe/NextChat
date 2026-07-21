@@ -32,6 +32,26 @@
   gap: 6px;
 }
 
+.image-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  span {
+    min-width: 76px;
+    text-align: center;
+    font-size: 12px;
+    opacity: 0.72;
+  }
+}
+
 .body {
   flex: 1;
   overflow: auto;
@@ -111,6 +131,95 @@
   opacity: 0.62;
 }
 
+.inline-error {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #9f1239;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.prompt-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.prompt-detail-loading {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.prompt-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  span {
+    padding: 4px 8px;
+    border-radius: 8px;
+    background: var(--second);
+  }
+}
+
+.prompt-detail-note {
+  padding: 10px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: var(--gray);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prompt-variables {
+  display: grid;
+  gap: 10px;
+
+  label {
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  textarea {
+    min-height: 42px;
+    resize: vertical;
+  }
+}
+
+.prompt-detail-text,
+.prompt-variables textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--black);
+  padding: 10px;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+.prompt-detail-text {
+  min-height: 160px;
+  resize: vertical;
+  user-select: text;
+}
+
+.prompt-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 @media only screen and (max-width: 600px) {
   .toolbar,
   .body {
@@ -124,5 +233,14 @@
 
   .tabs button {
     flex: 1;
+  }
+
+  .image-controls {
+    width: 100%;
+  }
+
+  .pager {
+    width: 100%;
+    justify-content: space-between;
   }
 }
