@@ -9,6 +9,10 @@ import {
   setManagedImagePromptFavorite,
   useManagedImagePrompt,
 } from "../app/utils/managed-prompts";
+import {
+  prepareManagedImagePromptUse,
+  resolveManagedImagePromptCompatibility,
+} from "../app/utils/managed-image-prompt-compat";
 
 describe("Sub2API managed prompts", () => {
   const originalFetch = globalThis.fetch;
@@ -306,5 +310,139 @@ describe("Sub2API managed prompts", () => {
         },
       ),
     ).toBe("为 陶瓷香薰 生成 节日礼盒 海报，背景 暖色桌面");
+  });
+
+  test("rejects incompatible image prompt before recording use", () => {
+    const canUseReferences = (model: {
+      operations?: string[];
+      max_reference_images?: number;
+    }) =>
+      (model.max_reference_images ?? 0) > 0 &&
+      (model.operations ?? []).includes("edit");
+    const models = [
+      {
+        id: "agnes-2.1",
+        supported_sizes: ["1024x1024"],
+        operations: ["generate"],
+        max_reference_images: 0,
+      },
+    ];
+
+    expect(
+      resolveManagedImagePromptCompatibility(
+        {
+          id: 88,
+          title: "GPT Image prompt",
+          models: ["gpt-image-2"],
+          sizes: ["1024x1024"],
+          requiresReference: false,
+          useCount: 0,
+          favoriteCount: 0,
+          favorited: false,
+        },
+        models,
+        "agnes-2.1",
+        canUseReferences,
+      ),
+    ).toEqual({ ok: false, reason: "missing-model" });
+
+    expect(
+      resolveManagedImagePromptCompatibility(
+        {
+          promptId: 88,
+          version: 1,
+          title: "Reference prompt",
+          promptText: "Edit the reference image",
+          models: [],
+          sizes: ["1536x1024"],
+          referenceRequirement: "required",
+          requiresReference: true,
+        },
+        models,
+        "agnes-2.1",
+        canUseReferences,
+      ),
+    ).toEqual({ ok: false, reason: "missing-reference-model" });
+
+    expect(
+      resolveManagedImagePromptCompatibility(
+        {
+          promptId: 88,
+          version: 1,
+          title: "Large prompt",
+          promptText: "Render a large image",
+          models: ["agnes-2.1"],
+          sizes: ["1536x1024"],
+          requiresReference: false,
+        },
+        models,
+        "agnes-2.1",
+        canUseReferences,
+      ),
+    ).toEqual({ ok: false, reason: "missing-size" });
+  });
+
+  test("does not record image prompt use when local compatibility fails", async () => {
+    const recordUse = jest.fn(async () => ({
+      promptId: 88,
+      version: 1,
+      title: "Should not be used",
+      promptText: "unused",
+      models: [],
+      sizes: [],
+      requiresReference: false,
+    }));
+
+    const result = await prepareManagedImagePromptUse(
+      {
+        id: 88,
+        title: "GPT Image prompt",
+        models: ["gpt-image-2"],
+        sizes: ["1024x1024"],
+        requiresReference: false,
+        useCount: 0,
+        favoriteCount: 0,
+        favorited: false,
+      },
+      [{ id: "agnes-2.1", supported_sizes: ["1024x1024"] }],
+      "agnes-2.1",
+      () => false,
+      recordUse,
+    );
+
+    expect(result).toEqual({ ok: false, reason: "missing-model" });
+    expect(recordUse).not.toHaveBeenCalled();
+  });
+
+  test("rechecks image prompt compatibility after use record returns server truth", async () => {
+    const recordUse = jest.fn(async () => ({
+      promptId: 88,
+      version: 2,
+      title: "Server-updated prompt",
+      promptText: "Generate a new image",
+      models: ["gpt-image-2"],
+      sizes: ["1024x1024"],
+      requiresReference: false,
+    }));
+
+    const result = await prepareManagedImagePromptUse(
+      {
+        id: 88,
+        title: "Initially generic prompt",
+        models: [],
+        sizes: ["1024x1024"],
+        requiresReference: false,
+        useCount: 0,
+        favoriteCount: 0,
+        favorited: false,
+      },
+      [{ id: "agnes-2.1", supported_sizes: ["1024x1024"] }],
+      "agnes-2.1",
+      () => false,
+      recordUse,
+    );
+
+    expect(recordUse).toHaveBeenCalledWith(88);
+    expect(result).toEqual({ ok: false, reason: "missing-model" });
   });
 });
