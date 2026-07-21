@@ -12,11 +12,22 @@ import ImageIcon from "../icons/image.svg";
 import LoadingIcon from "../icons/three-dots.svg";
 import { copyToClipboard } from "../utils";
 import {
+  listManagedImagePrompts,
   loadManagedPromptSquareCatalog,
+  setManagedImagePromptFavorite,
+  useManagedImagePrompt as recordManagedImagePromptUse,
+  type ManagedImagePrompt,
+  type ManagedImagePromptUseResult,
   type ManagedImageTemplate,
   type ManagedPrompt,
 } from "../utils/managed-prompts";
-import { inferSub2APIImageStudioAspectTier, useSdStore } from "../store/sd";
+import {
+  canSub2APIImageStudioUseReferences,
+  inferSub2APIImageStudioAspectTier,
+  toSub2APIImageStudioPanelModel,
+  type Sub2APIImageStudioModel,
+  useSdStore,
+} from "../store/sd";
 
 type PromptSquareMode = "all" | "chat" | "image";
 
@@ -37,7 +48,8 @@ type PromptSquareItem =
       category?: string;
       description?: string;
       content: string;
-      template: ManagedImageTemplate;
+      template?: ManagedImageTemplate;
+      imagePrompt?: ManagedImagePrompt;
     };
 
 export function ManagedPromptSquare() {
@@ -47,6 +59,7 @@ export function ManagedPromptSquare() {
   const [imageTemplates, setImageTemplates] = useState<ManagedImageTemplate[]>(
     [],
   );
+  const [imagePrompts, setImagePrompts] = useState<ManagedImagePrompt[]>([]);
   const [mode, setMode] = useState<PromptSquareMode>("all");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -56,11 +69,15 @@ export function ManagedPromptSquare() {
     let alive = true;
     setLoading(true);
     setError("");
-    loadManagedPromptSquareCatalog()
-      .then((catalog) => {
+    Promise.all([
+      loadManagedPromptSquareCatalog(),
+      listManagedImagePrompts({ pageSize: 24 }),
+    ])
+      .then(([catalog, promptPage]) => {
         if (!alive) return;
         setChatPrompts(catalog.chatPrompts);
         setImageTemplates(catalog.imageTemplates);
+        setImagePrompts(promptPage.items);
         setLoading(false);
       })
       .catch((err) => {
@@ -94,6 +111,15 @@ export function ManagedPromptSquare() {
         content: buildImageTemplatePrompt(template),
         template,
       })),
+      ...imagePrompts.map((prompt) => ({
+        kind: "image" as const,
+        id: String(prompt.id),
+        title: prompt.title,
+        category: prompt.style || prompt.subject || prompt.purpose,
+        description: prompt.description,
+        content: prompt.promptText || prompt.description || prompt.title,
+        imagePrompt: prompt,
+      })),
     ];
 
     return merged.filter((item) => {
@@ -103,7 +129,7 @@ export function ManagedPromptSquare() {
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(keyword));
     });
-  }, [chatPrompts, imageTemplates, mode, search]);
+  }, [chatPrompts, imagePrompts, imageTemplates, mode, search]);
 
   const applyChatPrompt = (prompt: ManagedPrompt) => {
     navigate(Path.Chat, {
@@ -140,6 +166,75 @@ export function ManagedPromptSquare() {
       },
     });
     showToast("已填入图片创作");
+  };
+
+  const applyImagePrompt = async (prompt: ManagedImagePrompt) => {
+    try {
+      const result = await recordManagedImagePromptUse(prompt.id);
+      const model = selectManagedImagePromptModel(
+        result,
+        useSdStore.getState().sub2apiImageStudioModels,
+        useSdStore.getState().currentModel?.value,
+      );
+      if (!model) {
+        showToast("当前分组没有兼容的图片模型");
+        return;
+      }
+      if (
+        requiresPromptReference(result) &&
+        !canSub2APIImageStudioUseReferences(model)
+      ) {
+        showToast("当前分组没有支持引用图的兼容模型");
+        return;
+      }
+      const nextParams: any = {
+        ...(useSdStore.getState().currentParams ?? {}),
+        template_id: "free-create",
+        prompt: result.promptText,
+      };
+      const size = selectManagedImagePromptSize(result, model);
+      if (size) {
+        const inferred = inferSub2APIImageStudioAspectTier(size);
+        nextParams.size = size;
+        nextParams.aspect = inferred.aspect;
+        nextParams.resolution = inferred.tier;
+      }
+      sdStore.setCurrentModel(toSub2APIImageStudioPanelModel(model));
+      sdStore.setCurrentParams(nextParams);
+      navigate(Path.Sd, {
+        state: {
+          managedImagePromptId: prompt.id,
+        },
+      });
+      showToast("已填入图片创作");
+    } catch (error: any) {
+      showToast(error?.message || "图片提示词使用失败");
+    }
+  };
+
+  const toggleImagePromptFavorite = async (prompt: ManagedImagePrompt) => {
+    try {
+      const favorited = await setManagedImagePromptFavorite(
+        prompt.id,
+        !prompt.favorited,
+      );
+      setImagePrompts((prompts) =>
+        prompts.map((item) =>
+          item.id === prompt.id
+            ? {
+                ...item,
+                favorited,
+                favoriteCount: Math.max(
+                  0,
+                  item.favoriteCount + (favorited ? 1 : -1),
+                ),
+              }
+            : item,
+        ),
+      );
+    } catch (error: any) {
+      showToast(error?.message || "收藏更新失败");
+    }
   };
 
   return (
@@ -229,13 +324,28 @@ export function ManagedPromptSquare() {
                     shadow
                   />
                   {item.kind === "image" ? (
-                    <IconButton
-                      icon={<ImageIcon />}
-                      text="去创作"
-                      type="primary"
-                      onClick={() => applyImageTemplate(item.template)}
-                      shadow
-                    />
+                    <>
+                      {item.imagePrompt && (
+                        <IconButton
+                          text={item.imagePrompt.favorited ? "已收藏" : "收藏"}
+                          onClick={() =>
+                            toggleImagePromptFavorite(item.imagePrompt!)
+                          }
+                          shadow
+                        />
+                      )}
+                      <IconButton
+                        icon={<ImageIcon />}
+                        text="去创作"
+                        type="primary"
+                        onClick={() =>
+                          item.imagePrompt
+                            ? applyImagePrompt(item.imagePrompt)
+                            : applyImageTemplate(item.template!)
+                        }
+                        shadow
+                      />
+                    </>
                   ) : (
                     <IconButton
                       icon={<PromptIcon />}
@@ -257,4 +367,39 @@ export function ManagedPromptSquare() {
 
 function buildImageTemplatePrompt(template: ManagedImageTemplate) {
   return [template.title, template.description].filter(Boolean).join("\n");
+}
+
+function selectManagedImagePromptModel(
+  prompt: ManagedImagePromptUseResult,
+  models: Sub2APIImageStudioModel[],
+  currentModelID?: string,
+) {
+  const recommended = prompt.models ?? [];
+  if (recommended.length > 0) {
+    const match = models.find((model) => recommended.includes(model.id));
+    if (match) return match;
+  }
+  if (requiresPromptReference(prompt)) {
+    return models.find((model) => canSub2APIImageStudioUseReferences(model));
+  }
+  return models.find((model) => model.id === currentModelID) || models[0];
+}
+
+function selectManagedImagePromptSize(
+  prompt: ManagedImagePromptUseResult,
+  model: Sub2APIImageStudioModel,
+) {
+  const sizes = prompt.sizes ?? [];
+  if (sizes.length === 0) return undefined;
+  const supported = model.supported_sizes ?? [];
+  return sizes.find(
+    (size) => supported.length === 0 || supported.includes(size),
+  );
+}
+
+function requiresPromptReference(prompt: ManagedImagePromptUseResult) {
+  return (
+    prompt.requiresReference ||
+    String(prompt.referenceRequirement || "").toLowerCase() === "required"
+  );
 }

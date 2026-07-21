@@ -17,7 +17,6 @@ import {
 } from "./managed-workspace";
 import { withBasePath } from "@/app/utils/api-path";
 
-const NEXTCHAT_IMAGE_STUDIO_RETAIN_DAYS = 1;
 const NEXTCHAT_IMAGE_STUDIO_POLL_MS = 2500;
 const NEXTCHAT_IMAGE_STUDIO_MAX_POLLS = 120;
 const sub2apiImageStudioPollingJobs = new Set<string>();
@@ -31,6 +30,11 @@ type Sub2APIEnvelope<T> = {
 export type Sub2APIImageStudioModel = {
   id: string;
   display_name?: string;
+  platform?: string;
+  capability_profile_id?: string;
+  capability_revision?: string;
+  operations?: string[];
+  sizing_kind?: string;
   supported_sizes?: string[];
   supported_aspect_ratios?: string[];
   supported_resolutions?: string[];
@@ -38,13 +42,27 @@ export type Sub2APIImageStudioModel = {
   supported_backgrounds?: string[];
   supported_output_formats?: string[];
   supported_input_fidelities?: string[];
+  supports_transparency?: boolean;
+  output_compression?: {
+    min?: number;
+    max?: number;
+    formats?: string[];
+  };
   max_reference_images?: number;
+  default_size?: string;
   default_aspect_ratio?: string;
   default_resolution?: string;
   default_quality?: string;
   default_background?: string;
   default_output_format?: string;
   default_input_fidelity?: string;
+};
+
+export type SdPanelModel = {
+  name: string;
+  value: string;
+  sub2apiModel?: Sub2APIImageStudioModel;
+  params?: (data: any) => any[];
 };
 
 export type Sub2APIImageStudioReference = {
@@ -62,6 +80,21 @@ export type Sub2APIImageStudioAsset = {
   preview_url?: string;
   thumbnail_url?: string;
   download_url?: string;
+  content_type?: string;
+  byte_size?: number;
+  filename?: string;
+  expires_at?: string;
+  purged_at?: string;
+  availability?: string;
+};
+
+export type Sub2APIImageStudioItem = {
+  id?: string;
+  status?: string;
+  error?: string;
+  asset_id?: string;
+  sort_order?: number;
+  actual_cost?: number;
 };
 
 export type Sub2APIImageStudioJob = {
@@ -70,6 +103,7 @@ export type Sub2APIImageStudioJob = {
   status: string;
   error_message?: string;
   assets?: Sub2APIImageStudioAsset[];
+  items?: Sub2APIImageStudioItem[];
   created_at?: string;
   expires_at?: string;
   prompt?: string;
@@ -78,7 +112,7 @@ export type Sub2APIImageStudioJob = {
   count?: number;
 };
 
-const defaultModel = {
+const defaultModel: SdPanelModel = {
   name: models[0].name,
   value: models[0].value,
 };
@@ -105,7 +139,7 @@ export const useSdStore = createPersistStore<
   {
     currentId: number;
     draw: any[];
-    currentModel: typeof defaultModel;
+    currentModel: SdPanelModel;
     currentParams: any;
     sub2apiImageStudioModels: Sub2APIImageStudioModel[];
     sub2apiImageStudioModelsLoading: boolean;
@@ -119,7 +153,7 @@ export const useSdStore = createPersistStore<
   },
   {
     getNextId: () => number;
-    sendTask: (data: any, okCall?: Function) => void;
+    sendTask: (data: any, okCall?: Function) => Promise<void>;
     fetchSub2APIImageStudioModels: () => Promise<Sub2APIImageStudioModel[]>;
     uploadSub2APIImageStudioReference: (
       file: File,
@@ -129,6 +163,7 @@ export const useSdStore = createPersistStore<
     beginSub2APIImageStudioGroupSwitch: () => void;
     resetSub2APIImageStudioForGroupSwitch: () => void;
     fetchSub2APIImageStudioJobs: () => Promise<Sub2APIImageStudioJob[]>;
+    cancelSub2APIImageStudioJob: (jobId: string) => Promise<void>;
     deleteSub2APIImageStudioJob: (jobId: string) => Promise<void>;
     sub2apiImageStudioRequestCall: (data: any) => Promise<void>;
     pollSub2APIImageStudioJob: (
@@ -158,12 +193,12 @@ export const useSdStore = createPersistStore<
         set({ currentId: id });
         return id;
       },
-      sendTask(data: any, okCall?: Function) {
+      async sendTask(data: any, okCall?: Function) {
         data = { ...data, id: nanoid(), status: "running" };
         set({ draw: [data, ..._get().draw] });
         this.getNextId();
         if (isSub2APIManagedImageStudio()) {
-          void this.sub2apiImageStudioRequestCall(data);
+          await this.sub2apiImageStudioRequestCall(data);
         } else {
           this.stabilityRequestCall(data);
         }
@@ -220,8 +255,22 @@ export const useSdStore = createPersistStore<
       },
       async uploadSub2APIImageStudioReference(file: File) {
         const references = _get().sub2apiImageStudioReferences ?? [];
-        if (references.length >= 4) {
-          set({ sub2apiImageStudioReferencesError: "最多上传 4 张引用图" });
+        const supportsReferences = canSub2APIImageStudioUseReferences(
+          _get().currentModel?.sub2apiModel,
+        );
+        const referenceLimit = getSub2APIImageStudioReferenceLimit(
+          _get().currentModel?.sub2apiModel,
+        );
+        if (!supportsReferences || referenceLimit <= 0) {
+          set({
+            sub2apiImageStudioReferencesError: "当前模型不支持引用图",
+          });
+          return undefined;
+        }
+        if (references.length >= referenceLimit) {
+          set({
+            sub2apiImageStudioReferencesError: `最多上传 ${referenceLimit} 张引用图`,
+          });
           return undefined;
         }
         set({
@@ -267,6 +316,9 @@ export const useSdStore = createPersistStore<
         }
       },
       clearSub2APIImageStudioReferences() {
+        bestEffortDeleteSub2APIImageStudioReferences(
+          _get().sub2apiImageStudioReferences ?? [],
+        );
         set({
           sub2apiImageStudioReferences: [],
           sub2apiImageStudioReferencesError: "",
@@ -309,49 +361,81 @@ export const useSdStore = createPersistStore<
           sub2apiImageStudioJobsLoading: true,
           sub2apiImageStudioJobsError: "",
         });
-        try {
-          const data = await fetchSub2APIImageStudio<{
-            jobs: Sub2APIImageStudioJob[];
-          }>("/jobs?page=1&page_size=24");
-          const remoteDraws = (data.jobs ?? []).map(
-            toSub2APIImageStudioJobDraw,
-          );
-          if (
-            _get().sub2apiImageStudioRequestGeneration !== requestGeneration
-          ) {
-            return [];
-          }
-          const draw = mergeSub2APIImageStudioDraws(_get().draw, remoteDraws);
-          set({
-            draw,
-            currentId: _get().currentId + 1,
-            sub2apiImageStudioJobsLoading: false,
-          });
-          remoteDraws.forEach((draw, index) => {
-            const job = data.jobs?.[index];
-            if (job && isSub2APIImageStudioRunning(job.status)) {
-              this.pollSub2APIImageStudioJob(
-                draw,
-                job.id,
-                0,
-                requestGeneration,
-              );
-            }
-          });
-          refreshManagedWorkspaceBootstrap();
-          return data.jobs ?? [];
-        } catch (error: any) {
-          if (
-            _get().sub2apiImageStudioRequestGeneration !== requestGeneration
-          ) {
-            return [];
-          }
-          set({
-            sub2apiImageStudioJobsLoading: false,
-            sub2apiImageStudioJobsError:
-              error.message || "Failed to load image jobs",
-          });
+        const [activeResult, historyResult] = await Promise.allSettled([
+          fetchSub2APIImageStudio<{
+            job?: Sub2APIImageStudioJob | null;
+            jobs?: Sub2APIImageStudioJob[];
+          }>("/jobs/active"),
+          fetchSub2APIImageStudio<{
+            jobs?: Sub2APIImageStudioJob[];
+          }>("/jobs?page=1&page_size=24"),
+        ]);
+        if (_get().sub2apiImageStudioRequestGeneration !== requestGeneration) {
           return [];
+        }
+
+        const activeJobs =
+          activeResult.status === "fulfilled"
+            ? activeImageStudioJobsFromPayload(activeResult.value)
+            : [];
+        const historyJobs =
+          historyResult.status === "fulfilled"
+            ? historyResult.value.jobs ?? []
+            : [];
+        const jobs = uniqueSub2APIImageStudioJobs([
+          ...activeJobs,
+          ...historyJobs,
+        ]);
+        const remoteDraws = jobs.map(toSub2APIImageStudioJobDraw);
+        const draw = mergeSub2APIImageStudioDraws(_get().draw, remoteDraws, {
+          preserveExistingActive: activeResult.status === "rejected",
+          preserveExistingTerminal: historyResult.status === "rejected",
+        });
+        const syncError = formatSub2APIImageStudioSyncError(
+          activeResult.status === "rejected" ? activeResult.reason : undefined,
+          historyResult.status === "rejected"
+            ? historyResult.reason
+            : undefined,
+        );
+        set({
+          draw,
+          currentId: _get().currentId + 1,
+          sub2apiImageStudioJobsLoading: false,
+          sub2apiImageStudioJobsError: syncError,
+        });
+        remoteDraws.forEach((draw) => {
+          if (draw?.job_id && isSub2APIImageStudioDrawActive(draw)) {
+            this.pollSub2APIImageStudioJob(
+              draw,
+              draw.job_id,
+              0,
+              requestGeneration,
+            );
+          }
+        });
+        if (
+          activeResult.status === "fulfilled" ||
+          historyResult.status === "fulfilled"
+        ) {
+          refreshManagedWorkspaceBootstrap();
+        }
+        return jobs;
+      },
+      async cancelSub2APIImageStudioJob(jobId: string) {
+        if (!jobId) return;
+        try {
+          const job = await fetchSub2APIImageStudio<Sub2APIImageStudioJob>(
+            `/jobs/${encodeURIComponent(jobId)}/cancel`,
+            { method: "POST" },
+          );
+          sub2apiImageStudioPollingJobs.delete(jobId);
+          this.updateDraw(toSub2APIImageStudioJobDraw(job));
+          this.getNextId();
+          refreshManagedWorkspaceBootstrap();
+        } catch (error: any) {
+          const message = error.message || "Failed to cancel image job";
+          set({ sub2apiImageStudioJobsError: message });
+          throw error;
         }
       },
       async deleteSub2APIImageStudioJob(jobId: string) {
@@ -377,6 +461,10 @@ export const useSdStore = createPersistStore<
       },
       async sub2apiImageStudioRequestCall(data: any) {
         const requestGroupID = currentSub2APIImageStudioGroupID();
+        const modelCapability = resolveCurrentSub2APIImageStudioModelCapability(
+          data?.model,
+          _get(),
+        );
         try {
           const result = await fetchSub2APIImageStudio<{
             job: Sub2APIImageStudioJob;
@@ -387,7 +475,9 @@ export const useSdStore = createPersistStore<
               "Content-Type": "application/json",
               "Idempotency-Key": `nextchat-image-${data.id}`,
             },
-            body: JSON.stringify(buildSub2APIImageStudioGeneratePayload(data)),
+            body: JSON.stringify(
+              buildSub2APIImageStudioGeneratePayload(data, modelCapability),
+            ),
           });
           if (currentSub2APIImageStudioGroupID() !== requestGroupID) {
             return;
@@ -395,7 +485,10 @@ export const useSdStore = createPersistStore<
           const job = result.job;
           this.updateDraw(toSub2APIImageStudioDraw(data, job));
           if (isSub2APIImageStudioRunning(job.status)) {
-            this.pollSub2APIImageStudioJob(data, job.id);
+            this.pollSub2APIImageStudioJob(
+              toSub2APIImageStudioDraw(data, job),
+              job.id,
+            );
           } else {
             refreshManagedWorkspaceBootstrap();
           }
@@ -429,11 +522,13 @@ export const useSdStore = createPersistStore<
         }
         if (!jobId || attempt >= NEXTCHAT_IMAGE_STUDIO_MAX_POLLS) {
           sub2apiImageStudioPollingJobs.delete(jobId);
-          this.updateDraw({
-            ...data,
-            status: "error",
-            error: "Image generation polling timed out",
-          });
+          this.updateDraw(
+            markSub2APIImageStudioSyncDeferred(
+              data,
+              jobId,
+              "Image generation polling timed out",
+            ),
+          );
           this.getNextId();
           return;
         }
@@ -468,13 +563,23 @@ export const useSdStore = createPersistStore<
               refreshManagedWorkspaceBootstrap();
             }
           } catch (error: any) {
-            sub2apiImageStudioPollingJobs.delete(jobId);
-            this.updateDraw({
-              ...data,
-              status: "error",
-              error: error.message || "Image generation polling failed",
-            });
+            this.updateDraw(
+              markSub2APIImageStudioSyncDeferred(
+                data,
+                jobId,
+                error.message || "Image generation polling failed",
+              ),
+            );
             this.getNextId();
+            this.pollSub2APIImageStudioJob(
+              {
+                ...data,
+                job_id: jobId,
+              },
+              jobId,
+              attempt + 1,
+              requestGeneration,
+            );
           }
         }, NEXTCHAT_IMAGE_STUDIO_POLL_MS);
       },
@@ -568,6 +673,11 @@ export const useSdStore = createPersistStore<
         });
       },
       setCurrentModel(model: any) {
+        pruneSub2APIImageStudioReferencesForModel(
+          model?.sub2apiModel,
+          _get().sub2apiImageStudioReferences ?? [],
+          set,
+        );
         set({ currentModel: model });
       },
       setCurrentParams(data: any) {
@@ -589,7 +699,9 @@ export function isSub2APIManagedImageStudio() {
   return !!getClientConfig()?.sub2apiManagedMode;
 }
 
-export function toSub2APIImageStudioPanelModel(model: Sub2APIImageStudioModel) {
+export function toSub2APIImageStudioPanelModel(
+  model: Sub2APIImageStudioModel,
+): SdPanelModel {
   return {
     name: model.display_name || model.id,
     value: model.id,
@@ -598,29 +710,38 @@ export function toSub2APIImageStudioPanelModel(model: Sub2APIImageStudioModel) {
   };
 }
 
-export function buildSub2APIImageStudioGeneratePayload(data: any) {
+export function buildSub2APIImageStudioGeneratePayload(
+  data: any,
+  modelCapability?: Sub2APIImageStudioModel,
+) {
   const params = data?.params ?? {};
-  const referenceIDs = Array.isArray(params.reference_ids)
-    ? params.reference_ids.filter(Boolean)
-    : [];
+  const referenceIDs = normalizeSub2APIImageStudioReferenceIDs(
+    params.reference_ids,
+    modelCapability,
+  );
   const tier = normalizeImageStudioTier(params.resolution || params.tier);
   const size =
     params.size ||
     resolveSub2APIImageStudioSize(params.aspect, tier) ||
     "1024x1024";
   const inferredSize = inferSub2APIImageStudioAspectTier(size);
+  const includeAspectTier =
+    !modelCapability ||
+    normalizeSub2APIImageStudioSizingKind(modelCapability) ===
+      "aspect_resolution";
   const payload: any = {
     template_id: params.template_id || "free-create",
     user_prompt: params.prompt ?? "",
     size,
-    aspect: params.aspect || inferredSize.aspect,
-    tier: params.resolution || params.tier ? tier : inferredSize.tier,
     count: clampImageStudioCount(params.count),
     model: data?.model || "",
     quality: params.quality || "auto",
     output_format: params.output_format || "png",
-    retain_days: NEXTCHAT_IMAGE_STUDIO_RETAIN_DAYS,
   };
+  if (includeAspectTier) {
+    payload.aspect = params.aspect || inferredSize.aspect;
+    payload.tier = params.resolution || params.tier ? tier : inferredSize.tier;
+  }
   if (params.background !== undefined && params.background !== "") {
     payload.background = params.background;
   }
@@ -638,6 +759,26 @@ export function buildSub2APIImageStudioGeneratePayload(data: any) {
     payload.reference_ids = referenceIDs;
   }
   return payload;
+}
+
+export function canSub2APIImageStudioUseReferences(
+  model?: Sub2APIImageStudioModel,
+) {
+  if (!model) return false;
+  return (
+    getSub2APIImageStudioReferenceLimit(model) > 0 &&
+    (model.operations ?? []).some(
+      (operation) => operation.trim().toLowerCase() === "edit",
+    )
+  );
+}
+
+export function getSub2APIImageStudioReferenceLimit(
+  model?: Sub2APIImageStudioModel,
+) {
+  const limit = Number(model?.max_reference_images ?? 0);
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.floor(limit);
 }
 
 export const SUB2API_IMAGE_STUDIO_SIZE_MATRIX: Record<
@@ -699,9 +840,12 @@ export function inferSub2APIImageStudioAspectTier(size?: string) {
 export function normalizeSub2APIImageStudioAssetURL(
   url?: string,
   assetID?: string,
+  variant: "content" | "thumbnail" | "download" = "content",
 ) {
   const fallback = assetID
-    ? `/api/nextchat/image-studio/assets/${encodeURIComponent(assetID)}/content`
+    ? `/api/nextchat/image-studio/assets/${encodeURIComponent(
+        assetID,
+      )}/${variant}`
     : "";
   const raw = (url || fallback).trim();
   if (!raw) return "";
@@ -717,40 +861,28 @@ export function normalizeSub2APIImageStudioAssetURL(
 }
 
 function toSub2APIImageStudioDraw(data: any, job: Sub2APIImageStudioJob) {
-  const asset = job.assets?.[0];
-  const imgData = normalizeSub2APIImageStudioAssetURL(
-    asset?.preview_url || asset?.url,
-    asset?.id,
-  );
+  const assets = normalizeSub2APIImageStudioAssets(job.assets);
+  const asset =
+    assets.find((asset) => !isSub2APIManagedAssetExpired(asset)) ?? assets[0];
+  const imgData = asset?.preview_url || asset?.url || data.img_data || "";
   const status = normalizeSub2APIImageStudioTaskStatus(job, imgData);
+  const assetExpiresAt = assets.find((asset) => asset.expires_at)?.expires_at;
+  const imageAssetExpired =
+    assets.length > 0 &&
+    assets.every((asset) => isSub2APIManagedAssetExpired(asset));
   return {
     ...data,
     status,
+    sub2api_status: job.status,
     job_id: job.id,
     model_name: job.model || data.model_name,
     img_data: imgData || data.img_data,
     error: job.error_message || data.error,
-    expires_at: job.expires_at,
-    image_asset_expired: isSub2APIManagedImageExpired({
-      ...data,
-      expires_at: job.expires_at,
-    }),
-    assets: job.assets?.map((asset) => ({
-      ...asset,
-      url: normalizeSub2APIImageStudioAssetURL(asset.url, asset.id),
-      preview_url: normalizeSub2APIImageStudioAssetURL(
-        asset.preview_url || asset.url,
-        asset.id,
-      ),
-      thumbnail_url: normalizeSub2APIImageStudioAssetURL(
-        asset.thumbnail_url,
-        asset.id,
-      ),
-      download_url: normalizeSub2APIImageStudioAssetURL(
-        asset.download_url,
-        asset.id,
-      ),
-    })),
+    expires_at: assetExpiresAt || data.expires_at || job.expires_at,
+    record_expires_at: job.expires_at,
+    image_asset_expired: imageAssetExpired,
+    assets,
+    items: job.items ?? data.items,
   };
 }
 
@@ -781,15 +913,64 @@ function toSub2APIImageStudioJobDraw(job: Sub2APIImageStudioJob) {
 export function mergeSub2APIImageStudioDraws(
   existing: any[] = [],
   remote: any[] = [],
+  options: {
+    preserveExistingActive?: boolean;
+    preserveExistingTerminal?: boolean;
+  } = {},
 ) {
-  const localPending = existing.filter((item: any) => !item?.job_id);
-  return [...localPending, ...remote];
+  const remoteJobIDs = new Set(
+    remote.map((item: any) => item?.job_id).filter(Boolean),
+  );
+  const existingByJobID = new Map(
+    existing
+      .filter((item: any) => item?.job_id)
+      .map((item: any) => [item.job_id, item]),
+  );
+  const preserved = existing.filter((item: any) => {
+    if (!item?.job_id) return true;
+    if (remoteJobIDs.has(item.job_id)) return false;
+    if (
+      options.preserveExistingActive &&
+      isSub2APIImageStudioDrawActive(item)
+    ) {
+      return true;
+    }
+    if (
+      options.preserveExistingTerminal &&
+      !isSub2APIImageStudioDrawActive(item)
+    ) {
+      return true;
+    }
+    return false;
+  });
+  const normalizedRemote = remote.map((item: any) => {
+    const previous = existingByJobID.get(item?.job_id);
+    return previous
+      ? {
+          ...previous,
+          ...item,
+          id: previous.id || item.id,
+        }
+      : item;
+  });
+  return [...preserved, ...normalizedRemote];
 }
 
 export function isSub2APIManagedImageExpired(item: any, now = Date.now()) {
   if (item?.image_asset_expired || item?.status === "expired") return true;
+  const assets = Array.isArray(item?.assets) ? item.assets : [];
+  if (assets.length > 0) {
+    return assets.every((asset: any) =>
+      isSub2APIManagedAssetExpired(asset, now),
+    );
+  }
   const expiresAt = Date.parse(item?.expires_at || "");
   return Number.isFinite(expiresAt) && expiresAt <= now;
+}
+
+export function isSub2APIImageStudioDrawActive(item: any) {
+  const status = String(item?.sub2api_status || item?.status || "");
+  return status === "pending" || status === "running" || status === "wait";
 }
 
 function normalizeSub2APIImageStudioTaskStatus(
@@ -812,6 +993,96 @@ function isSub2APIImageStudioRunning(status: string) {
   return status === "pending" || status === "running";
 }
 
+function activeImageStudioJobsFromPayload(data: {
+  job?: Sub2APIImageStudioJob | null;
+  jobs?: Sub2APIImageStudioJob[];
+}) {
+  if (Array.isArray(data.jobs)) return data.jobs;
+  return data.job ? [data.job] : [];
+}
+
+function uniqueSub2APIImageStudioJobs(jobs: Sub2APIImageStudioJob[]) {
+  const seen = new Set<string>();
+  return jobs.filter((job) => {
+    if (!job?.id || seen.has(job.id)) return false;
+    seen.add(job.id);
+    return true;
+  });
+}
+
+function formatSub2APIImageStudioSyncError(
+  activeError?: any,
+  historyError?: any,
+) {
+  return [
+    activeError
+      ? `运行中任务同步失败：${sub2APIImageStudioErrorMessage(activeError)}`
+      : "",
+    historyError
+      ? `历史任务同步失败：${sub2APIImageStudioErrorMessage(historyError)}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("；");
+}
+
+function sub2APIImageStudioErrorMessage(error: any) {
+  return (
+    error?.message || String(error || "Sub2API image studio request failed")
+  );
+}
+
+function markSub2APIImageStudioSyncDeferred(
+  data: any,
+  jobId: string,
+  message: string,
+) {
+  return {
+    ...data,
+    job_id: jobId,
+    status: "running",
+    sub2api_status: data?.sub2api_status || "running",
+    sync_deferred: true,
+    sync_error: message,
+  };
+}
+
+function normalizeSub2APIImageStudioAssets(
+  assets: Sub2APIImageStudioAsset[] = [],
+) {
+  return assets.map((asset) => {
+    const contentURL = normalizeSub2APIImageStudioAssetURL(
+      asset.url || asset.preview_url,
+      asset.id,
+      "content",
+    );
+    const thumbnailURL = normalizeSub2APIImageStudioAssetURL(
+      asset.thumbnail_url,
+      asset.id,
+      "thumbnail",
+    );
+    return {
+      ...asset,
+      url: contentURL,
+      preview_url: thumbnailURL || contentURL,
+      thumbnail_url: thumbnailURL,
+      download_url: normalizeSub2APIImageStudioAssetURL(
+        asset.download_url,
+        asset.id,
+        "download",
+      ),
+    };
+  });
+}
+
+function isSub2APIManagedAssetExpired(asset: any, now = Date.now()) {
+  const availability = String(asset?.availability || "").toLowerCase();
+  if (availability === "expired" || availability === "purged") return true;
+  if (asset?.purged_at) return true;
+  const expiresAt = Date.parse(asset?.expires_at || "");
+  return Number.isFinite(expiresAt) && expiresAt <= now;
+}
+
 function currentSub2APIImageStudioGroupID() {
   return getManagedWorkspaceCurrentGroup(
     useManagedWorkspaceStore.getState().bootstrap,
@@ -822,6 +1093,92 @@ function refreshManagedWorkspaceBootstrap() {
   if (isSub2APIManagedImageStudio()) {
     void useManagedWorkspaceStore.getState().fetchBootstrap();
   }
+}
+
+function resolveCurrentSub2APIImageStudioModelCapability(
+  modelID: string | undefined,
+  state: {
+    currentModel?: SdPanelModel;
+    sub2apiImageStudioModels?: Sub2APIImageStudioModel[];
+  },
+) {
+  const normalizedModelID = String(modelID || "").trim();
+  const models = state.sub2apiImageStudioModels ?? [];
+  const fromList = models.find((model) => model.id === normalizedModelID);
+  if (fromList) return fromList;
+  if (state.currentModel?.value === normalizedModelID) {
+    return state.currentModel.sub2apiModel;
+  }
+  return undefined;
+}
+
+function normalizeSub2APIImageStudioReferenceIDs(
+  rawReferenceIDs: any,
+  modelCapability?: Sub2APIImageStudioModel,
+) {
+  const referenceIDs = Array.isArray(rawReferenceIDs)
+    ? rawReferenceIDs.filter(Boolean)
+    : [];
+  if (!modelCapability) return referenceIDs;
+  if (!canSub2APIImageStudioUseReferences(modelCapability)) return [];
+  return referenceIDs.slice(
+    0,
+    getSub2APIImageStudioReferenceLimit(modelCapability),
+  );
+}
+
+function normalizeSub2APIImageStudioSizingKind(
+  modelCapability: Sub2APIImageStudioModel,
+) {
+  const raw = (modelCapability.sizing_kind || "").trim().toLowerCase();
+  if (raw === "fixed" || raw === "custom" || raw === "aspect_resolution") {
+    return raw;
+  }
+  if (
+    (modelCapability.supported_aspect_ratios?.length ?? 0) > 0 ||
+    (modelCapability.supported_resolutions?.length ?? 0) > 0
+  ) {
+    return "aspect_resolution";
+  }
+  if ((modelCapability.supported_sizes?.length ?? 0) > 1) return "custom";
+  if ((modelCapability.supported_sizes?.length ?? 0) === 1) return "fixed";
+  return "aspect_resolution";
+}
+
+function pruneSub2APIImageStudioReferencesForModel(
+  model: Sub2APIImageStudioModel | undefined,
+  references: Sub2APIImageStudioReference[],
+  set: (state: any) => void,
+) {
+  if (references.length === 0) return;
+  const limit = getSub2APIImageStudioReferenceLimit(model);
+  const nextReferences = canSub2APIImageStudioUseReferences(model)
+    ? references.slice(0, limit)
+    : [];
+  if (nextReferences.length === references.length) return;
+  const keepIDs = new Set(nextReferences.map((reference) => reference.id));
+  bestEffortDeleteSub2APIImageStudioReferences(
+    references.filter((reference) => !keepIDs.has(reference.id)),
+  );
+  set({
+    sub2apiImageStudioReferences: nextReferences,
+    sub2apiImageStudioReferencesError:
+      nextReferences.length > 0
+        ? `当前模型最多保留 ${limit} 张引用图`
+        : "当前模型不支持引用图，已清空引用图",
+  });
+}
+
+function bestEffortDeleteSub2APIImageStudioReferences(
+  references: Sub2APIImageStudioReference[],
+) {
+  references.forEach((reference) => {
+    if (!reference?.id) return;
+    void fetchSub2APIImageStudio<{ deleted?: boolean }>(
+      `/references/${encodeURIComponent(reference.id)}`,
+      { method: "DELETE" },
+    ).catch(() => undefined);
+  });
 }
 
 function clampImageStudioCount(value: any) {

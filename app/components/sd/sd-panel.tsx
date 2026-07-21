@@ -4,9 +4,12 @@ import { Select, Selector } from "@/app/components/ui-lib";
 import { IconButton } from "@/app/components/button";
 import Locale from "@/app/locales";
 import {
+  canSub2APIImageStudioUseReferences,
+  getSub2APIImageStudioReferenceLimit,
   inferSub2APIImageStudioAspectTier,
   isSub2APIManagedImageStudio,
   resolveSub2APIImageStudioSize,
+  type SdPanelModel,
   type Sub2APIImageStudioModel,
   toSub2APIImageStudioPanelModel,
   useSdStore,
@@ -220,16 +223,16 @@ export function getSub2APIImageStudioParams(
 ) {
   if (!model) return sub2APIImageStudioParams;
   const sizeSet = new Set(model.supported_sizes ?? []);
+  const sizingKind = normalizeImageStudioSizingKind(model);
+  const defaultSize = model.default_size || model.supported_sizes?.[0];
+  const inferred = inferSub2APIImageStudioAspectTier(defaultSize);
   const aspects = normalizeImageStudioOptions(
     model.supported_aspect_ratios,
     inferAspectsFromSupportedSizes(sizeSet),
     ["1:1", "2:3", "3:2", "9:16", "16:9"],
   );
   const requestedAspect =
-    data.aspect ||
-    model.default_aspect_ratio ||
-    inferSub2APIImageStudioAspectTier(model.supported_sizes?.[0]).aspect ||
-    "1:1";
+    data.aspect || model.default_aspect_ratio || inferred.aspect || "1:1";
   const selectedAspect = aspects.includes(requestedAspect)
     ? requestedAspect
     : aspects[0] || "1:1";
@@ -257,14 +260,15 @@ export function getSub2APIImageStudioParams(
     model.supported_backgrounds,
     [],
     [],
+  ).filter(
+    (background) =>
+      background !== "transparent" || model.supports_transparency !== false,
   );
   const inputFidelities = normalizeImageStudioOptions(
     model.supported_input_fidelities,
     [],
     [],
   );
-  const defaultSize = model.supported_sizes?.[0];
-  const inferred = inferSub2APIImageStudioAspectTier(defaultSize);
   const defaultAspect =
     selectedAspect ||
     aspects.find((aspect) => aspect === inferred.aspect) ||
@@ -285,35 +289,67 @@ export function getSub2APIImageStudioParams(
       required: true,
       rows: 5,
     },
-    {
-      name: "比例",
-      value: "aspect",
-      type: "select",
-      default: defaultAspect,
-      options: aspects.map((aspect) => ({
-        name: imageStudioAspectLabels[aspect] || aspect,
-        value: aspect,
-      })),
-    },
-    {
-      name: "分辨率",
-      value: "resolution",
-      type: "select",
-      default: defaultResolution,
-      options: resolutions.map((resolution) => ({
-        name: imageStudioResolutionLabels[resolution] || resolution,
-        value: resolution,
-      })),
-    },
-    {
-      name: "张数",
-      value: "count",
-      type: "number",
-      default: 1,
-      min: 1,
-      max: 4,
-    },
   ];
+
+  if (sizingKind === "fixed") {
+    params.push({
+      name: "固定尺寸",
+      value: "size",
+      type: "readonly",
+      default: defaultSize || "1024x1024",
+      sub: "此模型仅支持该尺寸",
+    });
+  } else if (sizingKind === "custom") {
+    const sizes = Array.from(sizeSet);
+    const selectedSize =
+      sizes.find((size) => size === data.size) ||
+      sizes.find((size) => size === defaultSize) ||
+      sizes[0] ||
+      defaultSize ||
+      "1024x1024";
+    params.push({
+      name: "尺寸",
+      value: "size",
+      type: "select",
+      default: selectedSize,
+      options: sizes.map((size) => ({
+        name: size,
+        value: size,
+      })),
+    });
+  } else {
+    params.push(
+      {
+        name: "比例",
+        value: "aspect",
+        type: "select",
+        default: defaultAspect,
+        options: aspects.map((aspect) => ({
+          name: imageStudioAspectLabels[aspect] || aspect,
+          value: aspect,
+        })),
+      },
+      {
+        name: "分辨率",
+        value: "resolution",
+        type: "select",
+        default: defaultResolution,
+        options: resolutions.map((resolution) => ({
+          name: imageStudioResolutionLabels[resolution] || resolution,
+          value: resolution,
+        })),
+      },
+    );
+  }
+
+  params.push({
+    name: "张数",
+    value: "count",
+    type: "number",
+    default: 1,
+    min: 1,
+    max: 4,
+  });
 
   if (qualities.length > 0) {
     params.push({
@@ -365,8 +401,10 @@ export function getSub2APIImageStudioParams(
     });
   }
   if (
-    model.supported_output_formats?.some((format) =>
-      ["jpeg", "webp"].includes(format),
+    model.output_compression &&
+    imageStudioOutputCompressionApplies(
+      model.output_compression,
+      data.output_format || model.default_output_format || outputFormats[0],
     )
   ) {
     params.push({
@@ -374,8 +412,8 @@ export function getSub2APIImageStudioParams(
       value: "output_compression",
       type: "number",
       default: "",
-      min: 0,
-      max: 100,
+      min: model.output_compression.min ?? 0,
+      max: model.output_compression.max ?? 100,
     });
   }
 
@@ -418,6 +456,38 @@ function sizeAllowedForImageStudioModel(
   if (!size) return false;
   const supported = model.supported_sizes ?? [];
   return supported.length === 0 || supported.includes(size);
+}
+
+function normalizeImageStudioSizingKind(model: Sub2APIImageStudioModel) {
+  const raw = (model.sizing_kind || "").trim().toLowerCase();
+  if (raw === "fixed" || raw === "custom" || raw === "aspect_resolution") {
+    return raw;
+  }
+  if (
+    (model.supported_aspect_ratios?.length ?? 0) > 0 ||
+    (model.supported_resolutions?.length ?? 0) > 0
+  ) {
+    return "aspect_resolution";
+  }
+  if ((model.supported_sizes?.length ?? 0) > 1) {
+    return "custom";
+  }
+  if ((model.supported_sizes?.length ?? 0) === 1) return "fixed";
+  return "aspect_resolution";
+}
+
+function imageStudioOutputCompressionApplies(
+  compression: NonNullable<Sub2APIImageStudioModel["output_compression"]>,
+  outputFormat?: string,
+) {
+  const formats = compression.formats ?? [];
+  if (formats.length === 0) return true;
+  const normalizedFormat = String(outputFormat || "")
+    .trim()
+    .toLowerCase();
+  return formats
+    .map((format) => format.trim().toLowerCase())
+    .includes(normalizedFormat);
 }
 
 function qualityLabel(value: string) {
@@ -551,6 +621,23 @@ export function ControlParam(props: {
               </ControlParamItem>
             );
             break;
+          case "readonly":
+            element = (
+              <ControlParamItem
+                title={item.name}
+                subTitle={item.sub}
+                required={item.required}
+              >
+                <input
+                  aria-label={item.name}
+                  type="text"
+                  value={props.data[item.value] || item.default || ""}
+                  readOnly
+                  style={{ maxWidth: "100%", width: "100%" }}
+                />
+              </ControlParamItem>
+            );
+            break;
           default:
             element = (
               <ControlParamItem
@@ -641,7 +728,7 @@ export function SdPanel() {
   const setCurrentModel = sdStore.setCurrentModel;
   const params = sdStore.currentParams;
   const setParams = sdStore.setCurrentParams;
-  const modelOptions = useMemo(() => {
+  const modelOptions = useMemo<SdPanelModel[]>(() => {
     if (!managedMode) return models;
     return sdStore.sub2apiImageStudioModels.map((model) => ({
       ...toSub2APIImageStudioPanelModel(model),
@@ -664,6 +751,13 @@ export function SdPanel() {
     typeof managedBalance === "number"
       ? `$${managedBalance.toFixed(2)}`
       : "正在同步";
+  const activeSub2APIModel = activeModel.sub2apiModel as
+    | Sub2APIImageStudioModel
+    | undefined;
+  const canUploadReferences =
+    managedMode && canSub2APIImageStudioUseReferences(activeSub2APIModel);
+  const referenceLimit =
+    getSub2APIImageStudioReferenceLimit(activeSub2APIModel);
 
   useEffect(() => {
     if (managedMode) {
@@ -725,7 +819,13 @@ export function SdPanel() {
   };
   const uploadReferences = async (files?: FileList | null) => {
     if (!files || files.length === 0) return;
-    for (const file of Array.from(files).slice(0, 4)) {
+    if (!canUploadReferences || referenceLimit <= 0) {
+      showToast("当前模型不支持引用图");
+      return;
+    }
+    const remaining =
+      referenceLimit - sdStore.sub2apiImageStudioReferences.length;
+    for (const file of Array.from(files).slice(0, Math.max(remaining, 0))) {
       const reference = await sdStore.uploadSub2APIImageStudioReference(file);
       if (!reference) {
         showToast(
@@ -825,7 +925,7 @@ export function SdPanel() {
             )}
         </div>
       </ControlParamItem>
-      {managedMode && (
+      {managedMode && canUploadReferences && (
         <ControlParamItem title="引用图">
           <input
             ref={referenceInputRef}
@@ -847,6 +947,9 @@ export function SdPanel() {
               text="上传引用图"
               onClick={() => referenceInputRef.current?.click()}
               shadow
+              disabled={
+                sdStore.sub2apiImageStudioReferences.length >= referenceLimit
+              }
             />
             {sdStore.sub2apiImageStudioReferences.length > 0 && (
               <IconButton
