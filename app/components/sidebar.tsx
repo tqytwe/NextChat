@@ -46,6 +46,7 @@ import {
   useManagedWorkspaceStore,
 } from "../store/managed-workspace";
 import { ManagedBrandLogo } from "./managed-brand";
+import { ManagedSupportContact } from "./managed-support-contact";
 
 const DISCOVERY = [
   { name: Locale.Plugin.Name, path: Path.Plugins },
@@ -227,12 +228,16 @@ export function SideBarBody(props: {
 export function SideBarTail(props: {
   primaryAction?: React.ReactNode;
   secondaryAction?: React.ReactNode;
+  extra?: React.ReactNode;
   className?: string;
 }) {
-  const { className, primaryAction, secondaryAction } = props;
+  const { className, extra, primaryAction, secondaryAction } = props;
 
   return (
     <div className={clsx(styles["sidebar-tail"], className)}>
+      {extra ? (
+        <div className={styles["sidebar-tail-extra"]}>{extra}</div>
+      ) : null}
       <div className={styles["sidebar-actions"]}>{primaryAction}</div>
       {secondaryAction ? (
         <div className={styles["sidebar-actions"]}>{secondaryAction}</div>
@@ -396,6 +401,15 @@ export function SideBar(props: { className?: string }) {
       </SideBarBody>
       <SideBarTail
         className={clsx({ [styles["managed-sidebar-tail"]]: managedMode })}
+        extra={
+          managedMode && !shouldNarrow ? (
+            <ManagedSupportContact
+              config={managedBootstrap?.support_contact}
+              compact
+              className={styles["managed-sidebar-support"]}
+            />
+          ) : undefined
+        }
         primaryAction={
           <>
             <div className={clsx(styles["sidebar-action"], styles.mobile)}>

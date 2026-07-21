@@ -156,6 +156,12 @@
   flex-wrap: wrap;
 }
 
+.managed-lock-support {
+  width: min(420px, 100%);
+  margin-top: 8px;
+  text-align: left;
+}
+
 .managed-lock-primary {
   border: 0;
   border-radius: 8px;
@@ -390,6 +396,11 @@
   padding-top: 20px;
 }
 
+.sidebar-tail-extra {
+  width: 100%;
+  min-width: 0;
+}
+
 .sidebar-actions {
   display: inline-flex;
   min-width: 0;
@@ -401,6 +412,8 @@
 }
 
 .managed-sidebar-tail {
+  flex-direction: column;
+  align-items: stretch;
   justify-content: flex-start;
   padding-top: 14px;
 
@@ -427,6 +440,10 @@
     min-height: 40px;
     padding: 8px;
   }
+}
+
+.managed-sidebar-support {
+  margin-bottom: 4px;
 }
 
 .narrow-sidebar {
