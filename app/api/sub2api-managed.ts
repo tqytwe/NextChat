@@ -148,7 +148,8 @@ export async function proxySub2APINextChatBFF(
     );
   }
 
-  const upstream = await fetch(`${baseUrl}/api/v1/nextchat/${path}`, {
+  const upstreamPath = appendRequestSearch(path, req);
+  const upstream = await fetch(`${baseUrl}/api/v1/nextchat/${upstreamPath}`, {
     ...init,
     headers: {
       Accept: "application/json",
@@ -174,6 +175,12 @@ export async function proxySub2APINextChatBFF(
     statusText: upstream.statusText,
     headers,
   });
+}
+
+function appendRequestSearch(path: string, req: NextRequest) {
+  const search = req.nextUrl?.search ?? "";
+  if (!search || path.includes("?")) return path;
+  return `${path}${search}`;
 }
 
 async function deriveKey(secret: string): Promise<CryptoKey> {

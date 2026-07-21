@@ -365,6 +365,97 @@ describe("Sub2API managed BFF proxy", () => {
     expect(headers["X-NextChat-API-Key-ID"]).toBe("7");
   });
 
+  test("BFF proxy preserves query strings for paginated routes", async () => {
+    const managed = await import("../app/api/sub2api-managed");
+    const route = await import(
+      "../app/api/nextchat/image-studio/[...path]/route"
+    );
+    const sealed = await managed.sealManagedSession(
+      {
+        userId: 42,
+        apiKey: "sk-managed-secret",
+        apiKeyId: 7,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      "test-session-secret",
+    );
+    const fetchMock = jest.fn(async () => {
+      return new Response(JSON.stringify({ code: 0, data: { jobs: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+    });
+
+    const res = await route.GET(
+      nextBFFRequest(sealed, "GET", undefined, "", {}, "?page=2&page_size=24"),
+      {
+        params: { path: ["jobs"] },
+      },
+    );
+
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://sub2api.internal/api/v1/nextchat/image-studio/jobs?page=2&page_size=24",
+    );
+  });
+
+  test("image prompt route proxies list and actions through the managed BFF", async () => {
+    const managed = await import("../app/api/sub2api-managed");
+    const route = await import(
+      "../app/api/nextchat/image-prompts/[[...path]]/route"
+    );
+    const sealed = await managed.sealManagedSession(
+      {
+        userId: 42,
+        apiKey: "sk-managed-secret",
+        apiKeyId: 7,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      "test-session-secret",
+    );
+    const fetchMock = jest.fn(async () => {
+      return new Response(JSON.stringify({ code: 0, data: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+    });
+
+    await route.GET(
+      nextBFFRequest(sealed, "GET", undefined, "", {}, "?favorite=true"),
+      { params: { path: [] } },
+    );
+    await route.POST(nextBFFRequest(sealed, "POST"), {
+      params: { path: ["88", "favorite"] },
+    });
+    await route.DELETE(nextBFFRequest(sealed, "DELETE"), {
+      params: { path: ["88", "favorite"] },
+    });
+    await route.POST(nextBFFRequest(sealed, "POST"), {
+      params: { path: ["88", "use"] },
+    });
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://sub2api.internal/api/v1/nextchat/image-prompts?favorite=true",
+      "https://sub2api.internal/api/v1/nextchat/image-prompts/88/favorite",
+      "https://sub2api.internal/api/v1/nextchat/image-prompts/88/favorite",
+      "https://sub2api.internal/api/v1/nextchat/image-prompts/88/use",
+    ]);
+    expect(
+      (fetchMock.mock.calls[0][1] as RequestInit).headers,
+    ).toMatchObject({
+      "X-NextChat-User-ID": "42",
+      "X-NextChat-API-Key-ID": "7",
+    });
+  });
+
   test("image studio catch-all route forwards generate JSON bodies", async () => {
     const managed = await import("../app/api/sub2api-managed");
     const route = await import(
@@ -450,9 +541,11 @@ function nextBFFRequest(
   contentType?: string,
   body = "",
   headers: Record<string, string> = {},
+  search = "",
 ) {
   return {
     method,
+    nextUrl: { search },
     headers: new Headers(
       contentType ? { "Content-Type": contentType, ...headers } : headers,
     ),

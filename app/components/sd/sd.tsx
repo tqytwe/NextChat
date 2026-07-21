@@ -23,7 +23,11 @@ import CopyIcon from "@/app/icons/copy.svg";
 import DownloadIcon from "@/app/icons/download.svg";
 import PromptIcon from "@/app/icons/prompt.svg";
 import ResetIcon from "@/app/icons/reload.svg";
-import { isSub2APIManagedImageExpired, useSdStore } from "@/app/store/sd";
+import {
+  isSub2APIImageStudioDrawActive,
+  isSub2APIManagedImageExpired,
+  useSdStore,
+} from "@/app/store/sd";
 import LoadingIcon from "@/app/icons/three-dots.svg";
 import ErrorIcon from "@/app/icons/delete.svg";
 import SDIcon from "@/app/icons/sd.svg";
@@ -72,7 +76,13 @@ function getSdTaskStatus(item: any) {
     <p className={styles["line-1"]} title={item.error} style={{ color: color }}>
       <span>
         {Locale.Sd.Status.Name}: {s}
+        {item.sub2api_status && item.sub2api_status !== item.status
+          ? ` · ${item.sub2api_status}`
+          : ""}
       </span>
+      {item.sync_deferred && (
+        <span className="clickable">- 同步暂缓：{item.sync_error}</span>
+      )}
       {item.status === "error" && (
         <span
           className="clickable"
@@ -236,6 +246,8 @@ export function Sd() {
                 visibleSdImages.map((item: any) => {
                   const managedExpired =
                     managedMode && isSub2APIManagedImageExpired(item);
+                  const managedActive =
+                    managedMode && isSub2APIImageStudioDrawActive(item);
                   const managedImageSources = managedMode
                     ? getManagedImageSources(item)
                     : [];
@@ -428,8 +440,10 @@ export function Sd() {
                                   text="下载"
                                   icon={<DownloadIcon />}
                                   onClick={() =>
-                                    downloadManagedImage(item, (count) =>
+                                    void downloadManagedImage(item, (count) =>
                                       showToast(`已开始下载 ${count} 张图片`),
+                                    ).catch((error: any) =>
+                                      showToast(error.message || "下载失败"),
                                     )
                                   }
                                 />
@@ -438,9 +452,31 @@ export function Sd() {
                               text={Locale.Sd.Actions.Retry}
                               icon={<ResetIcon />}
                               onClick={() => {
+                                let retryModel = item.model;
+                                let retryModelName = item.model_name;
+                                if (managedMode) {
+                                  if (sdStore.sub2apiImageStudioModelsLoading) {
+                                    showToast("图片模型正在加载");
+                                    return;
+                                  }
+                                  const modelCapability =
+                                    sdStore.sub2apiImageStudioModels.find(
+                                      (model) => model.id === item.model,
+                                    );
+                                  if (!modelCapability) {
+                                    showToast(
+                                      "当前分组不支持该图片模型，请切换到兼容分组后重试",
+                                    );
+                                    return;
+                                  }
+                                  retryModel = modelCapability.id;
+                                  retryModelName =
+                                    modelCapability.display_name ||
+                                    modelCapability.id;
+                                }
                                 const reqData = {
-                                  model: item.model,
-                                  model_name: item.model_name,
+                                  model: retryModel,
+                                  model_name: retryModelName,
                                   status: "wait",
                                   params: { ...item.params },
                                   created_at: new Date().toLocaleString(),
@@ -450,7 +486,11 @@ export function Sd() {
                               }}
                             />
                             <ChatAction
-                              text={Locale.Sd.Actions.Delete}
+                              text={
+                                managedActive
+                                  ? "取消"
+                                  : Locale.Sd.Actions.Delete
+                              }
                               icon={<DeleteIcon />}
                               onClick={async () => {
                                 if (
@@ -458,9 +498,15 @@ export function Sd() {
                                 ) {
                                   try {
                                     if (managedMode && item.job_id) {
-                                      await sdStore.deleteSub2APIImageStudioJob(
-                                        item.job_id,
-                                      );
+                                      if (managedActive) {
+                                        await sdStore.cancelSub2APIImageStudioJob(
+                                          item.job_id,
+                                        );
+                                      } else {
+                                        await sdStore.deleteSub2APIImageStudioJob(
+                                          item.job_id,
+                                        );
+                                      }
                                       return;
                                     }
                                     await removeImage(item.img_data);

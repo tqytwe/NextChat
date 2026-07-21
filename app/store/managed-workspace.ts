@@ -78,7 +78,9 @@ export type ManagedWorkspaceBootstrap = {
   };
   retention: {
     text_session_days?: number;
+    image_job_days?: number;
     image_asset_hours?: number;
+    image_reference_hours?: number;
     server_chat_log?: boolean;
   };
 };

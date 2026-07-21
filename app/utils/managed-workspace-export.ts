@@ -1,15 +1,20 @@
 import JSZip from "jszip";
 import { StoreKey } from "../constant";
 import {
+  fetchManagedImageAssetBlob,
+  ManagedImageAssetError,
+} from "./managed-image-studio-ui";
+import {
   AppState,
   getLocalAppState,
   mergeAppState,
   setLocalAppState,
 } from "./sync";
 
-export const MANAGED_WORKSPACE_EXPORT_VERSION = 1;
+export const MANAGED_WORKSPACE_EXPORT_VERSION = 2;
 export const MANAGED_WORKSPACE_EXPORT_FILENAME = "workspace-export.zip";
 export const MANAGED_IMAGE_EXPIRED_LABEL = "图片已过期";
+export const MANAGED_IMAGE_UNAVAILABLE_LABEL = "图片不可用";
 
 type ManagedImageExportEntry = {
   draw_id: string;
@@ -23,6 +28,7 @@ type ManagedImageExportEntry = {
   expires_at?: string;
   expired: boolean;
   archived: boolean;
+  unavailable?: boolean;
   file?: string;
   source_url?: string;
   error?: string;
@@ -32,8 +38,10 @@ export type ManagedWorkspaceExportMetadata = {
   version: number;
   exported_at: string;
   retention: {
-    text_session_days: 7;
-    image_asset_hours: 24;
+    text_session_days: number;
+    image_job_days?: number;
+    image_asset_hours: number;
+    image_reference_hours?: number;
   };
   files: {
     chat_json: "chat.json";
@@ -65,7 +73,9 @@ export async function buildManagedWorkspaceExportPackage(
     exported_at: now.toISOString(),
     retention: {
       text_session_days: 7,
+      image_job_days: 7,
       image_asset_hours: 24,
+      image_reference_hours: 24,
     },
     files: {
       chat_json: "chat.json",
@@ -128,10 +138,35 @@ export function normalizeImportedState(
     const archivedImages = imageEntries.filter(
       (image) => image.file && imageDataURLs[image.file],
     );
-    const expired = imageEntries.length > 0 && archivedImages.length === 0;
+    const firstArchivedImage = archivedImages
+      .slice()
+      .sort((left, right) => left.asset_index - right.asset_index)[0];
+    const expired =
+      imageEntries.length > 0 &&
+      archivedImages.length === 0 &&
+      imageEntries.every((image) => image.expired);
+    const unavailable =
+      imageEntries.length > 0 &&
+      archivedImages.length === 0 &&
+      imageEntries.some((image) => image.unavailable);
+    const partialUnavailable =
+      archivedImages.length > 0 &&
+      imageEntries.some(
+        (image) => !image.archived && (image.unavailable || image.expired),
+      );
     const nextItem = {
       ...item,
-      image_asset_expired: !!(expired || item.image_asset_expired),
+      image_asset_expired: !!(
+        expired ||
+        (archivedImages.length > 0 &&
+          imageEntries.some((image) => image.expired)) ||
+        item.image_asset_expired
+      ),
+      image_asset_unavailable: !!(
+        unavailable ||
+        partialUnavailable ||
+        item.image_asset_unavailable
+      ),
       image_asset_archived: !!(
         archivedImages.length > 0 || item.image_asset_archived
       ),
@@ -139,32 +174,92 @@ export function normalizeImportedState(
 
     if (archivedImages.length > 0) {
       nextItem.status = item.status === "expired" ? "success" : item.status;
-      nextItem.img_data = imageDataURLs[archivedImages[0].file as string];
-      nextItem.assets = (item.assets ?? archivedImages).map(
-        (asset: any, index: number) => {
-          const image = archivedImages[index];
-          if (!image?.file) return asset;
-          const dataURL = imageDataURLs[image.file];
-          return {
-            ...asset,
-            id: asset?.id || image.asset_id || `${item.id}-${index}`,
-            url: dataURL,
-            preview_url: dataURL,
-            thumbnail_url: dataURL,
-            download_url: dataURL,
-          };
-        },
+      nextItem.img_data =
+        imageDataURLs[firstArchivedImage.file as string] || nextItem.img_data;
+      nextItem.assets = mergeImportedImageAssets(
+        item,
+        imageEntries,
+        imageDataURLs,
       );
     } else if (expired) {
       nextItem.status = "expired";
       nextItem.img_data = "";
       nextItem.error = MANAGED_IMAGE_EXPIRED_LABEL;
+    } else if (unavailable) {
+      nextItem.status = item.status === "success" ? "error" : item.status;
+      nextItem.img_data = "";
+      nextItem.error =
+        imageEntries.find((image) => image.error)?.error ||
+        MANAGED_IMAGE_UNAVAILABLE_LABEL;
     }
 
     return nextItem;
   });
 
   return state;
+}
+
+function mergeImportedImageAssets(
+  item: any,
+  imageEntries: ManagedImageExportEntry[],
+  imageDataURLs: Record<string, string>,
+) {
+  const baseAssets =
+    Array.isArray(item.assets) && item.assets.length > 0
+      ? item.assets
+      : imageEntries.map((image, index) => ({
+          id: image.asset_id || `${item.id}-${index}`,
+        }));
+  return baseAssets.map((asset: any, index: number) => {
+    const image = findImportedImageEntryForAsset(imageEntries, asset, index);
+    if (!image) return asset;
+    if (image.file && imageDataURLs[image.file]) {
+      const dataURL = imageDataURLs[image.file];
+      return {
+        ...asset,
+        id: asset?.id || image.asset_id || `${item.id}-${index}`,
+        url: dataURL,
+        preview_url: dataURL,
+        thumbnail_url: dataURL,
+        download_url: dataURL,
+        availability: "archived",
+      };
+    }
+    if (image.expired) {
+      return {
+        ...asset,
+        availability: "expired",
+        url: "",
+        preview_url: "",
+        thumbnail_url: "",
+        download_url: "",
+      };
+    }
+    if (image.unavailable) {
+      return {
+        ...asset,
+        availability: "unavailable",
+        url: "",
+        preview_url: "",
+        thumbnail_url: "",
+        download_url: "",
+      };
+    }
+    return asset;
+  });
+}
+
+function findImportedImageEntryForAsset(
+  imageEntries: ManagedImageExportEntry[],
+  asset: any,
+  index: number,
+) {
+  const assetID = String(asset?.id || "").trim();
+  if (assetID) {
+    const byID = imageEntries.find((image) => image.asset_id === assetID);
+    if (byID) return byID;
+  }
+  return imageEntries.find((image) => image.asset_index === index);
 }
 
 async function readManagedWorkspaceZip(file: File): Promise<ImportResult> {
@@ -220,33 +315,63 @@ async function addImageAssets(
       continue;
     }
 
+    const itemEntries: ManagedImageExportEntry[] = [];
     for (let index = 0; index < imageSources.length; index += 1) {
       const source = imageSources[index];
       const entry = buildImageMetadata(item, index, source, false);
       try {
-        const res = await fetch(source.url, {
-          credentials: "same-origin",
-          cache: "no-store",
+        const asset = await fetchManagedImageAssetBlob(source.url, {
+          kind: "image",
+          retries: 1,
         });
-        if (!res.ok) {
-          throw new Error(`image fetch failed: ${res.status}`);
-        }
-        const blob = await res.blob();
+        const blob = asset.blob;
         const file = `images/${safeFilePart(item.id)}-${safeFilePart(
           source.assetID || String(index + 1),
-        )}.${extensionForImage(blob.type, source.url)}`;
+        )}.${extensionForImage(asset.contentType || blob.type, source.url)}`;
         zip.file(file, blob);
         entry.file = file;
         entry.archived = true;
+        itemEntries.push(entry);
       } catch (error: any) {
-        entry.expired = true;
-        entry.archived = false;
-        entry.error = error?.message || "image asset unavailable";
-        markExportedItemExpired(item);
+        handleManagedWorkspaceExportAssetError(error, entry);
+        itemEntries.push(entry);
       }
-      metadata.images.push(entry);
+    }
+    if (itemEntries.length > 0 && itemEntries.every((image) => image.expired)) {
+      markExportedItemExpired(item);
+    } else if (
+      itemEntries.length > 0 &&
+      itemEntries.every((image) => image.unavailable)
+    ) {
+      markExportedItemUnavailable(item, itemEntries[0].error);
+    }
+    metadata.images.push(...itemEntries);
+  }
+}
+
+function handleManagedWorkspaceExportAssetError(
+  error: any,
+  entry: ManagedImageExportEntry,
+) {
+  const message = error?.message || "image asset unavailable";
+  if (error instanceof ManagedImageAssetError) {
+    if (error.status === 410 || error.code === "IMAGE_STUDIO_ASSET_EXPIRED") {
+      entry.expired = true;
+      entry.archived = false;
+      entry.error = message || MANAGED_IMAGE_EXPIRED_LABEL;
+      return;
+    }
+    if (error.status === 404) {
+      entry.unavailable = true;
+      entry.archived = false;
+      entry.error = message || MANAGED_IMAGE_UNAVAILABLE_LABEL;
+      return;
+    }
+    if (error.status === 401) {
+      throw new Error("登录已失效，请重新进入 NextChat 后再导出。");
     }
   }
+  throw new Error(`图片导出失败：${message}`);
 }
 
 function getImageSources(item: any) {
@@ -299,6 +424,12 @@ function markExportedItemExpired(item: any) {
   item.image_asset_expired = true;
   item.status = item.status === "success" ? "expired" : item.status;
   item.error = item.error || MANAGED_IMAGE_EXPIRED_LABEL;
+}
+
+function markExportedItemUnavailable(item: any, message?: string) {
+  item.image_asset_unavailable = true;
+  item.status = item.status === "success" ? "error" : item.status;
+  item.error = item.error || message || MANAGED_IMAGE_UNAVAILABLE_LABEL;
 }
 
 function buildManagedWorkspaceMarkdown(

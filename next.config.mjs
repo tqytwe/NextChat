@@ -1,4 +1,8 @@
 import webpack from "webpack";
+import cleanRoutesConfig from "./app/config/clean-routes.cjs";
+
+const { buildCleanHashRouteRedirects, getNextChatBasePath } =
+  cleanRoutesConfig;
 
 const mode = process.env.BUILD_MODE ?? "standalone";
 console.log("[Next] build mode", mode);
@@ -6,15 +10,7 @@ console.log("[Next] build mode", mode);
 const disableChunk = !!process.env.DISABLE_CHUNK || mode === "export";
 console.log("[Next] build with chunk: ", !disableChunk);
 
-const sub2apiManagedMode = ["1", "true", "yes", "on"].includes(
-  (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
-);
-const rawBasePath =
-  process.env.NEXTCHAT_BASE_PATH ?? (sub2apiManagedMode ? "/ai" : "");
-const basePath =
-  rawBasePath.trim() === "" || rawBasePath.trim() === "/"
-    ? ""
-    : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
+const basePath = getNextChatBasePath();
 console.log("[Next] base path", basePath || "/");
 
 /** @type {import('next').NextConfig} */
@@ -68,6 +64,8 @@ const CorsHeaders = [
 ];
 
 if (mode !== "export") {
+  nextConfig.redirects = async () => buildCleanHashRouteRedirects();
+
   nextConfig.headers = async () => {
     return [
       {
