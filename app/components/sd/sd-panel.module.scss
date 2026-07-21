@@ -22,6 +22,29 @@
     font-weight: normal;
     margin-top: 3px;
   }
+
+  .ctrl-textarea {
+    width: 100%;
+    max-width: 100%;
+    min-height: 92px;
+    max-height: 320px;
+    padding: 10px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  .prompt-textarea {
+    min-height: 132px;
+  }
+
+  .textarea-counter {
+    margin-top: 4px;
+    color: var(--black);
+    opacity: 0.62;
+    font-size: 12px;
+    text-align: right;
+  }
+
   textarea {
     appearance: none;
     border-radius: 10px;
@@ -105,6 +128,26 @@
   font-size: 12px;
   line-height: 1.4;
   word-break: break-word;
+}
+
+.model-capability-summary {
+  margin-top: 8px;
+  padding: 8px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--black);
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.advanced-param-toggle {
+  display: flex;
+
+  button {
+    width: 100%;
+  }
 }
 
 .managed-balance {

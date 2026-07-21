@@ -2,11 +2,68 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
+
+  &.sd-img-list-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 14px;
+    align-items: start;
+  }
+
+  &.sd-img-list-list {
+    gap: 0;
+  }
+
   .sd-img-item {
+    display: flex;
     width: 48%;
+
+    &.sd-img-item-gallery {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      padding: 10px;
+      border: var(--border-in-light);
+      border-radius: 8px;
+      background: var(--white);
+      box-sizing: border-box;
+
+      .sd-img-item-info {
+        margin-left: 0;
+        margin-top: 8px;
+      }
+
+      .pre-img,
+      .img {
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1 / 1;
+        min-height: 0;
+      }
+
+      .managed-img-grid {
+        width: 100%;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+
+        .img,
+        .asset-preview-compact {
+          width: 100%;
+          height: auto;
+          aspect-ratio: 1 / 1;
+          min-height: 0;
+        }
+      }
+    }
+
+    &.sd-img-item-list {
+      display: flex;
+      width: 48%;
+    }
+
     .sd-img-item-info {
       flex: 1;
       width: 100%;
+      margin-left: 10px;
       overflow: hidden;
       user-select: text;
       p {
@@ -130,6 +187,23 @@
   padding: 10px 0 16px;
 }
 
+.library-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+
+  select {
+    min-width: 116px;
+  }
+}
+
+.library-view-toggle {
+  display: flex;
+  gap: 6px;
+}
+
 .library-tabs {
   display: flex;
   gap: 8px;
@@ -138,6 +212,15 @@
   button {
     min-width: 0;
   }
+}
+
+.library-empty {
+  width: 100%;
+  padding: 18px 0;
+  color: var(--black);
+  opacity: 0.7;
+  font-size: 13px;
+  text-align: center;
 }
 
 .library-error {
@@ -157,6 +240,20 @@
     align-items: stretch;
   }
 
+  .library-controls {
+    width: 100%;
+    justify-content: stretch;
+
+    select {
+      flex: 1;
+      min-width: 0;
+    }
+
+    button {
+      min-width: 0;
+    }
+  }
+
   .library-tabs {
     width: 100%;
     display: grid;
@@ -164,8 +261,17 @@
   }
 
   .sd-img-list {
+    &.sd-img-list-gallery {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
     .sd-img-item {
       width: 100%;
+
+      &.sd-img-item-gallery {
+        padding: 8px;
+      }
     }
   }
 }

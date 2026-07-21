@@ -21,6 +21,8 @@ import { ChatAction } from "@/app/components/chat";
 import DeleteIcon from "@/app/icons/clear.svg";
 import CopyIcon from "@/app/icons/copy.svg";
 import DownloadIcon from "@/app/icons/download.svg";
+import ImageIcon from "@/app/icons/image.svg";
+import MenuIcon from "@/app/icons/menu.svg";
 import PromptIcon from "@/app/icons/prompt.svg";
 import ResetIcon from "@/app/icons/reload.svg";
 import {
@@ -37,6 +39,7 @@ import {
   showImageModal,
   showModal,
   showToast,
+  Select,
 } from "@/app/components/ui-lib";
 import { removeImage } from "@/app/utils/chat";
 import { SideBar } from "./sd-sidebar";
@@ -53,6 +56,9 @@ import {
   type ManagedImageItemStatusSummary,
   type ManagedImageSource,
 } from "@/app/utils/managed-image-studio-ui";
+
+type ImageStudioLibraryViewMode = "gallery" | "list";
+type ImageStudioLibrarySortMode = "newest" | "oldest" | "expires";
 
 function getSdTaskStatus(item: any) {
   let s: string;
@@ -219,6 +225,35 @@ function isLocalManagedImageURL(url: string) {
   return url.startsWith("data:") || url.startsWith("blob:");
 }
 
+function managedImageTimestamp(item: any, field: "created_at" | "expires_at") {
+  const primary = Date.parse(item?.[field] || "");
+  if (Number.isFinite(primary)) return primary;
+  const fallback = Date.parse(item?.created_at || "");
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function compareManagedImages(
+  left: any,
+  right: any,
+  sortMode: ImageStudioLibrarySortMode,
+) {
+  if (sortMode === "oldest") {
+    return (
+      managedImageTimestamp(left, "created_at") -
+      managedImageTimestamp(right, "created_at")
+    );
+  }
+  if (sortMode === "expires") {
+    const leftExpires = managedImageTimestamp(left, "expires_at") || Infinity;
+    const rightExpires = managedImageTimestamp(right, "expires_at") || Infinity;
+    return leftExpires - rightExpires;
+  }
+  return (
+    managedImageTimestamp(right, "created_at") -
+    managedImageTimestamp(left, "created_at")
+  );
+}
+
 function showManagedImageItemDetails(
   item: any,
   summary: ManagedImageItemStatusSummary,
@@ -257,29 +292,41 @@ export function Sd() {
   const config = useAppConfig();
   const scrollRef = useRef<HTMLDivElement>(null);
   const sdStore = useSdStore();
-  const sdImages = sdStore.draw ?? [];
+  const sdImages = useMemo(() => sdStore.draw ?? [], [sdStore.draw]);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [sortMode, setSortMode] =
+    useState<ImageStudioLibrarySortMode>("newest");
+  const [viewMode, setViewMode] =
+    useState<ImageStudioLibraryViewMode>("gallery");
   const isSd = location.pathname === Path.Sd;
+  const expiredManagedImages = useMemo(() => {
+    if (!managedMode) return [];
+    return sdImages.filter((item: any) => isSub2APIManagedImageExpired(item));
+  }, [managedMode, sdImages]);
 
   useEffect(() => {
     if (managedMode) {
-      void sdStore.fetchSub2APIImageStudioJobs();
+      void sdStore.fetchSub2APIImageStudioJobs({ includeHistory: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managedMode]);
 
   const visibleSdImages = useMemo(() => {
-    return sdImages.filter((item: any) => {
-      if (statusFilter === "all") return true;
-      if (statusFilter === "expired") {
-        return managedMode && isSub2APIManagedImageExpired(item);
-      }
-      if (statusFilter === "running") {
-        return ["wait", "running"].includes(item.status);
-      }
-      return item.status === statusFilter;
-    });
-  }, [managedMode, sdImages, statusFilter]);
+    return sdImages
+      .filter((item: any) => {
+        const expired = managedMode && isSub2APIManagedImageExpired(item);
+        if (statusFilter === "expired") return expired;
+        if (expired) return false;
+        if (statusFilter === "all") return true;
+        if (statusFilter === "running") {
+          return ["wait", "running"].includes(item.status);
+        }
+        return item.status === statusFilter;
+      })
+      .sort((left: any, right: any) =>
+        managedMode ? compareManagedImages(left, right, sortMode) : 0,
+      );
+  }, [managedMode, sdImages, sortMode, statusFilter]);
 
   return (
     <>
@@ -356,27 +403,82 @@ export function Sd() {
                     />
                   ))}
                 </div>
-                <IconButton
-                  icon={<ResetIcon />}
-                  text={
-                    sdStore.sub2apiImageStudioJobsLoading ? "同步中" : "刷新"
-                  }
-                  onClick={async () => {
-                    const jobs = await sdStore.fetchSub2APIImageStudioJobs();
-                    const error =
-                      useSdStore.getState().sub2apiImageStudioJobsError;
-                    showModal({
-                      title: "创作库",
-                      children: (
-                        <div>
-                          {error ? error : `已同步 ${jobs.length} 个图片任务`}
-                        </div>
-                      ),
-                    });
-                  }}
-                  shadow
-                  disabled={sdStore.sub2apiImageStudioJobsLoading}
-                />
+                <div className={styles["library-controls"]}>
+                  <Select
+                    aria-label="创作库排序"
+                    value={sortMode}
+                    onChange={(event) =>
+                      setSortMode(
+                        event.currentTarget.value as ImageStudioLibrarySortMode,
+                      )
+                    }
+                  >
+                    <option value="newest">最新优先</option>
+                    <option value="oldest">最早优先</option>
+                    <option value="expires">即将过期</option>
+                  </Select>
+                  <div className={styles["library-view-toggle"]}>
+                    <IconButton
+                      icon={<ImageIcon />}
+                      title="画廊"
+                      type={viewMode === "gallery" ? "primary" : null}
+                      onClick={() => setViewMode("gallery")}
+                      shadow
+                    />
+                    <IconButton
+                      icon={<MenuIcon />}
+                      title="列表"
+                      type={viewMode === "list" ? "primary" : null}
+                      onClick={() => setViewMode("list")}
+                      shadow
+                    />
+                  </div>
+                  {expiredManagedImages.length > 0 && (
+                    <IconButton
+                      icon={<DeleteIcon />}
+                      text="清理过期"
+                      onClick={async () => {
+                        if (!(await showConfirm("清理已过期的图片任务？"))) {
+                          return;
+                        }
+                        const count =
+                          await sdStore.clearExpiredSub2APIImageStudioJobs();
+                        const error =
+                          useSdStore.getState().sub2apiImageStudioJobsError;
+                        showToast(error || `已清理 ${count} 个过期任务`);
+                      }}
+                      shadow
+                      disabled={sdStore.sub2apiImageStudioJobsLoading}
+                    />
+                  )}
+                  <IconButton
+                    icon={<ResetIcon />}
+                    text={
+                      sdStore.sub2apiImageStudioJobsLoading
+                        ? "同步中"
+                        : sdStore.sub2apiImageStudioHistoryLoaded
+                        ? "刷新创作库"
+                        : "加载创作库"
+                    }
+                    onClick={async () => {
+                      const jobs = await sdStore.fetchSub2APIImageStudioJobs({
+                        includeHistory: true,
+                      });
+                      const error =
+                        useSdStore.getState().sub2apiImageStudioJobsError;
+                      showModal({
+                        title: "创作库",
+                        children: (
+                          <div>
+                            {error ? error : `已同步 ${jobs.length} 个图片任务`}
+                          </div>
+                        ),
+                      });
+                    }}
+                    shadow
+                    disabled={sdStore.sub2apiImageStudioJobsLoading}
+                  />
+                </div>
               </div>
             )}
             {managedMode && sdStore.sub2apiImageStudioJobsError && (
@@ -384,7 +486,12 @@ export function Sd() {
                 {sdStore.sub2apiImageStudioJobsError}
               </div>
             )}
-            <div className={styles["sd-img-list"]}>
+            <div
+              className={clsx(
+                styles["sd-img-list"],
+                managedMode && styles[`sd-img-list-${viewMode}`],
+              )}
+            >
               {visibleSdImages.length > 0 ? (
                 visibleSdImages.map((item: any) => {
                   const managedExpired =
@@ -400,8 +507,10 @@ export function Sd() {
                   return (
                     <div
                       key={item.id}
-                      style={{ display: "flex" }}
-                      className={styles["sd-img-item"]}
+                      className={clsx(
+                        styles["sd-img-item"],
+                        managedMode && styles[`sd-img-item-${viewMode}`],
+                      )}
                     >
                       {managedExpired ? (
                         <div
@@ -468,10 +577,7 @@ export function Sd() {
                           <LoadingIcon />
                         </div>
                       )}
-                      <div
-                        style={{ marginLeft: "10px" }}
-                        className={styles["sd-img-item-info"]}
-                      >
+                      <div className={styles["sd-img-item-info"]}>
                         <p className={styles["line-1"]}>
                           {Locale.SdPanel.Prompt}:{" "}
                           <span
@@ -601,13 +707,22 @@ export function Sd() {
                                 <ChatAction
                                   text="下载"
                                   icon={<DownloadIcon />}
-                                  onClick={() =>
-                                    void downloadManagedImage(item, (count) =>
-                                      showToast(`已开始下载 ${count} 张图片`),
-                                    ).catch((error: any) =>
-                                      showToast(error.message || "下载失败"),
-                                    )
-                                  }
+                                  onClick={async () => {
+                                    showToast("正在准备下载");
+                                    try {
+                                      const result =
+                                        await downloadManagedImage(item);
+                                      showToast(
+                                        result.kind === "zip"
+                                          ? `已开始下载 ZIP（${result.count} 张图片）`
+                                          : `已开始下载 ${result.count} 张图片`,
+                                      );
+                                    } catch (error: any) {
+                                      showToast(
+                                        getManagedImageAssetMessage(error),
+                                      );
+                                    }
+                                  }}
                                 />
                               )}
                             <ChatAction
@@ -664,18 +779,25 @@ export function Sd() {
                                         await sdStore.cancelSub2APIImageStudioJob(
                                           item.job_id,
                                         );
+                                        showToast("已取消任务");
                                       } else {
                                         await sdStore.deleteSub2APIImageStudioJob(
                                           item.job_id,
                                         );
+                                        showToast("已删除任务");
                                       }
                                       return;
                                     }
                                     await removeImage(item.img_data);
-                                    sdStore.draw = sdImages.filter(
-                                      (i: any) => i.id !== item.id,
-                                    );
+                                    useSdStore.setState({
+                                      draw: useSdStore
+                                        .getState()
+                                        .draw.filter(
+                                          (i: any) => i.id !== item.id,
+                                        ),
+                                    } as any);
                                     sdStore.getNextId();
+                                    showToast("已删除记录");
                                   } catch (error: any) {
                                     showToast(error.message || "删除失败");
                                   }
@@ -689,8 +811,14 @@ export function Sd() {
                   );
                 })
               ) : (
-                <div>
-                  {managedMode ? "暂无创作记录" : Locale.Sd.EmptyRecord}
+                <div className={styles["library-empty"]}>
+                  {managedMode
+                    ? sdStore.sub2apiImageStudioHistoryLoaded
+                      ? statusFilter === "expired"
+                        ? "没有已过期任务"
+                        : "暂无创作记录"
+                      : "当前没有进行中的图片任务"
+                    : Locale.Sd.EmptyRecord}
                 </div>
               )}
             </div>

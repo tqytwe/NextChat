@@ -22,8 +22,11 @@ import clsx from "clsx";
 import UploadIcon from "@/app/icons/upload.svg";
 import DeleteIcon from "@/app/icons/clear.svg";
 import LoadingIcon from "@/app/icons/three-dots.svg";
+import SettingsIcon from "@/app/icons/settings.svg";
 import { showToast } from "@/app/components/ui-lib";
 import { applyManagedWorkspaceModelsToStores } from "@/app/utils/managed-workspace-models";
+
+const MANAGED_IMAGE_PROMPT_MAX_LENGTH = 2000;
 
 export const params = [
   {
@@ -156,6 +159,7 @@ export const sub2APIImageStudioParams = [
     placeholder: "描述你要生成的图片",
     required: true,
     rows: 5,
+    maxLength: MANAGED_IMAGE_PROMPT_MAX_LENGTH,
   },
   {
     name: "尺寸",
@@ -288,6 +292,16 @@ export function getSub2APIImageStudioParams(
       placeholder: "描述你要生成的图片",
       required: true,
       rows: 5,
+      maxLength: MANAGED_IMAGE_PROMPT_MAX_LENGTH,
+    },
+    {
+      name: "专业提示词",
+      value: "expert_prompt",
+      type: "textarea",
+      placeholder: "可选：完整专业提示词",
+      rows: 6,
+      maxLength: MANAGED_IMAGE_PROMPT_MAX_LENGTH,
+      advanced: true,
     },
   ];
 
@@ -369,6 +383,7 @@ export function getSub2APIImageStudioParams(
       value: "background",
       type: "select",
       default: model.default_background || backgrounds[0],
+      advanced: true,
       options: backgrounds.map((background) => ({
         name: backgroundLabel(background),
         value: background,
@@ -381,6 +396,7 @@ export function getSub2APIImageStudioParams(
       value: "output_format",
       type: "select",
       default: model.default_output_format || outputFormats[0],
+      advanced: true,
       options: outputFormats.map((format) => ({
         name: format.toUpperCase(),
         value: format,
@@ -393,6 +409,7 @@ export function getSub2APIImageStudioParams(
       value: "input_fidelity",
       type: "select",
       default: model.default_input_fidelity || inputFidelities[0],
+      advanced: true,
       options: inputFidelities.map((fidelity) => ({
         name: qualityLabel(fidelity),
         value: fidelity,
@@ -415,6 +432,7 @@ export function getSub2APIImageStudioParams(
       default: "",
       min: model.output_compression.min ?? 0,
       max: model.output_compression.max ?? 100,
+      advanced: true,
     });
   }
 
@@ -521,6 +539,32 @@ function backgroundLabel(value: string) {
   }
 }
 
+function modelCapabilitySummary(model?: Sub2APIImageStudioModel) {
+  if (!model) return "";
+  const sizingKind = normalizeImageStudioSizingKind(model);
+  const sizes =
+    sizingKind === "aspect_resolution"
+      ? [
+          ...(model.supported_aspect_ratios ?? []),
+          ...(model.supported_resolutions ?? []).map((item) =>
+            item.toUpperCase(),
+          ),
+        ]
+      : model.supported_sizes ?? [];
+  const formats = model.supported_output_formats ?? [];
+  const referenceLimit = getSub2APIImageStudioReferenceLimit(model);
+  return [
+    sizes.length > 0 ? `尺寸 ${sizes.join(" / ")}` : "",
+    formats.length > 0
+      ? `格式 ${formats.map((f) => f.toUpperCase()).join(" / ")}`
+      : "",
+    referenceLimit > 0 ? `引用图 ${referenceLimit}` : "无引用图",
+    model.capability_profile_id ? `能力 ${model.capability_profile_id}` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export function ControlParamItem(props: {
   title: string;
   subTitle?: React.ReactNode;
@@ -552,114 +596,131 @@ export function ControlParam(props: {
   columns: any[];
   data: any;
   onChange: (field: string, val: any) => void;
+  showAdvanced?: boolean;
 }) {
   return (
     <>
-      {props.columns?.map((item) => {
-        let element: null | JSX.Element;
-        switch (item.type) {
-          case "textarea":
-            element = (
-              <ControlParamItem
-                title={item.name}
-                subTitle={item.sub}
-                required={item.required}
-              >
-                <textarea
-                  rows={item.rows || 3}
-                  style={{ maxWidth: "100%", width: "100%", padding: "10px" }}
-                  placeholder={item.placeholder}
-                  onChange={(e) => {
-                    props.onChange(item.value, e.currentTarget.value);
-                  }}
-                  value={props.data[item.value]}
-                ></textarea>
-              </ControlParamItem>
-            );
-            break;
-          case "select":
-            element = (
-              <ControlParamItem
-                title={item.name}
-                subTitle={item.sub}
-                required={item.required}
-              >
-                <Select
-                  aria-label={item.name}
-                  value={props.data[item.value]}
-                  onChange={(e) => {
-                    props.onChange(item.value, e.currentTarget.value);
-                  }}
+      {props.columns
+        ?.filter((item) => props.showAdvanced || !item.advanced)
+        .map((item) => {
+          let element: null | JSX.Element;
+          switch (item.type) {
+            case "textarea": {
+              const textValue = String(props.data[item.value] ?? "");
+              element = (
+                <ControlParamItem
+                  title={item.name}
+                  subTitle={item.sub}
+                  required={item.required}
                 >
-                  {item.options.map((opt: any) => {
-                    return (
-                      <option value={opt.value} key={opt.value}>
-                        {opt.name}
-                      </option>
-                    );
-                  })}
-                </Select>
-              </ControlParamItem>
-            );
-            break;
-          case "number":
-            element = (
-              <ControlParamItem
-                title={item.name}
-                subTitle={item.sub}
-                required={item.required}
-              >
-                <input
-                  aria-label={item.name}
-                  type="number"
-                  min={item.min}
-                  max={item.max}
-                  value={props.data[item.value] || 0}
-                  onChange={(e) => {
-                    props.onChange(item.value, parseInt(e.currentTarget.value));
-                  }}
-                />
-              </ControlParamItem>
-            );
-            break;
-          case "readonly":
-            element = (
-              <ControlParamItem
-                title={item.name}
-                subTitle={item.sub}
-                required={item.required}
-              >
-                <input
-                  aria-label={item.name}
-                  type="text"
-                  value={props.data[item.value] || item.default || ""}
-                  readOnly
-                  style={{ maxWidth: "100%", width: "100%" }}
-                />
-              </ControlParamItem>
-            );
-            break;
-          default:
-            element = (
-              <ControlParamItem
-                title={item.name}
-                subTitle={item.sub}
-                required={item.required}
-              >
-                <input
-                  aria-label={item.name}
-                  type="text"
-                  value={props.data[item.value]}
-                  style={{ maxWidth: "100%", width: "100%" }}
-                  onChange={(e) => {
-                    props.onChange(item.value, e.currentTarget.value);
-                  }}
-                />
-              </ControlParamItem>
-            );
-        }
-        return <div key={item.value}>{element}</div>;
-      })}
+                  <textarea
+                    rows={item.rows || 3}
+                    maxLength={item.maxLength}
+                    className={clsx(
+                      styles["ctrl-textarea"],
+                      item.value === "prompt" && styles["prompt-textarea"],
+                    )}
+                    placeholder={item.placeholder}
+                    onChange={(e) => {
+                      props.onChange(item.value, e.currentTarget.value);
+                    }}
+                    value={textValue}
+                  ></textarea>
+                  {item.maxLength && (
+                    <div className={styles["textarea-counter"]}>
+                      {textValue.length}/{item.maxLength}
+                    </div>
+                  )}
+                </ControlParamItem>
+              );
+              break;
+            }
+            case "select":
+              element = (
+                <ControlParamItem
+                  title={item.name}
+                  subTitle={item.sub}
+                  required={item.required}
+                >
+                  <Select
+                    aria-label={item.name}
+                    value={props.data[item.value]}
+                    onChange={(e) => {
+                      props.onChange(item.value, e.currentTarget.value);
+                    }}
+                  >
+                    {item.options.map((opt: any) => {
+                      return (
+                        <option value={opt.value} key={opt.value}>
+                          {opt.name}
+                        </option>
+                      );
+                    })}
+                  </Select>
+                </ControlParamItem>
+              );
+              break;
+            case "number":
+              element = (
+                <ControlParamItem
+                  title={item.name}
+                  subTitle={item.sub}
+                  required={item.required}
+                >
+                  <input
+                    aria-label={item.name}
+                    type="number"
+                    min={item.min}
+                    max={item.max}
+                    value={props.data[item.value] || 0}
+                    onChange={(e) => {
+                      props.onChange(
+                        item.value,
+                        parseInt(e.currentTarget.value),
+                      );
+                    }}
+                  />
+                </ControlParamItem>
+              );
+              break;
+            case "readonly":
+              element = (
+                <ControlParamItem
+                  title={item.name}
+                  subTitle={item.sub}
+                  required={item.required}
+                >
+                  <input
+                    aria-label={item.name}
+                    type="text"
+                    value={props.data[item.value] || item.default || ""}
+                    readOnly
+                    style={{ maxWidth: "100%", width: "100%" }}
+                  />
+                </ControlParamItem>
+              );
+              break;
+            default:
+              element = (
+                <ControlParamItem
+                  title={item.name}
+                  subTitle={item.sub}
+                  required={item.required}
+                >
+                  <input
+                    aria-label={item.name}
+                    type="text"
+                    value={props.data[item.value]}
+                    style={{ maxWidth: "100%", width: "100%" }}
+                    onChange={(e) => {
+                      props.onChange(item.value, e.currentTarget.value);
+                    }}
+                  />
+                </ControlParamItem>
+              );
+          }
+          return <div key={item.value}>{element}</div>;
+        })}
     </>
   );
 }
@@ -724,6 +785,7 @@ export function SdPanel() {
   const managedGroups = managedBootstrap?.models?.groups ?? [];
   const currentManagedGroup = getManagedWorkspaceCurrentGroup(managedBootstrap);
   const [showGroupSelector, setShowGroupSelector] = useState(false);
+  const [showAdvancedParams, setShowAdvancedParams] = useState(false);
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const currentModel = sdStore.currentModel;
   const setCurrentModel = sdStore.setCurrentModel;
@@ -759,11 +821,12 @@ export function SdPanel() {
     managedMode && canSub2APIImageStudioUseReferences(activeSub2APIModel);
   const referenceLimit =
     getSub2APIImageStudioReferenceLimit(activeSub2APIModel);
+  const capabilitySummary = modelCapabilitySummary(activeSub2APIModel);
 
   useEffect(() => {
     if (managedMode) {
       void sdStore.fetchSub2APIImageStudioModels();
-      void sdStore.fetchSub2APIImageStudioJobs();
+      void sdStore.fetchSub2APIImageStudioJobs({ includeHistory: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managedMode, currentManagedGroup?.id]);
@@ -810,7 +873,7 @@ export function SdPanel() {
     sdStore.resetSub2APIImageStudioForGroupSwitch();
     applyManagedWorkspaceModelsToStores(bootstrap);
     const models = await sdStore.fetchSub2APIImageStudioModels();
-    await sdStore.fetchSub2APIImageStudioJobs();
+    await sdStore.fetchSub2APIImageStudioJobs({ includeHistory: false });
     const group = getManagedWorkspaceCurrentGroup(bootstrap);
     showToast(
       models.length > 0
@@ -924,6 +987,11 @@ export function SdPanel() {
                 当前分组暂无图片模型
               </span>
             )}
+          {managedMode && capabilitySummary && (
+            <div className={styles["model-capability-summary"]}>
+              {capabilitySummary}
+            </div>
+          )}
         </div>
       </ControlParamItem>
       {managedMode && canUploadReferences && (
@@ -984,10 +1052,23 @@ export function SdPanel() {
           </div>
         </ControlParamItem>
       )}
+      {managedMode && (
+        <ControlParamItem title="参数模式">
+          <div className={styles["advanced-param-toggle"]}>
+            <IconButton
+              icon={<SettingsIcon />}
+              text={showAdvancedParams ? "基础参数" : "高级参数"}
+              onClick={() => setShowAdvancedParams(!showAdvancedParams)}
+              shadow
+            />
+          </div>
+        </ControlParamItem>
+      )}
       <ControlParam
         columns={columns}
         data={params}
         onChange={handleValueChange}
+        showAdvanced={showAdvancedParams}
       ></ControlParam>
     </>
   );

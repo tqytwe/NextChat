@@ -43,6 +43,12 @@ export type ManagedImageAssetBlob = {
   filename?: string;
 };
 
+export type ManagedImageDownloadResult = {
+  kind: "image" | "zip";
+  count: number;
+  filenames: string[];
+};
+
 export function getImageStudioBackPath(managedMode: boolean) {
   return managedMode ? Path.Chat : Path.Home;
 }
@@ -50,6 +56,7 @@ export function getImageStudioBackPath(managedMode: boolean) {
 export function getManagedImageSources(item: any): ManagedImageSource[] {
   const assets = (item.assets ?? []) as any[];
   const sources: ManagedImageSource[] = assets
+    .filter((asset) => !isManagedImageAssetRecordExpired(asset))
     .map((asset, index) => ({
       id: asset.id || `${item.id}-${index}`,
       preview: asset.preview_url || asset.url || asset.download_url,
@@ -67,6 +74,14 @@ export function getManagedImageSources(item: any): ManagedImageSource[] {
   }
 
   return sources;
+}
+
+function isManagedImageAssetRecordExpired(asset: any, now = Date.now()) {
+  const availability = String(asset?.availability || "").toLowerCase();
+  if (availability === "expired" || availability === "purged") return true;
+  if (asset?.purged_at) return true;
+  const expiresAt = Date.parse(asset?.expires_at || "");
+  return Number.isFinite(expiresAt) && expiresAt <= now;
 }
 
 export function getManagedImageAssetMessage(error: any) {
@@ -125,12 +140,17 @@ export function summarizeManagedImageItems(
 
 export async function downloadManagedImage(
   item: any,
-  onMultiDownload?: (count: number) => void,
-) {
+  onDownload?: (count: number) => void,
+): Promise<ManagedImageDownloadResult> {
   const sources = getManagedImageSources(item).filter(
     (source) => !!source.download,
   );
-  if (sources.length === 0) return;
+  if (sources.length === 0) {
+    throw new ManagedImageAssetError("图片不可用", {
+      status: 404,
+      retryable: false,
+    });
+  }
 
   if (sources.length > 1 && item.job_id) {
     const zip = await fetchManagedImageAssetBlob(
@@ -141,28 +161,38 @@ export async function downloadManagedImage(
       ),
       { kind: "zip" },
     );
-    triggerManagedBlobDownload(
-      zip.blob,
-      zip.filename || `${safeManagedFilenamePart(item.job_id)}.zip`,
-    );
-    onMultiDownload?.(sources.length);
-    return;
+    const filename =
+      zip.filename || `${safeManagedFilenamePart(item.job_id)}.zip`;
+    triggerManagedBlobDownload(zip.blob, filename);
+    onDownload?.(sources.length);
+    return {
+      kind: "zip",
+      count: sources.length,
+      filenames: [filename],
+    };
   }
 
+  const filenames: string[] = [];
   for (let index = 0; index < sources.length; index += 1) {
     const source = sources[index];
     const image = await fetchManagedImageAssetBlob(source.download as string, {
       kind: "image",
     });
-    triggerManagedBlobDownload(
-      image.blob,
+    const filename =
       image.filename ||
-        source.filename ||
-        `${safeManagedFilenamePart(item.job_id || item.id || "image")}${
-          sources.length > 1 ? `-${index + 1}` : ""
-        }.${extensionForManagedImage(image.contentType, source.download)}`,
-    );
+      source.filename ||
+      `${safeManagedFilenamePart(item.job_id || item.id || "image")}${
+        sources.length > 1 ? `-${index + 1}` : ""
+      }.${extensionForManagedImage(image.contentType, source.download)}`;
+    triggerManagedBlobDownload(image.blob, filename);
+    filenames.push(filename);
   }
+  onDownload?.(sources.length);
+  return {
+    kind: "image",
+    count: sources.length,
+    filenames,
+  };
 }
 
 export async function fetchManagedImageAssetBlob(

@@ -210,10 +210,12 @@ export function SideBar(props: { className?: string }) {
                   text={shouldNarrow ? undefined : "刷新任务"}
                   shadow
                   onClick={async () => {
-                    const jobs = await sdStore.fetchSub2APIImageStudioJobs();
+                    const jobs = await sdStore.fetchSub2APIImageStudioJobs({
+                      includeHistory: false,
+                    });
                     const error =
                       useSdStore.getState().sub2apiImageStudioJobsError;
-                    showToast(error || `已同步 ${jobs.length} 个图片任务`);
+                    showToast(error || `已同步 ${jobs.length} 个进行中任务`);
                   }}
                 />
               </div>

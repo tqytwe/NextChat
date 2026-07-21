@@ -6,6 +6,7 @@ import {
   isSub2APIManagedImageExpired,
   mergeSub2APIImageStudioDraws,
   normalizeSub2APIImageStudioAssetURL,
+  normalizeSub2APIImageStudioError,
   useSdStore,
 } from "../app/store/sd";
 import { useManagedWorkspaceStore } from "../app/store/managed-workspace";
@@ -13,6 +14,7 @@ import { Path } from "../app/constant";
 import {
   fetchManagedImageAssetBlob,
   downloadManagedImage,
+  getManagedImageSources,
   getManagedImageAssetMessage,
   getImageStudioBackPath,
   isManagedImageAssetExpiredError,
@@ -51,6 +53,22 @@ describe("Sub2API managed image studio helpers", () => {
       output_format: "webp",
     });
     expect(payload).not.toHaveProperty("retain_days");
+  });
+
+  test("passes optional expert prompt through the managed image payload", () => {
+    const payload = buildSub2APIImageStudioGeneratePayload({
+      model: "gpt-image-2",
+      params: {
+        prompt: "brief subject",
+        expert_prompt: "full professional prompt with lighting and layout",
+        size: "1024x1024",
+      },
+    });
+
+    expect(payload).toMatchObject({
+      user_prompt: "brief subject",
+      expert_prompt: "full professional prompt with lighting and layout",
+    });
   });
 
   test("resolves aspect and resolution into a Sub2API image size", () => {
@@ -156,14 +174,17 @@ describe("Sub2API managed image studio helpers", () => {
     expect(payload).not.toHaveProperty("reference_ids");
   });
 
-  test("omits output format for models without output format capability", () => {
+  test("omits stale advanced params for models without matching capability", () => {
     const model = {
       id: "agnes-image-2.1-flash",
       operations: ["create"],
       sizing_kind: "aspect_resolution",
       supported_aspect_ratios: ["1:1", "16:9"],
-      supported_resolutions: ["1k", "2k"],
+      supported_resolutions: ["1k", "4k"],
+      supported_sizes: ["1024x1024", "3840x2160"],
       supported_output_formats: [],
+      supported_backgrounds: [],
+      supported_qualities: [],
       max_reference_images: 0,
     };
     const payload = buildSub2APIImageStudioGeneratePayload(
@@ -171,8 +192,11 @@ describe("Sub2API managed image studio helpers", () => {
         model: "agnes-image-2.1-flash",
         params: {
           prompt: "clean product photo",
-          aspect: "1:1",
-          resolution: "1K",
+          size: "1024x1536",
+          aspect: "16:9",
+          resolution: "4K",
+          quality: "auto",
+          background: "opaque",
           output_format: "png",
           output_compression: 80,
         },
@@ -189,10 +213,12 @@ describe("Sub2API managed image studio helpers", () => {
 
     expect(payload).toMatchObject({
       model: "agnes-image-2.1-flash",
-      size: "1024x1024",
-      aspect: "1:1",
-      tier: "1K",
+      size: "3840x2160",
+      aspect: "16:9",
+      tier: "4K",
     });
+    expect(payload).not.toHaveProperty("quality");
+    expect(payload).not.toHaveProperty("background");
     expect(payload).not.toHaveProperty("output_format");
     expect(payload).not.toHaveProperty("output_compression");
     expect(columns.some((item) => item.value === "output_format")).toBe(false);
@@ -230,6 +256,34 @@ describe("Sub2API managed image studio helpers", () => {
         { name: "768x1344", value: "768x1344" },
         { name: "1344x768", value: "1344x768" },
       ],
+    });
+  });
+
+  test("marks managed prompt and expert controls for long professional input", () => {
+    const columns = getSub2APIImageStudioParams({
+      id: "gpt-image-2",
+      operations: ["create", "edit"],
+      sizing_kind: "custom",
+      supported_sizes: ["1024x1024"],
+      supported_output_formats: ["png", "webp"],
+      max_reference_images: 4,
+    });
+
+    expect(columns.find((item) => item.value === "prompt")).toMatchObject({
+      type: "textarea",
+      maxLength: 2000,
+    });
+    expect(
+      columns.find((item) => item.value === "expert_prompt"),
+    ).toMatchObject({
+      type: "textarea",
+      maxLength: 2000,
+      advanced: true,
+    });
+    expect(
+      columns.find((item) => item.value === "output_format"),
+    ).toMatchObject({
+      advanced: true,
     });
   });
 
@@ -305,9 +359,7 @@ describe("Sub2API managed image studio helpers", () => {
       normalizeSub2APIImageStudioAssetURL(
         "/api/v1/nextchat/image-studio/assets/asset-1/thumbnail?token=old",
       ),
-    ).toBe(
-      "/api/nextchat/image-studio/assets/asset-1/thumbnail?token=old",
-    );
+    ).toBe("/api/nextchat/image-studio/assets/asset-1/thumbnail?token=old");
     expect(
       normalizeSub2APIImageStudioAssetURL(
         "https://www.jisudeng.com/api/v1/nextchat/image-studio/assets/asset-1/content",
@@ -316,6 +368,41 @@ describe("Sub2API managed image studio helpers", () => {
     expect(normalizeSub2APIImageStudioAssetURL(undefined, "asset-2")).toBe(
       "/api/nextchat/image-studio/assets/asset-2/content",
     );
+  });
+
+  test("uses only available managed image assets for preview and download", () => {
+    expect(
+      getManagedImageSources({
+        id: "draw-assets",
+        assets: [
+          {
+            id: "asset-expired",
+            availability: "expired",
+            preview_url: "/api/nextchat/image-studio/assets/expired/thumbnail",
+            download_url: "/api/nextchat/image-studio/assets/expired/download",
+          },
+          {
+            id: "asset-purged",
+            purged_at: "2026-07-20T09:00:00Z",
+            preview_url: "/api/nextchat/image-studio/assets/purged/thumbnail",
+          },
+          {
+            id: "asset-ok",
+            availability: "available",
+            preview_url: "/api/nextchat/image-studio/assets/ok/thumbnail",
+            download_url: "/api/nextchat/image-studio/assets/ok/download",
+            filename: "ok.png",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "asset-ok",
+        preview: "/api/nextchat/image-studio/assets/ok/thumbnail",
+        download: "/api/nextchat/image-studio/assets/ok/download",
+        filename: "ok.png",
+      },
+    ]);
   });
 
   test("returns from managed image studio to chat instead of browser history", () => {
@@ -364,7 +451,7 @@ describe("Sub2API managed image studio helpers", () => {
       return element;
     });
 
-    await downloadManagedImage(
+    const result = await downloadManagedImage(
       {
         id: "draw-1",
         job_id: "job-1",
@@ -387,6 +474,98 @@ describe("Sub2API managed image studio helpers", () => {
     expect(createdLinks.map((link) => link.href)).toEqual(["blob:managed-zip"]);
     expect(createdLinks[0].download).toBe("job-1.zip");
     expect(onMultiDownload).toHaveBeenCalledWith(2);
+    expect(result).toEqual({
+      kind: "zip",
+      count: 2,
+      filenames: ["job-1.zip"],
+    });
+
+    jest.restoreAllMocks();
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+    Object.defineProperty(URL, "createObjectURL", {
+      value: originalCreateObjectURL,
+      configurable: true,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      value: originalRevokeObjectURL,
+      configurable: true,
+    });
+  });
+
+  test("downloads a single managed image with completion metadata", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const originalCreateElement = document.createElement.bind(document);
+    const click = jest.fn();
+    const onDownload = jest.fn();
+    const createdLinks: HTMLAnchorElement[] = [];
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn(async () => {
+        return makeAssetFetchResponse({
+          status: 200,
+          headers: {
+            "Content-Type": "image/png",
+            "Content-Disposition": 'attachment; filename="single.png"',
+          },
+          blob: new Blob(["image-bytes"], { type: "image/png" }),
+        });
+      }),
+      configurable: true,
+    });
+    Object.defineProperty(URL, "createObjectURL", {
+      value: jest.fn(() => "blob:managed-image"),
+      configurable: true,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      value: jest.fn(),
+      configurable: true,
+    });
+    jest.spyOn(document, "createElement").mockImplementation((tagName) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "a") {
+        Object.defineProperty(element, "click", {
+          value: click,
+          configurable: true,
+        });
+        createdLinks.push(element as HTMLAnchorElement);
+      }
+      return element;
+    });
+
+    const result = await downloadManagedImage(
+      {
+        id: "draw-single",
+        job_id: "job-single",
+        assets: [
+          {
+            id: "asset-single",
+            download_url:
+              "/api/nextchat/image-studio/assets/asset-single/download",
+          },
+        ],
+      },
+      onDownload,
+    );
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/nextchat/image-studio/assets/asset-single/download",
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+      }),
+    );
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(createdLinks[0].download).toBe("single.png");
+    expect(onDownload).toHaveBeenCalledWith(1);
+    expect(result).toEqual({
+      kind: "image",
+      count: 1,
+      filenames: ["single.png"],
+    });
 
     jest.restoreAllMocks();
     Object.defineProperty(globalThis, "fetch", {
@@ -951,6 +1130,7 @@ describe("Sub2API managed image studio helpers", () => {
     const state = useSdStore.getState();
     expect(state.currentId).toBe(21);
     expect(state.sub2apiImageStudioJobsError).toBe("");
+    expect(state.sub2apiImageStudioHistoryLoaded).toBe(true);
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
       "/api/nextchat/image-studio/jobs/active",
       "/api/nextchat/image-studio/jobs?page=1&page_size=24",
@@ -982,6 +1162,60 @@ describe("Sub2API managed image studio helpers", () => {
       availability: "available",
       download_url: "/api/nextchat/image-studio/assets/asset-1/download",
     });
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+  });
+
+  test("loads only active jobs when history is not requested", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = jest.fn(async () =>
+      makeSub2APIImageStudioResponse({
+        jobs: [
+          {
+            id: "job-active-only",
+            model: "gpt-image-2",
+            status: "running",
+            user_prompt: "active only",
+            created_at: "2026-07-21T09:00:00Z",
+            size: "1024x1024",
+            count: 1,
+          },
+        ],
+      }),
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+    });
+    useSdStore.setState({
+      draw: [
+        {
+          id: "job-old-completed",
+          job_id: "old-completed",
+          status: "success",
+          params: { prompt: "old completed" },
+        },
+      ],
+      sub2apiImageStudioHistoryLoaded: false,
+      sub2apiImageStudioJobsError: "",
+    } as any);
+
+    await expect(
+      useSdStore
+        .getState()
+        .fetchSub2APIImageStudioJobs({ includeHistory: false }),
+    ).resolves.toHaveLength(1);
+
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "/api/nextchat/image-studio/jobs/active",
+    ]);
+    expect(useSdStore.getState().draw.map((item: any) => item.id)).toEqual([
+      "job-job-active-only",
+    ]);
+    expect(useSdStore.getState().sub2apiImageStudioHistoryLoaded).toBe(false);
 
     Object.defineProperty(globalThis, "fetch", {
       value: originalFetch,
@@ -1345,6 +1579,62 @@ describe("Sub2API managed image studio helpers", () => {
     });
   });
 
+  test("clears expired managed image jobs without removing available jobs", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = jest.fn(async () =>
+      makeSub2APIImageStudioResponse({ deleted: true }),
+    );
+    Object.defineProperty(globalThis, "fetch", {
+      value: fetchMock,
+      configurable: true,
+    });
+    useSdStore.setState({
+      draw: [
+        {
+          id: "job-expired-remote",
+          job_id: "expired-remote",
+          status: "success",
+          assets: [{ id: "asset-expired", availability: "expired" }],
+          params: { prompt: "expired remote" },
+        },
+        {
+          id: "expired-local",
+          status: "success",
+          image_asset_expired: true,
+          params: { prompt: "expired local" },
+        },
+        {
+          id: "job-available",
+          job_id: "available",
+          status: "success",
+          assets: [{ id: "asset-ok", availability: "available" }],
+          params: { prompt: "keep me" },
+        },
+      ],
+      sub2apiImageStudioJobsError: "",
+    } as any);
+
+    await expect(
+      useSdStore.getState().clearExpiredSub2APIImageStudioJobs(),
+    ).resolves.toBe(2);
+
+    expect(fetchMock.mock.calls).toEqual([
+      [
+        "/api/nextchat/image-studio/jobs/expired-remote",
+        expect.objectContaining({ method: "DELETE" }),
+      ],
+    ]);
+    expect(useSdStore.getState().draw).toEqual([
+      expect.objectContaining({ id: "job-available" }),
+    ]);
+    expect(useSdStore.getState().sub2apiImageStudioJobsError).toBe("");
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+  });
+
   test("keeps managed image job load failures visible", async () => {
     const originalFetch = globalThis.fetch;
     Object.defineProperty(globalThis, "fetch", {
@@ -1401,6 +1691,22 @@ describe("Sub2API managed image studio helpers", () => {
       value: originalFetch,
       configurable: true,
     });
+  });
+
+  test("normalizes managed image studio errors for user-facing UI", () => {
+    expect(
+      normalizeSub2APIImageStudioError("Sub2API image studio request failed"),
+    ).toBe("图片任务暂时无法同步，请稍后重试");
+    expect(
+      normalizeSub2APIImageStudioError(
+        "image size is not supported for the selected model",
+      ),
+    ).toBe("当前模型不支持该尺寸，请换用可选比例或分辨率");
+    expect(
+      normalizeSub2APIImageStudioError(
+        "image studio asset is temporarily unavailable",
+      ),
+    ).toBe("图片暂时不可用，请稍后重试");
   });
 });
 

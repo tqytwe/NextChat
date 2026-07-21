@@ -112,6 +112,12 @@ export type Sub2APIImageStudioJob = {
   count?: number;
 };
 
+export type Sub2APIImageStudioJobFetchOptions = {
+  includeHistory?: boolean;
+  page?: number;
+  pageSize?: number;
+};
+
 const defaultModel: SdPanelModel = {
   name: models[0].name,
   value: models[0].value,
@@ -132,6 +138,7 @@ const DEFAULT_SD_STATE = {
   sub2apiImageStudioReferencesError: "",
   sub2apiImageStudioJobsLoading: false,
   sub2apiImageStudioJobsError: "",
+  sub2apiImageStudioHistoryLoaded: false,
   sub2apiImageStudioRequestGeneration: 0,
 };
 
@@ -149,6 +156,7 @@ export const useSdStore = createPersistStore<
     sub2apiImageStudioReferencesError: string;
     sub2apiImageStudioJobsLoading: boolean;
     sub2apiImageStudioJobsError: string;
+    sub2apiImageStudioHistoryLoaded: boolean;
     sub2apiImageStudioRequestGeneration: number;
   },
   {
@@ -162,9 +170,12 @@ export const useSdStore = createPersistStore<
     clearSub2APIImageStudioReferences: () => void;
     beginSub2APIImageStudioGroupSwitch: () => void;
     resetSub2APIImageStudioForGroupSwitch: () => void;
-    fetchSub2APIImageStudioJobs: () => Promise<Sub2APIImageStudioJob[]>;
+    fetchSub2APIImageStudioJobs: (
+      options?: Sub2APIImageStudioJobFetchOptions,
+    ) => Promise<Sub2APIImageStudioJob[]>;
     cancelSub2APIImageStudioJob: (jobId: string) => Promise<void>;
     deleteSub2APIImageStudioJob: (jobId: string) => Promise<void>;
+    clearExpiredSub2APIImageStudioJobs: () => Promise<number>;
     sub2apiImageStudioRequestCall: (data: any) => Promise<void>;
     pollSub2APIImageStudioJob: (
       data: any,
@@ -332,6 +343,7 @@ export const useSdStore = createPersistStore<
           sub2apiImageStudioJobsLoading: false,
           sub2apiImageStudioModelsError: "",
           sub2apiImageStudioJobsError: "",
+          sub2apiImageStudioHistoryLoaded: false,
         });
       },
       resetSub2APIImageStudioForGroupSwitch() {
@@ -349,13 +361,22 @@ export const useSdStore = createPersistStore<
           sub2apiImageStudioReferenceUploading: false,
           sub2apiImageStudioReferencesError: "",
           sub2apiImageStudioJobsError: "",
+          sub2apiImageStudioHistoryLoaded: false,
           sub2apiImageStudioRequestGeneration:
             _get().sub2apiImageStudioRequestGeneration + 1,
           currentModel: defaultModel,
           currentId: _get().currentId + 1,
         });
       },
-      async fetchSub2APIImageStudioJobs() {
+      async fetchSub2APIImageStudioJobs(
+        options: Sub2APIImageStudioJobFetchOptions = {},
+      ) {
+        const includeHistory = options.includeHistory ?? true;
+        const page = Math.max(1, Math.floor(Number(options.page || 1)));
+        const pageSize = Math.min(
+          48,
+          Math.max(1, Math.floor(Number(options.pageSize || 24))),
+        );
         const requestGeneration = _get().sub2apiImageStudioRequestGeneration;
         set({
           sub2apiImageStudioJobsLoading: true,
@@ -366,9 +387,11 @@ export const useSdStore = createPersistStore<
             job?: Sub2APIImageStudioJob | null;
             jobs?: Sub2APIImageStudioJob[];
           }>("/jobs/active"),
-          fetchSub2APIImageStudio<{
-            jobs?: Sub2APIImageStudioJob[];
-          }>("/jobs?page=1&page_size=24"),
+          includeHistory
+            ? fetchSub2APIImageStudio<{
+                jobs?: Sub2APIImageStudioJob[];
+              }>(`/jobs?page=${page}&page_size=${pageSize}`)
+            : Promise.resolve({ jobs: [] as Sub2APIImageStudioJob[] }),
         ]);
         if (_get().sub2apiImageStudioRequestGeneration !== requestGeneration) {
           return [];
@@ -379,7 +402,7 @@ export const useSdStore = createPersistStore<
             ? activeImageStudioJobsFromPayload(activeResult.value)
             : [];
         const historyJobs =
-          historyResult.status === "fulfilled"
+          includeHistory && historyResult.status === "fulfilled"
             ? historyResult.value.jobs ?? []
             : [];
         const jobs = uniqueSub2APIImageStudioJobs([
@@ -389,11 +412,12 @@ export const useSdStore = createPersistStore<
         const remoteDraws = jobs.map(toSub2APIImageStudioJobDraw);
         const draw = mergeSub2APIImageStudioDraws(_get().draw, remoteDraws, {
           preserveExistingActive: activeResult.status === "rejected",
-          preserveExistingTerminal: historyResult.status === "rejected",
+          preserveExistingTerminal:
+            includeHistory && historyResult.status === "rejected",
         });
         const syncError = formatSub2APIImageStudioSyncError(
           activeResult.status === "rejected" ? activeResult.reason : undefined,
-          historyResult.status === "rejected"
+          includeHistory && historyResult.status === "rejected"
             ? historyResult.reason
             : undefined,
         );
@@ -402,6 +426,10 @@ export const useSdStore = createPersistStore<
           currentId: _get().currentId + 1,
           sub2apiImageStudioJobsLoading: false,
           sub2apiImageStudioJobsError: syncError,
+          sub2apiImageStudioHistoryLoaded:
+            includeHistory && historyResult.status === "fulfilled"
+              ? true
+              : _get().sub2apiImageStudioHistoryLoaded,
         });
         remoteDraws.forEach((draw) => {
           if (draw?.job_id && isSub2APIImageStudioDrawActive(draw)) {
@@ -415,7 +443,7 @@ export const useSdStore = createPersistStore<
         });
         if (
           activeResult.status === "fulfilled" ||
-          historyResult.status === "fulfilled"
+          (includeHistory && historyResult.status === "fulfilled")
         ) {
           refreshManagedWorkspaceBootstrap();
         }
@@ -433,7 +461,9 @@ export const useSdStore = createPersistStore<
           this.getNextId();
           refreshManagedWorkspaceBootstrap();
         } catch (error: any) {
-          const message = error.message || "Failed to cancel image job";
+          const message = normalizeSub2APIImageStudioError(
+            error.message || "Failed to cancel image job",
+          );
           set({ sub2apiImageStudioJobsError: message });
           throw error;
         }
@@ -454,10 +484,68 @@ export const useSdStore = createPersistStore<
           sub2apiImageStudioPollingJobs.delete(jobId);
           this.getNextId();
         } catch (error: any) {
-          const message = error.message || "Failed to delete image job";
+          const message = normalizeSub2APIImageStudioError(
+            error.message || "Failed to delete image job",
+          );
           set({ sub2apiImageStudioJobsError: message });
           throw error;
         }
+      },
+      async clearExpiredSub2APIImageStudioJobs() {
+        const expired = (_get().draw ?? []).filter((item: any) =>
+          isSub2APIManagedImageExpired(item),
+        );
+        if (expired.length === 0) return 0;
+
+        const removableKeys = new Set<string>();
+        const failedMessages: string[] = [];
+        let removedCount = 0;
+        for (const item of expired) {
+          const itemID = String(item?.id || "").trim();
+          const jobID = String(item?.job_id || "").trim();
+          if (!jobID) {
+            if (itemID) removableKeys.add(itemID);
+            removedCount += 1;
+            continue;
+          }
+
+          try {
+            await fetchSub2APIImageStudio<{ deleted?: boolean }>(
+              `/jobs/${encodeURIComponent(jobID)}`,
+              { method: "DELETE" },
+            );
+            if (itemID) removableKeys.add(itemID);
+            removableKeys.add(jobID);
+            removedCount += 1;
+            sub2apiImageStudioPollingJobs.delete(jobID);
+          } catch (error: any) {
+            failedMessages.push(
+              normalizeSub2APIImageStudioError(error?.message || ""),
+            );
+          }
+        }
+
+        if (removableKeys.size > 0) {
+          set({
+            draw: (_get().draw ?? []).filter((item: any) => {
+              return (
+                !removableKeys.has(String(item?.id || "")) &&
+                !removableKeys.has(String(item?.job_id || ""))
+              );
+            }),
+            currentId: _get().currentId + 1,
+          });
+        }
+        const uniqueFailures = Array.from(
+          new Set(failedMessages.filter(Boolean)),
+        );
+        set({
+          sub2apiImageStudioJobsError:
+            uniqueFailures.length > 0
+              ? `部分过期任务未清理：${uniqueFailures.join("；")}`
+              : "",
+        });
+        return removedCount;
       },
       async sub2apiImageStudioRequestCall(data: any) {
         const requestGroupID = currentSub2APIImageStudioGroupID();
@@ -499,7 +587,9 @@ export const useSdStore = createPersistStore<
           this.updateDraw({
             ...data,
             status: "error",
-            error: error.message || "Image generation failed",
+            error: normalizeSub2APIImageStudioError(
+              error.message || "Image generation failed",
+            ),
           });
           this.getNextId();
         }
@@ -526,7 +616,7 @@ export const useSdStore = createPersistStore<
             markSub2APIImageStudioSyncDeferred(
               data,
               jobId,
-              "Image generation polling timed out",
+              "图片任务同步超时，稍后可刷新恢复",
             ),
           );
           this.getNextId();
@@ -567,7 +657,9 @@ export const useSdStore = createPersistStore<
               markSub2APIImageStudioSyncDeferred(
                 data,
                 jobId,
-                error.message || "Image generation polling failed",
+                normalizeSub2APIImageStudioError(
+                  error.message || "Image generation polling failed",
+                ),
               ),
             );
             this.getNextId();
@@ -719,11 +811,12 @@ export function buildSub2APIImageStudioGeneratePayload(
     params.reference_ids,
     modelCapability,
   );
-  const tier = normalizeImageStudioTier(params.resolution || params.tier);
-  const size =
-    params.size ||
-    resolveSub2APIImageStudioSize(params.aspect, tier) ||
-    "1024x1024";
+  const resolvedSize = resolveSub2APIImageStudioPayloadSize(
+    params,
+    modelCapability,
+  );
+  const tier = resolvedSize.tier;
+  const size = resolvedSize.size;
   const inferredSize = inferSub2APIImageStudioAspectTier(size);
   const includeAspectTier =
     !modelCapability ||
@@ -735,8 +828,15 @@ export function buildSub2APIImageStudioGeneratePayload(
     size,
     count: clampImageStudioCount(params.count),
     model: data?.model || "",
-    quality: params.quality || "auto",
   };
+  const quality = resolveSub2APIImageStudioOptionalValue(
+    params.quality,
+    modelCapability?.supported_qualities,
+    modelCapability?.default_quality,
+  );
+  if (quality) {
+    payload.quality = quality;
+  }
   const outputFormat = resolveSub2APIImageStudioOutputFormat(
     params.output_format,
     modelCapability,
@@ -744,12 +844,21 @@ export function buildSub2APIImageStudioGeneratePayload(
   if (outputFormat) {
     payload.output_format = outputFormat;
   }
-  if (includeAspectTier) {
-    payload.aspect = params.aspect || inferredSize.aspect;
-    payload.tier = params.resolution || params.tier ? tier : inferredSize.tier;
+  const expertPrompt = String(params.expert_prompt || "").trim();
+  if (expertPrompt) {
+    payload.expert_prompt = expertPrompt;
   }
-  if (params.background !== undefined && params.background !== "") {
-    payload.background = params.background;
+  if (includeAspectTier) {
+    payload.aspect = resolvedSize.aspect || inferredSize.aspect;
+    payload.tier = tier || inferredSize.tier;
+  }
+  const background = resolveSub2APIImageStudioOptionalValue(
+    params.background,
+    modelCapability?.supported_backgrounds,
+    modelCapability?.default_background,
+  );
+  if (background) {
+    payload.background = background;
   }
   if (
     params.output_compression !== undefined &&
@@ -758,8 +867,13 @@ export function buildSub2APIImageStudioGeneratePayload(
   ) {
     payload.output_compression = params.output_compression;
   }
-  if (referenceIDs.length > 0 && params.input_fidelity) {
-    payload.input_fidelity = params.input_fidelity;
+  const inputFidelity = resolveSub2APIImageStudioOptionalValue(
+    params.input_fidelity,
+    modelCapability?.supported_input_fidelities,
+    modelCapability?.default_input_fidelity,
+  );
+  if (referenceIDs.length > 0 && inputFidelity) {
+    payload.input_fidelity = inputFidelity;
   }
   if (referenceIDs.length > 0) {
     payload.reference_ids = referenceIDs;
@@ -1043,11 +1157,12 @@ function sub2APIImageStudioErrorMessage(error: any) {
 }
 
 function sub2APIImageStudioSyncErrorPart(label: string, error: any) {
-  const message = sub2APIImageStudioErrorMessage(error);
+  const rawMessage = sub2APIImageStudioErrorMessage(error);
+  const message = normalizeSub2APIImageStudioError(rawMessage);
   if (
-    !message ||
-    message === "Sub2API image studio request failed" ||
-    message === "Failed to fetch"
+    !rawMessage ||
+    isGenericSub2APIImageStudioSyncError(rawMessage) ||
+    isGenericSub2APIImageStudioSyncError(message)
   ) {
     return label;
   }
@@ -1195,6 +1310,109 @@ function resolveSub2APIImageStudioOutputFormat(
   return supported[0];
 }
 
+function resolveSub2APIImageStudioPayloadSize(
+  params: any,
+  modelCapability?: Sub2APIImageStudioModel,
+) {
+  if (!modelCapability) {
+    const tier = normalizeImageStudioTier(params.resolution || params.tier);
+    const size =
+      params.size ||
+      resolveSub2APIImageStudioSize(params.aspect, tier) ||
+      "1024x1024";
+    const inferred = inferSub2APIImageStudioAspectTier(size);
+    return {
+      size,
+      aspect: params.aspect || inferred.aspect,
+      tier: params.resolution || params.tier ? tier : inferred.tier,
+    };
+  }
+
+  const supportedSizes = modelCapability.supported_sizes ?? [];
+  const defaultSize =
+    modelCapability.default_size || supportedSizes[0] || "1024x1024";
+  const sizingKind = normalizeSub2APIImageStudioSizingKind(modelCapability);
+  if (sizingKind === "aspect_resolution") {
+    const supportedAspects = (modelCapability.supported_aspect_ratios ?? [])
+      .map((aspect) => String(aspect || "").trim())
+      .filter(Boolean);
+    const supportedTiers = (modelCapability.supported_resolutions ?? [])
+      .map((resolution) => normalizeImageStudioTier(resolution))
+      .filter(Boolean);
+    const inferredDefault = inferSub2APIImageStudioAspectTier(defaultSize);
+    const requestedAspect = normalizeImageStudioAspect(
+      params.aspect ||
+        modelCapability.default_aspect_ratio ||
+        inferredDefault.aspect,
+    );
+    const aspect = supportedAspects.includes(requestedAspect)
+      ? requestedAspect
+      : supportedAspects[0] || inferredDefault.aspect || "1:1";
+    const requestedTier = normalizeImageStudioTier(
+      params.resolution || params.tier || modelCapability.default_resolution,
+    );
+    const tier = supportedTiers.includes(requestedTier)
+      ? requestedTier
+      : supportedTiers[0] || inferredDefault.tier || "1K";
+    const resolved = resolveSub2APIImageStudioSize(aspect, tier);
+    const size =
+      resolved &&
+      (supportedSizes.length === 0 || supportedSizes.includes(resolved))
+        ? resolved
+        : defaultSize;
+    const inferred = inferSub2APIImageStudioAspectTier(size);
+    return {
+      size,
+      aspect: resolved ? aspect : inferred.aspect,
+      tier: resolved ? tier : inferred.tier,
+    };
+  }
+
+  const requestedSize = String(params.size || "").trim();
+  const size =
+    requestedSize &&
+    (supportedSizes.length === 0 || supportedSizes.includes(requestedSize))
+      ? requestedSize
+      : defaultSize;
+  const inferred = inferSub2APIImageStudioAspectTier(size);
+  return {
+    size,
+    aspect: inferred.aspect,
+    tier: inferred.tier,
+  };
+}
+
+function resolveSub2APIImageStudioOptionalValue(
+  requested: any,
+  supportedValues?: string[],
+  defaultValue?: string,
+) {
+  if (!supportedValues) {
+    return String(requested || "")
+      .trim()
+      .toLowerCase();
+  }
+  const supported = supportedValues
+    .map((item) =>
+      String(item || "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+  if (supported.length === 0) return "";
+  const preferred = String(requested || defaultValue || "")
+    .trim()
+    .toLowerCase();
+  if (preferred && supported.includes(preferred)) return preferred;
+  const normalizedDefault = String(defaultValue || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedDefault && supported.includes(normalizedDefault)) {
+    return normalizedDefault;
+  }
+  return supported[0];
+}
+
 function normalizeSub2APIImageStudioSizingKind(
   modelCapability: Sub2APIImageStudioModel,
 ) {
@@ -1292,13 +1510,114 @@ async function fetchSub2APIImageStudio<T>(path: string, init?: RequestInit) {
   return envelope.data;
 }
 
-function normalizeSub2APIImageStudioError(message: string) {
-  const lower = message.toLowerCase();
+export function normalizeSub2APIImageStudioError(message?: string) {
+  const raw = String(message || "").trim();
+  const lower = raw.toLowerCase();
+  if (isGenericSub2APIImageStudioSyncError(raw)) {
+    return "图片任务暂时无法同步，请稍后重试";
+  }
   if (lower.includes("image generation is not enabled for this group")) {
     return "当前分组未开启图片生成，请切换到支持图片的分组";
   }
   if (lower.includes("idempotency key is required")) {
     return "图片生成缺少幂等请求头，请刷新页面后重试";
   }
-  return message;
+  if (
+    lower.includes("image studio asset has expired") ||
+    lower.includes("image_studio_asset_expired")
+  ) {
+    return "图片已过期，可重新生成或清理该历史任务";
+  }
+  if (
+    lower.includes("image studio asset is temporarily unavailable") ||
+    lower.includes("image_studio_asset_unavailable")
+  ) {
+    return "图片暂时不可用，请稍后重试";
+  }
+  if (
+    lower.includes("image studio provider is not supported") ||
+    lower.includes("image_studio_provider_not_supported")
+  ) {
+    return "当前分组不支持该图片模型";
+  }
+  if (
+    lower.includes("image size is not supported") ||
+    lower.includes("image_studio_size_not_supported")
+  ) {
+    return "当前模型不支持该尺寸，请换用可选比例或分辨率";
+  }
+  if (
+    lower.includes("image quality is not supported") ||
+    lower.includes("image_studio_quality_not_supported")
+  ) {
+    return "当前模型不支持该质量参数";
+  }
+  if (
+    lower.includes("image output format is not supported") ||
+    lower.includes("image_studio_output_format_not_supported")
+  ) {
+    return "当前模型不支持该输出格式";
+  }
+  if (
+    lower.includes("image output compression is not supported") ||
+    lower.includes("image_studio_output_compression_not_supported")
+  ) {
+    return "当前模型或格式不支持该压缩参数";
+  }
+  if (
+    lower.includes("image input fidelity is not supported") ||
+    lower.includes("image_studio_input_fidelity_not_supported")
+  ) {
+    return "当前模型不支持该参考图精度";
+  }
+  if (
+    lower.includes("image operation is not supported") ||
+    lower.includes("image_studio_operation_not_supported")
+  ) {
+    return "当前模型不支持该图片操作";
+  }
+  if (
+    lower.includes("at most two image studio jobs may be active") ||
+    lower.includes("image_studio_concurrent_job_limit")
+  ) {
+    return "当前已有进行中的图片任务，请等待完成或取消后再提交";
+  }
+  if (
+    lower.includes("insufficient balance") ||
+    lower.includes("image_studio_insufficient_balance")
+  ) {
+    return "余额不足，请充值后再生成";
+  }
+  if (
+    lower.includes("image studio currently supports wallet-billed") ||
+    lower.includes("image_studio_subscription_group_unsupported")
+  ) {
+    return "图片生成当前仅支持钱包计费分组，请切换分组";
+  }
+  if (lower.includes("failed to cancel image job")) {
+    return "取消图片任务失败，请稍后重试";
+  }
+  if (lower.includes("failed to delete image job")) {
+    return "删除图片任务失败，请稍后重试";
+  }
+  if (lower.includes("image generation failed")) {
+    return "图片生成失败，请稍后重试";
+  }
+  if (lower.includes("image generation polling failed")) {
+    return "图片任务同步暂缓，稍后可刷新恢复";
+  }
+  return raw || "图片任务暂时无法同步，请稍后重试";
+}
+
+function isGenericSub2APIImageStudioSyncError(message: string) {
+  const normalized = String(message || "")
+    .trim()
+    .toLowerCase();
+  return (
+    normalized === "" ||
+    normalized === "sub2api image studio request failed" ||
+    normalized === "failed to fetch" ||
+    normalized === "networkerror when attempting to fetch resource." ||
+    normalized === "图片任务暂时无法同步，请稍后重试"
+  );
 }
