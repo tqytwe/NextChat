@@ -254,7 +254,7 @@ export function getSub2APIImageStudioParams(
   const outputFormats = normalizeImageStudioOptions(
     model.supported_output_formats,
     [],
-    ["png"],
+    [],
   );
   const backgrounds = normalizeImageStudioOptions(
     model.supported_backgrounds,
@@ -401,6 +401,7 @@ export function getSub2APIImageStudioParams(
     });
   }
   if (
+    outputFormats.length > 0 &&
     model.output_compression &&
     imageStudioOutputCompressionApplies(
       model.output_compression,
