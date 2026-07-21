@@ -736,8 +736,14 @@ export function buildSub2APIImageStudioGeneratePayload(
     count: clampImageStudioCount(params.count),
     model: data?.model || "",
     quality: params.quality || "auto",
-    output_format: params.output_format || "png",
   };
+  const outputFormat = resolveSub2APIImageStudioOutputFormat(
+    params.output_format,
+    modelCapability,
+  );
+  if (outputFormat) {
+    payload.output_format = outputFormat;
+  }
   if (includeAspectTier) {
     payload.aspect = params.aspect || inferredSize.aspect;
     payload.tier = params.resolution || params.tier ? tier : inferredSize.tier;
@@ -849,13 +855,18 @@ export function normalizeSub2APIImageStudioAssetURL(
     : "";
   const raw = (url || fallback).trim();
   if (!raw) return "";
-  if (raw.startsWith("/api/v1/image-studio/")) {
-    return withBasePath(
-      raw.replace("/api/v1/image-studio/", "/api/nextchat/image-studio/"),
-    );
-  }
-  if (raw.startsWith("/api/nextchat/image-studio/")) {
-    return withBasePath(raw);
+  const relative = rewriteSub2APIImageStudioAssetPath(raw);
+  if (relative) return relative;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      const normalized = rewriteSub2APIImageStudioAssetPath(
+        `${parsed.pathname}${parsed.search}${parsed.hash}`,
+      );
+      if (normalized) return normalized;
+    } catch {
+      return raw;
+    }
   }
   return raw;
 }
@@ -1014,22 +1025,33 @@ function formatSub2APIImageStudioSyncError(
   activeError?: any,
   historyError?: any,
 ) {
-  return [
+  const parts = [
     activeError
-      ? `运行中任务同步失败：${sub2APIImageStudioErrorMessage(activeError)}`
+      ? sub2APIImageStudioSyncErrorPart("运行中任务", activeError)
       : "",
     historyError
-      ? `历史任务同步失败：${sub2APIImageStudioErrorMessage(historyError)}`
+      ? sub2APIImageStudioSyncErrorPart("历史任务", historyError)
       : "",
-  ]
-    .filter(Boolean)
-    .join("；");
+  ].filter(Boolean);
+  return parts.length > 0 ? `同步暂缓：${parts.join("；")}` : "";
 }
 
 function sub2APIImageStudioErrorMessage(error: any) {
   return (
     error?.message || String(error || "Sub2API image studio request failed")
   );
+}
+
+function sub2APIImageStudioSyncErrorPart(label: string, error: any) {
+  const message = sub2APIImageStudioErrorMessage(error);
+  if (
+    !message ||
+    message === "Sub2API image studio request failed" ||
+    message === "Failed to fetch"
+  ) {
+    return label;
+  }
+  return `${label} ${message}`;
 }
 
 function markSub2APIImageStudioSyncDeferred(
@@ -1073,6 +1095,22 @@ function normalizeSub2APIImageStudioAssets(
       ),
     };
   });
+}
+
+function rewriteSub2APIImageStudioAssetPath(raw: string) {
+  const rewriteRules: Array<[string, string]> = [
+    ["/api/v1/nextchat/image-studio/", "/api/nextchat/image-studio/"],
+    ["/api/v1/image-studio/", "/api/nextchat/image-studio/"],
+  ];
+  for (const [from, to] of rewriteRules) {
+    if (raw.startsWith(from)) {
+      return withBasePath(raw.replace(from, to));
+    }
+  }
+  if (raw.startsWith("/api/nextchat/image-studio/")) {
+    return withBasePath(raw);
+  }
+  return "";
 }
 
 function isSub2APIManagedAssetExpired(asset: any, now = Date.now()) {
@@ -1125,6 +1163,36 @@ function normalizeSub2APIImageStudioReferenceIDs(
     0,
     getSub2APIImageStudioReferenceLimit(modelCapability),
   );
+}
+
+function resolveSub2APIImageStudioOutputFormat(
+  requested: any,
+  modelCapability?: Sub2APIImageStudioModel,
+) {
+  if (!modelCapability) {
+    return String(requested || "png")
+      .trim()
+      .toLowerCase();
+  }
+  const supported = (modelCapability.supported_output_formats ?? [])
+    .map((format) =>
+      String(format || "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+  if (supported.length === 0) return "";
+  const preferred = String(
+    requested || modelCapability.default_output_format || "",
+  )
+    .trim()
+    .toLowerCase();
+  if (preferred && supported.includes(preferred)) return preferred;
+  const defaultFormat = String(modelCapability.default_output_format || "")
+    .trim()
+    .toLowerCase();
+  if (defaultFormat && supported.includes(defaultFormat)) return defaultFormat;
+  return supported[0];
 }
 
 function normalizeSub2APIImageStudioSizingKind(

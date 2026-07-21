@@ -156,6 +156,49 @@ describe("Sub2API managed image studio helpers", () => {
     expect(payload).not.toHaveProperty("reference_ids");
   });
 
+  test("omits output format for models without output format capability", () => {
+    const model = {
+      id: "agnes-image-2.1-flash",
+      operations: ["create"],
+      sizing_kind: "aspect_resolution",
+      supported_aspect_ratios: ["1:1", "16:9"],
+      supported_resolutions: ["1k", "2k"],
+      supported_output_formats: [],
+      max_reference_images: 0,
+    };
+    const payload = buildSub2APIImageStudioGeneratePayload(
+      {
+        model: "agnes-image-2.1-flash",
+        params: {
+          prompt: "clean product photo",
+          aspect: "1:1",
+          resolution: "1K",
+          output_format: "png",
+          output_compression: 80,
+        },
+      },
+      model,
+    );
+    const columns = getSub2APIImageStudioParams(model, {
+      output_format: "png",
+    });
+    const normalized = getModelParamBasicData(columns, {
+      prompt: "clean product photo",
+      output_format: "png",
+    });
+
+    expect(payload).toMatchObject({
+      model: "agnes-image-2.1-flash",
+      size: "1024x1024",
+      aspect: "1:1",
+      tier: "1K",
+    });
+    expect(payload).not.toHaveProperty("output_format");
+    expect(payload).not.toHaveProperty("output_compression");
+    expect(columns.some((item) => item.value === "output_format")).toBe(false);
+    expect(normalized).not.toHaveProperty("output_format");
+  });
+
   test("uses model sizing_kind for fixed and custom image studio controls", () => {
     const fixed = getSub2APIImageStudioParams({
       id: "agnes-2.0",
@@ -256,6 +299,18 @@ describe("Sub2API managed image studio helpers", () => {
     expect(
       normalizeSub2APIImageStudioAssetURL(
         "/api/v1/image-studio/assets/asset-1/content",
+      ),
+    ).toBe("/api/nextchat/image-studio/assets/asset-1/content");
+    expect(
+      normalizeSub2APIImageStudioAssetURL(
+        "/api/v1/nextchat/image-studio/assets/asset-1/thumbnail?token=old",
+      ),
+    ).toBe(
+      "/api/nextchat/image-studio/assets/asset-1/thumbnail?token=old",
+    );
+    expect(
+      normalizeSub2APIImageStudioAssetURL(
+        "https://www.jisudeng.com/api/v1/nextchat/image-studio/assets/asset-1/content",
       ),
     ).toBe("/api/nextchat/image-studio/assets/asset-1/content");
     expect(normalizeSub2APIImageStudioAssetURL(undefined, "asset-2")).toBe(
@@ -1312,6 +1367,34 @@ describe("Sub2API managed image studio helpers", () => {
 
     expect(useSdStore.getState().sub2apiImageStudioJobsError).toContain(
       "job database unavailable",
+    );
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+  });
+
+  test("maps generic managed image sync failures to sync deferred copy", async () => {
+    const originalFetch = globalThis.fetch;
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn(async () => ({
+        ok: false,
+        json: async () => undefined,
+      })),
+      configurable: true,
+    });
+    useSdStore.setState({
+      draw: [],
+      sub2apiImageStudioJobsError: "",
+    } as any);
+
+    await expect(
+      useSdStore.getState().fetchSub2APIImageStudioJobs(),
+    ).resolves.toEqual([]);
+
+    expect(useSdStore.getState().sub2apiImageStudioJobsError).toBe(
+      "同步暂缓：运行中任务；历史任务",
     );
 
     Object.defineProperty(globalThis, "fetch", {
