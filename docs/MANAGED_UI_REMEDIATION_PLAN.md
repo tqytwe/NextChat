@@ -100,3 +100,7 @@ Git diff，避免 `.git` 或基线分支不在构建上下文时阻断发布。
 任何 managed 可见改动必须提交
 `docs/visual-reviews/YYYY-MM-DD-<slug>.md`。记录当前与修改后画面、状态、视口、
 复用组件，以及聊天列表、输入、滚动和持久化无回归的证据。
+记录必须声明 `artifact_mode`。真实浏览器或 Playwright 截图/录像使用
+`browser-capture`；无浏览器环境下的静态审查板使用 `static-review-board`，并在
+residual risk 写明仍需浏览器截图或最终验收。PNG 产物必须是真实可解码图片，不能用
+1x1 或伪造 header 充当视觉证据。

@@ -5,10 +5,16 @@
   "schema_version": 1,
   "changed_files": [
     "app/components/error.tsx",
+    "app/components/home.tsx",
+    "app/components/home.module.scss",
+    "app/components/managed-workspace-state.tsx",
+    "app/components/managed-workspace-state.module.scss",
     "app/components/managed-support-contact.tsx"
   ],
   "routes_or_surfaces": [
     "managed workspace error boundary",
+    "managed bootstrap loading and error gate",
+    "managed locked session gate",
     "managed support contact panel",
     "managed sidebar support entry"
   ],
@@ -20,6 +26,11 @@
   ],
   "states": [
     "managed error",
+    "bootstrap loading",
+    "bootstrap error",
+    "bootstrap timeout with diagnostic id",
+    "bootstrap retry disabled",
+    "runtime error boundary diagnostic id",
     "reload action",
     "return console action",
     "support contact with two QR cards",
@@ -32,6 +43,7 @@
     "1280x800",
     "1600x900"
   ],
+  "artifact_mode": "static-review-board",
   "baseline_artifacts": [
     "docs/visual-reviews/assets/managed-support-error-shell/before-managed-error.png"
   ],
@@ -42,6 +54,10 @@
   "commands": [
     "corepack yarn design:test",
     "corepack yarn design:check",
+    "node --test scripts/check-managed-design-governance.test.mjs",
+    "corepack yarn test -- managed-workspace-models",
+    "corepack yarn test:ci",
+    "corepack yarn build",
     "node static PNG artifact generation for review boards"
   ],
   "checks": {
@@ -57,6 +73,9 @@
   "chat_regression_checks": [
     "No frozen chat-core files are changed in this review.",
     "Error boundary changes are managed-mode gated and preserve upstream non-managed error handling.",
+    "Bootstrap gating changes live in app/components/home.tsx and do not modify chat messages, input, session persistence, or scroll restoration.",
+    "Managed ErrorBoundary and bootstrap/locked states now render the same ManagedWorkspaceStatePage skeleton.",
+    "Bootstrap and group-switch request lifecycles are separated in app/store/managed-workspace.ts.",
     "Support contact reads bootstrap support_contact instead of introducing a separate editable config."
   ],
   "residual_risks": [
@@ -86,9 +105,9 @@
 
 ## State Coverage
 
-- Session and bootstrap: BFF managed errors now include `Cache-Control: no-store`; support data is consumed from `bootstrap.support_contact`.
+- Session and bootstrap: BFF managed errors now include `Cache-Control: no-store`; support data is consumed from `bootstrap.support_contact`; bootstrap timeout and runtime failures show a diagnostic ID.
 - Hover, active and focus-visible: action controls remain buttons or `IconButton` instances.
-- Loading, disabled, error and retry: error fallback offers reload, return console, and support contact instead of destructive clear-data in managed mode.
+- Loading, disabled, error and retry: error fallback offers reload, return console, diagnostic ID, and support contact instead of destructive clear-data in managed mode.
 
 ## Viewport Coverage
 

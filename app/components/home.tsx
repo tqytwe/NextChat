@@ -36,9 +36,7 @@ import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
 import { withBasePath } from "../utils/api-path";
 import { applyManagedWorkspaceModelsToStores } from "../utils/managed-workspace-models";
-import { ManagedBrandLogo } from "./managed-brand";
-import { ManagedSupportContact } from "./managed-support-contact";
-import type { SupportContactConfig } from "../utils/support-contact";
+import { ManagedWorkspaceStatePage } from "./managed-workspace-state";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -266,7 +264,9 @@ export function useLoadData(enabled = true) {
     (async () => {
       if (clientConfig?.sub2apiManagedMode) {
         const bootstrap = await managedWorkspace.fetchBootstrap();
-        applyManagedWorkspaceModelsToStores(bootstrap);
+        if (bootstrap) {
+          applyManagedWorkspaceModelsToStores(bootstrap);
+        }
         return;
       }
       const models = await api.llm.models();
@@ -384,56 +384,62 @@ function useSub2APIManagedGate() {
 }
 
 function ManagedLockedPage(props: { error?: string }) {
-  const [supportContact, setSupportContact] = useState<
-    SupportContactConfig | undefined
-  >();
+  return (
+    <ManagedWorkspaceStatePage
+      title="极速蹬 AI 工作台"
+      subtitle="请从极速蹬控制台进入"
+      error={props.error}
+      diagnosticId={
+        props.error ? "managed-session-gate" : "managed-session-required"
+      }
+      primaryAction={{
+        label: "返回控制台",
+        onClick: () => {
+          window.location.replace(JISUDENG_DASHBOARD_URL);
+        },
+      }}
+    />
+  );
+}
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch(withBasePath("/api/nextchat/public-settings"), {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then((res) => (res.ok ? res.json() : undefined))
-      .then((body) => setSupportContact(body?.support_contact))
-      .catch((error) => {
-        if (!controller.signal.aborted) {
-          console.warn("[Sub2API Managed] support contact load failed", error);
-        }
-      });
-    return () => controller.abort();
-  }, []);
+function ManagedBootstrapPage(props: {
+  loading: boolean;
+  error?: string;
+  status: string;
+  requestId: number;
+  onRetry: () => void;
+}) {
+  const diagnosticId = props.error
+    ? `managed-bootstrap-${props.status}-${props.requestId || "unknown"}`
+    : undefined;
 
   return (
-    <div className={clsx("no-dark", styles["managed-lock-page"])}>
-      <div className={styles["managed-lock-logo"]}>
-        <ManagedBrandLogo large />
-      </div>
-      <div className={styles["managed-lock-title"]}>极速蹬 AI 工作台</div>
-      <div className={styles["managed-lock-subtitle"]}>
-        请从极速蹬控制台进入
-      </div>
-      {props.error ? (
-        <div className={styles["managed-lock-error"]}>{props.error}</div>
-      ) : null}
-      <div className={styles["managed-lock-actions"]}>
-        <button
-          className={styles["managed-lock-primary"]}
-          onClick={() => {
-            window.location.replace(JISUDENG_DASHBOARD_URL);
-          }}
-        >
-          返回控制台
-        </button>
-      </div>
-      <ManagedSupportContact
-        config={supportContact}
-        compact
-        className={styles["managed-lock-support"]}
-      />
-    </div>
+    <ManagedWorkspaceStatePage
+      title="正在准备工作台"
+      subtitle={
+        props.error
+          ? "工作台配置加载失败，请重试或返回控制台"
+          : "正在同步模型、分组和客服配置"
+      }
+      error={props.error}
+      loading={props.loading}
+      diagnosticId={diagnosticId}
+      primaryAction={
+        props.error
+          ? {
+              label: props.loading ? "重试中" : "重试",
+              onClick: props.onRetry,
+              disabled: props.loading,
+            }
+          : undefined
+      }
+      secondaryAction={{
+        label: "返回控制台",
+        onClick: () => {
+          window.location.replace(JISUDENG_DASHBOARD_URL);
+        },
+      }}
+    />
   );
 }
 
@@ -441,9 +447,18 @@ export function Home() {
   useSwitchTheme();
   const clientConfig = useMemo(() => getClientConfig(), []);
   const managedGate = useSub2APIManagedGate();
+  const managedMode = !!clientConfig?.sub2apiManagedMode;
+  const managedWorkspace = useManagedWorkspaceStore();
   const hasHydrated = useHasHydrated();
   useLoadData(managedGate.authenticated);
   useHtmlLang();
+
+  const retryManagedBootstrap = async () => {
+    const bootstrap = await managedWorkspace.fetchBootstrap();
+    if (bootstrap) {
+      applyManagedWorkspaceModelsToStores(bootstrap);
+    }
+  };
 
   useEffect(() => {
     if (!managedGate.authenticated) return;
@@ -472,6 +487,23 @@ export function Home() {
 
   if (managedGate.locked || managedGate.error) {
     return <ManagedLockedPage error={managedGate.error} />;
+  }
+
+  if (managedMode && !managedWorkspace.bootstrap) {
+    const bootstrapError =
+      managedWorkspace.bootstrapError || managedWorkspace.error;
+    return (
+      <ManagedBootstrapPage
+        loading={
+          managedWorkspace.bootstrapStatus === "loading" ||
+          managedWorkspace.bootstrapStatus === "idle"
+        }
+        error={bootstrapError}
+        status={managedWorkspace.bootstrapStatus}
+        requestId={managedWorkspace.bootstrapRequestId}
+        onRetry={() => void retryManagedBootstrap()}
+      />
+    );
   }
 
   return (

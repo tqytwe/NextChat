@@ -1,0 +1,129 @@
+.managed-state-page {
+  min-height: var(--full-height);
+  width: 100vw;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 32px 20px;
+  color: var(--black);
+  background: var(--white);
+  text-align: center;
+}
+
+.managed-state-logo {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.managed-state-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.managed-state-subtitle {
+  max-width: min(560px, 100%);
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--black);
+  opacity: 0.72;
+}
+
+.managed-state-error {
+  max-width: min(520px, 100%);
+  padding: 10px 12px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  color: var(--black);
+  background: var(--second);
+  word-break: break-word;
+}
+
+.managed-state-diagnostic {
+  max-width: min(520px, 100%);
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--black);
+  opacity: 0.68;
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    word-break: break-all;
+  }
+}
+
+.managed-state-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.managed-state-support {
+  width: min(420px, 100%);
+  margin-top: 8px;
+  text-align: left;
+}
+
+.managed-state-loading {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.managed-state-primary,
+.managed-state-secondary {
+  border-radius: 8px;
+  padding: 10px 18px;
+  cursor: pointer;
+  font-size: 14px;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    filter 0.12s ease;
+}
+
+.managed-state-primary {
+  border: 0;
+  color: var(--white);
+  background: var(--primary);
+}
+
+.managed-state-secondary {
+  border: var(--border-in-light);
+  color: var(--black);
+  background: var(--white);
+}
+
+.managed-state-primary:hover:not(:disabled),
+.managed-state-secondary:hover:not(:disabled) {
+  box-shadow: var(--card-shadow);
+}
+
+.managed-state-primary:active:not(:disabled),
+.managed-state-secondary:active:not(:disabled) {
+  filter: brightness(0.98);
+}
+
+.managed-state-primary:disabled,
+.managed-state-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+.managed-state-primary:focus-visible,
+.managed-state-secondary:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

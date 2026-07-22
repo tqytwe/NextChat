@@ -386,7 +386,7 @@ describe("Sub2API managed workspace model helpers", () => {
         },
       }),
     );
-    await staleBootstrap;
+    await expect(staleBootstrap).resolves.toBeUndefined();
 
     const state = useManagedWorkspaceStore.getState();
     expect(switched?.models.selected_group_id).toBe(8);
@@ -403,6 +403,214 @@ describe("Sub2API managed workspace model helpers", () => {
       value: originalFetch,
       configurable: true,
     });
+  });
+
+  test("invalidates bootstrap refreshes that start during a group switch", async () => {
+    const originalFetch = globalThis.fetch;
+    let resolveGroup: (value: any) => void = () => {};
+    let resolveBootstrap: (value: any) => void = () => {};
+    const openAIGroup = makeManagedWorkspaceGroupPatch(
+      7,
+      "Managed OpenAI",
+      "OpenAI main",
+      "openai",
+      "gpt-5.4-mini",
+    );
+    const grokGroup = makeManagedWorkspaceGroupPatch(
+      8,
+      "Managed Grok",
+      "Grok only",
+      "grok",
+      "grok-4-fast",
+    );
+
+    useManagedWorkspaceStore.getState().reset();
+    useManagedWorkspaceStore.setState({
+      bootstrap: makeManagedWorkspaceBootstrap(openAIGroup),
+      loading: false,
+      switchingGroup: false,
+      error: "",
+    } as any);
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn((url: string, init?: RequestInit) => {
+        if (url.includes("/api/nextchat/group") && init?.method === "POST") {
+          return new Promise((resolve) => {
+            resolveGroup = resolve;
+          });
+        }
+        if (url.includes("/api/nextchat/bootstrap")) {
+          return new Promise((resolve) => {
+            resolveBootstrap = resolve;
+          });
+        }
+        return Promise.reject(new Error(`unexpected request ${url}`));
+      }),
+      configurable: true,
+    });
+
+    const switchPromise = useManagedWorkspaceStore.getState().switchGroup(8);
+    const staleBootstrap = useManagedWorkspaceStore.getState().fetchBootstrap();
+
+    resolveGroup(makeManagedWorkspaceResponse(grokGroup));
+    const switched = await switchPromise;
+
+    resolveBootstrap(
+      makeManagedWorkspaceResponse(makeManagedWorkspaceBootstrap(openAIGroup)),
+    );
+    await expect(staleBootstrap).resolves.toBeUndefined();
+
+    const state = useManagedWorkspaceStore.getState();
+    expect(switched?.models.selected_group_id).toBe(8);
+    expect(state.bootstrap?.models.selected_group_id).toBe(8);
+    expect(state.loading).toBe(false);
+    expect(state.switchingGroup).toBe(false);
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+  });
+
+  test("returns undefined for stale group switches so callers do not apply old models", async () => {
+    const originalFetch = globalThis.fetch;
+    let resolveFirstSwitch: (value: any) => void = () => {};
+    const openAIGroup = makeManagedWorkspaceGroupPatch(
+      7,
+      "Managed OpenAI",
+      "OpenAI main",
+      "openai",
+      "gpt-5.4-mini",
+    );
+    const grokGroup = makeManagedWorkspaceGroupPatch(
+      8,
+      "Managed Grok",
+      "Grok only",
+      "grok",
+      "grok-4-fast",
+    );
+    const claudeGroup = makeManagedWorkspaceGroupPatch(
+      9,
+      "Managed Claude",
+      "Claude only",
+      "anthropic",
+      "claude-fable-5",
+    );
+
+    useManagedWorkspaceStore.getState().reset();
+    useManagedWorkspaceStore.setState({
+      bootstrap: makeManagedWorkspaceBootstrap(openAIGroup),
+      loading: false,
+      switchingGroup: false,
+      error: "",
+    } as any);
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn((url: string, init?: RequestInit) => {
+        if (url.includes("/api/nextchat/group") && init?.method === "POST") {
+          const groupId = JSON.parse(String(init.body)).group_id;
+          if (groupId === 8) {
+            return new Promise((resolve) => {
+              resolveFirstSwitch = resolve;
+            });
+          }
+          if (groupId === 9) {
+            return Promise.resolve(makeManagedWorkspaceResponse(claudeGroup));
+          }
+        }
+        return Promise.reject(new Error(`unexpected request ${url}`));
+      }),
+      configurable: true,
+    });
+
+    const staleSwitch = useManagedWorkspaceStore.getState().switchGroup(8);
+    const winningSwitch = await useManagedWorkspaceStore
+      .getState()
+      .switchGroup(9);
+    resolveFirstSwitch(makeManagedWorkspaceResponse(grokGroup));
+
+    await expect(staleSwitch).resolves.toBeUndefined();
+
+    const state = useManagedWorkspaceStore.getState();
+    expect(winningSwitch?.models.selected_group_id).toBe(9);
+    expect(state.bootstrap?.models.selected_group_id).toBe(9);
+    expect(state.groupSwitchStatus).toBe("success");
+    expect(state.switchingGroup).toBe(false);
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: originalFetch,
+      configurable: true,
+    });
+  });
+
+  test("times out a group switch request that does not settle", async () => {
+    const originalFetch = globalThis.fetch;
+    jest.useFakeTimers();
+    useManagedWorkspaceStore.getState().reset();
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        });
+      }),
+      configurable: true,
+    });
+
+    try {
+      const switched = useManagedWorkspaceStore.getState().switchGroup(8);
+      await Promise.resolve();
+      jest.advanceTimersByTime(15000);
+      await expect(switched).resolves.toBeUndefined();
+
+      const state = useManagedWorkspaceStore.getState();
+      expect(state.groupSwitchStatus).toBe("error");
+      expect(state.groupSwitchError).toBe("Workspace request timed out");
+      expect(state.switchingGroup).toBe(false);
+    } finally {
+      jest.useRealTimers();
+      Object.defineProperty(globalThis, "fetch", {
+        value: originalFetch,
+        configurable: true,
+      });
+    }
+  });
+
+  test("marks bootstrap as timeout when the request does not settle", async () => {
+    const originalFetch = globalThis.fetch;
+    jest.useFakeTimers();
+    useManagedWorkspaceStore.getState().reset();
+
+    Object.defineProperty(globalThis, "fetch", {
+      value: jest.fn((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        });
+      }),
+      configurable: true,
+    });
+
+    try {
+      const bootstrap = useManagedWorkspaceStore.getState().fetchBootstrap();
+      await Promise.resolve();
+      jest.advanceTimersByTime(15000);
+      await expect(bootstrap).resolves.toBeUndefined();
+
+      const state = useManagedWorkspaceStore.getState();
+      expect(state.bootstrapStatus).toBe("timeout");
+      expect(state.bootstrapError).toBe("Workspace request timed out");
+      expect(state.loading).toBe(false);
+    } finally {
+      jest.useRealTimers();
+      Object.defineProperty(globalThis, "fetch", {
+        value: originalFetch,
+        configurable: true,
+      });
+    }
   });
 });
 
@@ -434,5 +642,47 @@ function makeManagedWorkspaceResponse(data: any) {
       code: 0,
       data,
     }),
+  };
+}
+
+function makeManagedWorkspaceGroupPatch(
+  groupId: number,
+  keyName: string,
+  groupName: string,
+  platform: string,
+  model: string,
+) {
+  return {
+    managed_api_key: {
+      id: 3,
+      name: keyName,
+      group_id: groupId,
+      group_name: groupName,
+      group_platform: platform,
+    },
+    models: {
+      source: "/v1/models",
+      selected_group_id: groupId,
+      default_model: model,
+      groups: [
+        {
+          id: groupId,
+          name: groupName,
+          platform,
+          models: [{ id: model, name: model }],
+        },
+      ],
+    },
+  };
+}
+
+function makeManagedWorkspaceBootstrap(groupPatch: any) {
+  return {
+    user: { id: 1 },
+    brand: {},
+    features: {},
+    urls: {},
+    retention: {},
+    ...groupPatch,
   };
 }

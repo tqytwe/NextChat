@@ -11,7 +11,10 @@ const JISUDENG_LEGACY_HOSTS = new Set(["jisuodeng.zeabur.app"]);
 const NEXTCHAT_MANAGED_FRONTEND_HOSTS = new Set(["nexta.zeabur.app"]);
 const HOMEPAGE_PATHS = new Set(["/", "/home", "/index"]);
 const LEGACY_RECHARGE_PATHS = new Set(["/payment", "/recharge", "/billing"]);
-let managedWorkspaceRequestSeq = 0;
+const MANAGED_BOOTSTRAP_TIMEOUT_MS = 15000;
+let managedBootstrapRequestSeq = 0;
+let managedGroupSwitchRequestSeq = 0;
+let managedWorkspaceMutationSeq = 0;
 
 type Sub2APIEnvelope<T> = {
   code?: number;
@@ -89,6 +92,12 @@ export type ManagedWorkspaceBootstrap = {
 
 type ManagedWorkspaceState = {
   bootstrap?: ManagedWorkspaceBootstrap;
+  bootstrapStatus: "idle" | "loading" | "ready" | "error" | "timeout";
+  bootstrapError: string;
+  bootstrapRequestId: number;
+  groupSwitchStatus: "idle" | "switching" | "success" | "error";
+  groupSwitchError: string;
+  groupSwitchRequestId: number;
   loading: boolean;
   switchingGroup: boolean;
   error: string;
@@ -101,57 +110,115 @@ type ManagedWorkspaceState = {
 
 export const useManagedWorkspaceStore = create<ManagedWorkspaceState>(
   (set, get) => ({
+    bootstrapStatus: "idle",
+    bootstrapError: "",
+    bootstrapRequestId: 0,
+    groupSwitchStatus: "idle",
+    groupSwitchError: "",
+    groupSwitchRequestId: 0,
     loading: false,
     switchingGroup: false,
     error: "",
     async fetchBootstrap() {
-      const requestSeq = ++managedWorkspaceRequestSeq;
-      set({ loading: true, error: "" });
+      const requestSeq = ++managedBootstrapRequestSeq;
+      const mutationSeq = managedWorkspaceMutationSeq;
+      set({
+        bootstrapStatus: "loading",
+        bootstrapError: "",
+        bootstrapRequestId: requestSeq,
+        loading: true,
+        error: "",
+      });
       try {
-        const bootstrap =
-          await fetchManagedWorkspace<ManagedWorkspaceBootstrap>(
-            withBasePath("/api/nextchat/bootstrap"),
-          );
-        if (requestSeq !== managedWorkspaceRequestSeq) {
-          return get().bootstrap;
-        }
-        set({ bootstrap, loading: false });
-        return bootstrap;
-      } catch (error: any) {
-        if (requestSeq !== managedWorkspaceRequestSeq) {
-          return get().bootstrap;
+        const bootstrap = await withTimeout(
+          MANAGED_BOOTSTRAP_TIMEOUT_MS,
+          (signal) =>
+            fetchManagedWorkspace<ManagedWorkspaceBootstrap>(
+              withBasePath("/api/nextchat/bootstrap"),
+              { signal },
+            ),
+        );
+        if (
+          requestSeq !== managedBootstrapRequestSeq ||
+          mutationSeq !== managedWorkspaceMutationSeq
+        ) {
+          return undefined;
         }
         set({
+          bootstrap,
+          bootstrapStatus: "ready",
+          bootstrapError: "",
           loading: false,
-          error: error.message || "Failed to load workspace",
+        });
+        return bootstrap;
+      } catch (error: any) {
+        if (
+          requestSeq !== managedBootstrapRequestSeq ||
+          mutationSeq !== managedWorkspaceMutationSeq
+        ) {
+          return undefined;
+        }
+        const timedOut = error?.name === "ManagedWorkspaceTimeoutError";
+        const message = error.message || "Failed to load workspace";
+        set({
+          bootstrapStatus: timedOut ? "timeout" : "error",
+          bootstrapError: message,
+          loading: false,
+          error: message,
         });
         return undefined;
       }
     },
     async switchGroup(groupId: number) {
-      const requestSeq = ++managedWorkspaceRequestSeq;
-      set({ loading: false, switchingGroup: true, error: "" });
+      const requestSeq = ++managedGroupSwitchRequestSeq;
+      managedWorkspaceMutationSeq++;
+      set({
+        groupSwitchStatus: "switching",
+        groupSwitchError: "",
+        groupSwitchRequestId: requestSeq,
+        loading: false,
+        switchingGroup: true,
+        error: "",
+      });
       try {
-        const result = await fetchManagedWorkspace<{
-          managed_api_key: ManagedWorkspaceBootstrap["managed_api_key"];
-          models: ManagedWorkspaceModels;
-        }>(withBasePath("/api/nextchat/group"), {
-          method: "POST",
-          body: JSON.stringify({ group_id: groupId }),
-        });
-        if (requestSeq !== managedWorkspaceRequestSeq) {
-          return get().bootstrap;
+        const result = await withTimeout(
+          MANAGED_BOOTSTRAP_TIMEOUT_MS,
+          (signal) =>
+            fetchManagedWorkspace<{
+              managed_api_key: ManagedWorkspaceBootstrap["managed_api_key"];
+              models: ManagedWorkspaceModels;
+            }>(withBasePath("/api/nextchat/group"), {
+              method: "POST",
+              body: JSON.stringify({ group_id: groupId }),
+              signal,
+            }),
+        );
+        if (requestSeq !== managedGroupSwitchRequestSeq) {
+          return undefined;
         }
         const previous = get().bootstrap;
         if (!previous) {
-          const bootstrap =
-            await fetchManagedWorkspace<ManagedWorkspaceBootstrap>(
-              withBasePath("/api/nextchat/bootstrap"),
-            );
-          if (requestSeq !== managedWorkspaceRequestSeq) {
-            return get().bootstrap;
+          const bootstrap = await withTimeout(
+            MANAGED_BOOTSTRAP_TIMEOUT_MS,
+            (signal) =>
+              fetchManagedWorkspace<ManagedWorkspaceBootstrap>(
+                withBasePath("/api/nextchat/bootstrap"),
+                { signal },
+              ),
+          );
+          if (requestSeq !== managedGroupSwitchRequestSeq) {
+            return undefined;
           }
-          set({ bootstrap, loading: false, switchingGroup: false });
+          managedWorkspaceMutationSeq++;
+          set({
+            bootstrap,
+            bootstrapStatus: "ready",
+            bootstrapError: "",
+            groupSwitchStatus: "success",
+            groupSwitchError: "",
+            loading: false,
+            switchingGroup: false,
+          });
           return bootstrap;
         }
         const bootstrap = {
@@ -159,27 +226,47 @@ export const useManagedWorkspaceStore = create<ManagedWorkspaceState>(
           managed_api_key: result.managed_api_key,
           models: result.models,
         };
-        if (requestSeq !== managedWorkspaceRequestSeq) {
-          return get().bootstrap;
+        if (requestSeq !== managedGroupSwitchRequestSeq) {
+          return undefined;
         }
-        set({ bootstrap, loading: false, switchingGroup: false });
-        return bootstrap;
-      } catch (error: any) {
-        if (requestSeq !== managedWorkspaceRequestSeq) {
-          return get().bootstrap;
-        }
+        managedWorkspaceMutationSeq++;
         set({
+          bootstrap,
+          bootstrapStatus: "ready",
+          bootstrapError: "",
+          groupSwitchStatus: "success",
+          groupSwitchError: "",
           loading: false,
           switchingGroup: false,
-          error: error.message || "Failed to switch group",
+        });
+        return bootstrap;
+      } catch (error: any) {
+        if (requestSeq !== managedGroupSwitchRequestSeq) {
+          return undefined;
+        }
+        const message = error.message || "Failed to switch group";
+        set({
+          groupSwitchStatus: "error",
+          groupSwitchError: message,
+          loading: false,
+          switchingGroup: false,
+          error: message,
         });
         return undefined;
       }
     },
     reset() {
-      managedWorkspaceRequestSeq++;
+      managedBootstrapRequestSeq++;
+      managedGroupSwitchRequestSeq++;
+      managedWorkspaceMutationSeq++;
       set({
         bootstrap: undefined,
+        bootstrapStatus: "idle",
+        bootstrapError: "",
+        bootstrapRequestId: 0,
+        groupSwitchStatus: "idle",
+        groupSwitchError: "",
+        groupSwitchRequestId: 0,
         loading: false,
         switchingGroup: false,
         error: "",
@@ -518,6 +605,30 @@ export function resolveManagedWorkspaceURL(
     return url.toString();
   } catch {
     return fallbackURL.toString();
+  }
+}
+
+async function withTimeout<T>(
+  timeoutMs: number,
+  request: (signal: AbortSignal) => Promise<T>,
+) {
+  const controller = new AbortController();
+  let didTimeout = false;
+  const timeout = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await request(controller.signal);
+  } catch (error) {
+    if (didTimeout) {
+      const timeoutError = new Error("Workspace request timed out");
+      timeoutError.name = "ManagedWorkspaceTimeoutError";
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
