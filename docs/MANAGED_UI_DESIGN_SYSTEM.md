@@ -124,3 +124,8 @@ Playwright/axe CI 和运行时状态自动探测仍属于整改计划，不能�
 - 聊天列表、输入区、滚动和本地会话行为无回归。
 - `yarn design:check`、`yarn test:ci` 和 `yarn build` 通过。
 - 已新增并填写 `docs/visual-reviews/YYYY-MM-DD-<slug>.md`。
+- visual review 必须声明 `artifact_mode`。`browser-capture` 代表真实浏览器或
+  Playwright 截图/录像；`static-review-board` 只能作为无浏览器环境下的辅助证据，
+  必须在 residual risk 写明仍需浏览器截图或最终验收。
+- PNG 证据必须是真实可解码图片；门禁校验 PNG chunk、CRC、像素数据和最小尺寸，
+  禁止 1x1 占位图或只伪造 header 的假图。

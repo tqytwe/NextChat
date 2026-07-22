@@ -105,7 +105,11 @@ function SupportQRCodeCard(props: { contact: SupportContactMethod }) {
       </div>
       <div className={styles.actions}>
         {copyValue ? (
-          <button type="button" onClick={() => copyToClipboard(copyValue)}>
+          <button
+            type="button"
+            aria-label={`复制 ${contact.label}`}
+            onClick={() => copyToClipboard(copyValue)}
+          >
             <CopyIcon />
             复制
           </button>
@@ -113,6 +117,7 @@ function SupportQRCodeCard(props: { contact: SupportContactMethod }) {
         {url ? (
           <button
             type="button"
+            aria-label={`打开 ${contact.label}`}
             onClick={() => window.open(url, "_blank", "noopener")}
           >
             <ReturnIcon />
@@ -146,6 +151,7 @@ function SupportContactRow(props: { contact: SupportContactMethod }) {
           <button
             type="button"
             title="复制"
+            aria-label={`复制 ${contact.label}`}
             onClick={() => copyToClipboard(copyValue)}
           >
             <CopyIcon />
@@ -155,6 +161,7 @@ function SupportContactRow(props: { contact: SupportContactMethod }) {
           <button
             type="button"
             title="打开"
+            aria-label={`打开 ${contact.label}`}
             onClick={() => window.open(url, "_blank", "noopener")}
           >
             <ReturnIcon />

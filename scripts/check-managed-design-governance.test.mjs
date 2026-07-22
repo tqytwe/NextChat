@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { deflateSync } from "node:zlib";
 
 import {
   REQUIRED_RULE_NAMES,
@@ -19,6 +20,59 @@ import {
   validateFunctionalIconContent,
   validateEvidenceRecords,
 } from "./check-managed-design-governance.mjs";
+
+function pngWithDimensions(width, height) {
+  const signature = Buffer.from("89504e470d0a1a0a", "hex");
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const scanlineLength = width * 4 + 1;
+  const pixels = Buffer.alloc(scanlineLength * height);
+  for (let offset = 0; offset < pixels.length; offset += scanlineLength) {
+    pixels[offset] = 0;
+  }
+  return Buffer.concat([
+    signature,
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(pixels)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function fakePngWithDimensions(width, height) {
+  const bytes = Buffer.alloc(24);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(bytes, 0);
+  bytes.write("IHDR", 12, "ascii");
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
+function pngChunk(type, data) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])), 8 + data.length);
+  return chunk;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) {
+      crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -136,9 +190,8 @@ test("managed visual evidence covers artifacts and frozen core review", () => {
     const reviewDir = join(repo, "docs/visual-reviews");
     const assetDir = join(reviewDir, "assets");
     mkdirSync(assetDir, { recursive: true });
-    const pngHeader = Buffer.from("89504e470d0a1a0a", "hex");
-    writeFileSync(join(assetDir, "before.png"), pngHeader);
-    writeFileSync(join(assetDir, "after.png"), pngHeader);
+    writeFileSync(join(assetDir, "before.png"), pngWithDimensions(320, 200));
+    writeFileSync(join(assetDir, "after.png"), pngWithDimensions(320, 200));
 
     const review = "docs/visual-reviews/2026-07-21-test.md";
     writeFileSync(
@@ -154,6 +207,7 @@ test("managed visual evidence covers artifacts and frozen core review", () => {
           languages_and_themes: ["zh-CN/light"],
           states: ["ready", "error"],
           viewports: ["360x800", "1280x800"],
+          artifact_mode: "browser-capture",
           baseline_artifacts: ["docs/visual-reviews/assets/before.png"],
           updated_artifacts: ["docs/visual-reviews/assets/after.png"],
           commands: ["playwright screenshot managed chat"],
@@ -194,6 +248,21 @@ test("managed visual evidence covers artifacts and frozen core review", () => {
       [],
     );
 
+    writeFileSync(join(assetDir, "after.png"), fakePngWithDimensions(320, 200));
+    const fakeArtifactViolations = validateEvidenceRecords({
+      repoRoot: repo,
+      visualFiles: ["app/components/chat.tsx"],
+      frozenFiles: ["app/components/chat.tsx"],
+      evidenceFiles: [review]
+    });
+    assert.ok(
+      fakeArtifactViolations.some((item) =>
+        item.source.includes("not a complete PNG image") ||
+        item.source.includes("valid PNG"),
+      ),
+    );
+
+    writeFileSync(join(assetDir, "after.png"), pngWithDimensions(320, 200));
     const violations = validateEvidenceRecords({
       repoRoot: repo,
       visualFiles: ["app/components/chat.tsx"],
@@ -202,6 +271,19 @@ test("managed visual evidence covers artifacts and frozen core review", () => {
       requireFrozenJustification: false
     });
     assert.deepEqual(violations, []);
+
+    writeFileSync(join(assetDir, "after.png"), pngWithDimensions(1, 1));
+    const tinyArtifactViolations = validateEvidenceRecords({
+      repoRoot: repo,
+      visualFiles: ["app/components/chat.tsx"],
+      frozenFiles: ["app/components/chat.tsx"],
+      evidenceFiles: [review]
+    });
+    assert.ok(
+      tinyArtifactViolations.some((item) =>
+        item.source.includes("artifact dimensions are too small"),
+      ),
+    );
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
