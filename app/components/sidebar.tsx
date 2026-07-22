@@ -46,7 +46,6 @@ import {
   useManagedWorkspaceStore,
 } from "../store/managed-workspace";
 import { ManagedBrandLogo } from "./managed-brand";
-import { ManagedSupportContact } from "./managed-support-contact";
 
 const DISCOVERY = [
   { name: Locale.Plugin.Name, path: Path.Plugins },
@@ -401,15 +400,6 @@ export function SideBar(props: { className?: string }) {
       </SideBarBody>
       <SideBarTail
         className={clsx({ [styles["managed-sidebar-tail"]]: managedMode })}
-        extra={
-          managedMode && !shouldNarrow ? (
-            <ManagedSupportContact
-              config={managedBootstrap?.support_contact}
-              compact
-              className={styles["managed-sidebar-support"]}
-            />
-          ) : undefined
-        }
         primaryAction={
           <>
             <div className={clsx(styles["sidebar-action"], styles.mobile)}>
