@@ -130,21 +130,21 @@ export async function proxySub2APINextChatBFF(
   if (!isSub2APIManagedMode(config)) {
     return NextResponse.json(
       { error: true, msg: "Sub2API managed mode is disabled" },
-      { status: 404 },
+      noStoreInit(404),
     );
   }
   const session = await getManagedSessionFromRequest(req);
   if (!session) {
     return NextResponse.json(
       { error: true, msg: "missing or expired Sub2API managed session" },
-      { status: 401 },
+      noStoreInit(401),
     );
   }
   const baseUrl = normalizeSub2APIOrigin(config.sub2apiBaseUrl);
   if (!baseUrl || !config.sub2apiNextChatSecret) {
     return NextResponse.json(
       { error: true, msg: "Sub2API managed BFF is not configured" },
-      { status: 500 },
+      noStoreInit(500),
     );
   }
 
@@ -175,6 +175,10 @@ export async function proxySub2APINextChatBFF(
     statusText: upstream.statusText,
     headers,
   });
+}
+
+function noStoreInit(status: number) {
+  return { status, headers: { "Cache-Control": "no-store" } };
 }
 
 function appendRequestSearch(path: string, req: NextRequest) {

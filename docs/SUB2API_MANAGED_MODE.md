@@ -87,6 +87,20 @@ The OpenAI-compatible proxy must inject the managed Sub2API API key on the serve
 
 ## UI Policy
 
+All managed visual changes must also follow
+[`MANAGED_UI_DESIGN_SYSTEM.md`](./MANAGED_UI_DESIGN_SYSTEM.md). Read that
+document and inspect the current rendered UI before changing managed layout,
+icons, support surfaces, or system states.
+
+The reviewed rollout sequence and frozen chat-core boundary are recorded in
+[`MANAGED_UI_REMEDIATION_PLAN.md`](./MANAGED_UI_REMEDIATION_PLAN.md). Every
+visible managed change must also include a completed record under
+`docs/visual-reviews/`.
+
+The executable file ownership, icon boundary and frozen-core list are stored in
+[`managed-ui-governance.json`](./managed-ui-governance.json). Update the policy,
+checker and tests together when that ownership changes.
+
 Managed mode must hide or remove:
 
 - User API key inputs.

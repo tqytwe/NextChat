@@ -26,3 +26,13 @@ Thank you for your Pull Request. Please provide a description above.
 请添加与此 Pull Request 相关的补充信息
 Add any other context about the Pull Request here.
 -->
+
+#### 🎨 Managed UI 检查 | Managed UI Review
+
+- [ ] 本 PR 不含 managed 可见改动，或已阅读 `AGENTS.md`、
+      `docs/MANAGED_UI_DESIGN_SYSTEM.md` 和 `docs/SUB2API_MANAGED_MODE.md`。
+- [ ] 已查看当前桌面、移动或短屏画面，不是只读 JSX/SCSS。
+- [ ] 若包含 managed 可见改动，已新增结构化视觉记录并提交真实的修改前后画面产物。
+- [ ] 已检查 session/bootstrap 错误、重试、客服、键盘焦点和 reduced-motion。
+- [ ] 已确认消息、输入、聊天滚动和会话持久化没有行为变化。
+- [ ] 已运行 `yarn design:check`、`yarn test:ci` 和 `yarn build`。

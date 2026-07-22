@@ -4,19 +4,30 @@ on:
   push:
     branches:
       - main
+      - feat/sub2api-managed-20260720
     tags:
       - "!*"
   pull_request:
+    branches:
+      - main
+      - feat/sub2api-managed-20260720
     types:
-      - review_requested
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      DESIGN_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v3
@@ -35,5 +46,11 @@ jobs:
       - name: Install dependencies
         run: yarn install
 
+      - name: Verify managed design governance
+        run: yarn design:verify
+
       - name: Run Jest tests
         run: yarn test:ci
+
+      - name: Build managed workspace
+        run: yarn build
