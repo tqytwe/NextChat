@@ -4,13 +4,18 @@ import React from "react";
 import { IconButton } from "./button";
 import GithubIcon from "../icons/github.svg";
 import ResetIcon from "../icons/reload.svg";
+import ReturnIcon from "../icons/return.svg";
 import { ISSUE_URL } from "../constant";
 import Locale from "../locales";
 import { showConfirm } from "./ui-lib";
 import { useSyncStore } from "../store/sync";
 import { useChatStore } from "../store/chat";
 import { getClientConfig } from "../config/client";
-import { useManagedWorkspaceStore } from "../store/managed-workspace";
+import {
+  JISUDENG_DASHBOARD_URL,
+  resolveManagedWorkspaceURL,
+  useManagedWorkspaceStore,
+} from "../store/managed-workspace";
 import { ManagedSupportContact } from "./managed-support-contact";
 
 interface IErrorBoundaryState {
@@ -41,19 +46,30 @@ export class ErrorBoundary extends React.Component<any, IErrorBoundaryState> {
   render() {
     if (this.state.hasError) {
       const managedMode = !!getClientConfig()?.sub2apiManagedMode;
+      const managedBootstrap = useManagedWorkspaceStore.getState().bootstrap;
       const supportContact = managedMode
-        ? useManagedWorkspaceStore.getState().bootstrap?.support_contact
+        ? managedBootstrap?.support_contact
         : undefined;
+      const returnUrl = resolveManagedWorkspaceURL(
+        managedBootstrap?.urls?.return_url,
+        JISUDENG_DASHBOARD_URL,
+      );
       // Render error message
       return (
         <div className="error">
           <h2>
             {managedMode ? "工作台发生错误" : "Oops, something went wrong!"}
           </h2>
-          <pre>
-            <code>{this.state.error?.toString()}</code>
-            <code>{this.state.info?.componentStack}</code>
-          </pre>
+          {managedMode ? (
+            <p>
+              当前工作台状态没有完全恢复。请先重新加载，仍然失败时返回控制台或联系人工客服。
+            </p>
+          ) : (
+            <pre>
+              <code>{this.state.error?.toString()}</code>
+              <code>{this.state.info?.componentStack}</code>
+            </pre>
+          )}
 
           <div style={{ display: "flex", justifyContent: "space-between" }}>
             {!managedMode && (
@@ -65,16 +81,33 @@ export class ErrorBoundary extends React.Component<any, IErrorBoundaryState> {
                 />
               </a>
             )}
-            <IconButton
-              icon={<ResetIcon />}
-              text={managedMode ? "清理本地数据" : "Clear All Data"}
-              onClick={async () => {
-                if (await showConfirm(Locale.Settings.Danger.Reset.Confirm)) {
-                  this.clearAndSaveData();
-                }
-              }}
-              bordered
-            />
+            {managedMode ? (
+              <>
+                <IconButton
+                  icon={<ResetIcon />}
+                  text="重新加载"
+                  onClick={() => window.location.reload()}
+                  bordered
+                />
+                <IconButton
+                  icon={<ReturnIcon />}
+                  text="返回控制台"
+                  onClick={() => window.location.replace(returnUrl)}
+                  bordered
+                />
+              </>
+            ) : (
+              <IconButton
+                icon={<ResetIcon />}
+                text="Clear All Data"
+                onClick={async () => {
+                  if (await showConfirm(Locale.Settings.Danger.Reset.Confirm)) {
+                    this.clearAndSaveData();
+                  }
+                }}
+                bordered
+              />
+            )}
           </div>
           {managedMode ? (
             <ManagedSupportContact

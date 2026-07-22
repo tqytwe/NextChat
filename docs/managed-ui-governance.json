@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "policy_status": {
+    "managed_visual_rules": "enforced",
+    "rendered_visual_evidence": "enforced",
+    "chat_core_freeze_review": "enforced",
+    "managed_shell_config_v1": "planned",
+    "playwright_axe_ci": "planned"
+  },
+  "required_rule_names": [
+    "inline-svg",
+    "transition-all",
+    "large-radius",
+    "raw-color",
+    "focus-reset",
+    "global-style",
+    "continuous-motion"
+  ],
+  "managed_visual_prefixes": [
+    "app/components/managed-",
+    "app/styles/managed-"
+  ],
+  "managed_visual_files": [
+    "app/components/home.tsx",
+    "app/components/home.module.scss",
+    "app/components/sidebar.tsx",
+    "app/components/sidebar.module.scss",
+    "app/components/error.tsx",
+    "app/layout.tsx"
+  ],
+  "shared_contract_files": [
+    "app/components/button.tsx",
+    "app/components/button.module.scss",
+    "app/components/ui-lib.tsx",
+    "app/components/ui-lib.module.scss",
+    "app/utils/support-contact.ts"
+  ],
+  "managed_config_files": [
+    "app/store/managed-workspace.ts",
+    "app/api/nextchat/public-settings/route.ts",
+    "app/api/sub2api-managed.ts"
+  ],
+  "functional_icon_prefix": "app/icons/",
+  "brand_icon_prefixes": [
+    "app/icons/llm-icons/"
+  ],
+  "brand_icon_files": [
+    "app/icons/logo.svg",
+    "app/icons/github.svg",
+    "app/icons/chatgpt.svg"
+  ],
+  "frozen_core_files": [
+    "app/components/chat.tsx",
+    "app/components/chat.module.scss",
+    "app/components/new-chat.tsx",
+    "app/components/new-chat.module.scss",
+    "app/store/chat.ts"
+  ],
+  "token_files": [
+    "app/styles/managed-tokens.scss"
+  ],
+  "visual_review_schema": 1
+}

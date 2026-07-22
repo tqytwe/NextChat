@@ -111,7 +111,10 @@ function SupportQRCodeCard(props: { contact: SupportContactMethod }) {
           </button>
         ) : null}
         {url ? (
-          <button type="button" onClick={() => window.open(url, "_blank")}>
+          <button
+            type="button"
+            onClick={() => window.open(url, "_blank", "noopener")}
+          >
             <ReturnIcon />
             打开
           </button>
@@ -152,7 +155,7 @@ function SupportContactRow(props: { contact: SupportContactMethod }) {
           <button
             type="button"
             title="打开"
-            onClick={() => window.open(url, "_blank")}
+            onClick={() => window.open(url, "_blank", "noopener")}
           >
             <ReturnIcon />
           </button>
