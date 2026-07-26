@@ -199,12 +199,8 @@ export const useManagedNextChatStore = createPersistStore<
           } catch (error) {
             if (isManagedAuthError(error)) {
               set({
-                accessToken: "",
-                refreshToken: "",
-                accessTokenExpiresAt: "",
-                session: null,
-                imageSession: null,
-                workspace: null,
+                lastError: getManagedMobileText().errors.unauthorized,
+                loading: false,
               });
             }
             throw error;

@@ -1,20 +1,19 @@
 {
   "platform": "android",
-  "version": "2.0.37",
+  "version": "2.0.38",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "442ef3a39c01f1617584de595f2cda822a954d0d60ec25af6c09adfb803d0877",
+  "sha256": "2f2c012df9ddf306a7c5d9ae9834c0ebd56ac19ee23189f8c86071e741f6d305",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-26",
   "notes": [
-    "修复 2.0.36 聊天连接中断中文提示和非流式兜底",
-    "修复账户与客服同步失败提示",
-    "修复聊天和生图模型分组互相干扰",
-    "优化本机图库底部遮挡、智能体面板高度和原图全屏查看",
-    "修复进入历史会话从头刷屏滚动问题"
+    "修复临时网络/认证刷新失败导致突然退出登录",
+    "首页新增技能中心和多专家协作入口",
+    "生图失败/取消历史支持删除和一键清理",
+    "优化生图历史操作按钮布局。"
   ],
-  "versionCode": 237,
-  "bytes": 7394372,
+  "versionCode": 238,
+  "bytes": 7396104,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

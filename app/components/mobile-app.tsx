@@ -127,6 +127,7 @@ type ServerSkillSelection = {
 };
 
 const SERVER_SKILL_SELECTION_KEY = "jisudengchat-server-skills-v1";
+const COLLABORATION_AGENT_ID = "multi-agent-collaboration";
 
 function clientRequestID(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -552,6 +553,27 @@ const IMAGE_PROMPT_TEMPLATES: ImagePromptTemplate[] = [
 ];
 
 const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
+  {
+    id: COLLABORATION_AGENT_ID,
+    category: "collaboration",
+    title: { cn: "多专家协作", en: "Multi-expert collaboration" },
+    description: {
+      cn: "用产品、技术、运营、风控等多个视角共同拆解问题。",
+      en: "Break down a task through product, engineering, operations, and risk perspectives.",
+    },
+    personality: {
+      cn: "多视角、先分工、再汇总",
+      en: "Multi-perspective, structured, decisive",
+    },
+    systemPrompt: {
+      cn: "你是一个多专家协作组，但不要假装有后台多智能体编排。请在单次回答中模拟多个专业视角协同：产品专家负责用户场景和优先级，技术专家负责实现路径和风险，运营专家负责增长、留存和话术，风控/客服专家负责异常、投诉、合规和兜底。先用简短小节列出各专家判断，再汇总成可执行方案、优先级、验收标准和下一步。用户要求简单回答时保持简洁，不要为了展示协作而冗长。",
+      en: "You are a multi-expert collaboration group, but do not pretend there is backend multi-agent orchestration. In one response, simulate coordinated expert perspectives: product for user scenarios and priority, engineering for implementation and risk, operations for growth and retention, and risk/support for edge cases, complaints, compliance, and fallback. Give brief expert judgments, then summarize an actionable plan, priority, acceptance criteria, and next steps. Stay concise when the user asks for a simple answer.",
+    },
+    starter: {
+      cn: "请用多专家协作方式帮我分析：",
+      en: "Analyze this with multi-expert collaboration:",
+    },
+  },
   {
     id: "writing-editor",
     category: "writing",
@@ -2659,8 +2681,48 @@ function AndroidDashboard() {
     }
   }
 
+  async function deleteDashboardImageTask(item: any) {
+    if (!window.confirm(text.image.deleteTaskConfirm)) return;
+    try {
+      const localFileNames = imageLocalFileNames(item);
+      if (localFileNames.length) {
+        await deleteAppImages(localFileNames);
+      }
+      await Promise.allSettled(
+        imageResults(item)
+          .filter((url: string) => url.startsWith("/api/cache"))
+          .map((url: string) => removeImage(url)),
+      );
+      sdStore.update((state) => {
+        state.draw = state.draw.filter(
+          (row: any) => String(row.id) !== String(item.id),
+        );
+        state.currentId += 1;
+      });
+      setTaskError("");
+    } catch {
+      setTaskError(text.errors.saveFailed);
+    }
+  }
+
   function openChat() {
     mobileStore.createChatSession(fallbackModel, dashboardChatGroupId);
+    navigate(Path.Chat);
+  }
+
+  function openSkillCenter() {
+    mobileStore.createChatSession(fallbackModel, dashboardChatGroupId);
+    navigate(Path.Chat, { state: { openAgentSheet: true } });
+  }
+
+  function openCollaborationChat() {
+    const sessionId = mobileStore.createChatSession(
+      fallbackModel,
+      dashboardChatGroupId,
+    );
+    mobileStore.updateChatSession(sessionId, {
+      agentId: COLLABORATION_AGENT_ID,
+    });
     navigate(Path.Chat);
   }
 
@@ -2707,6 +2769,19 @@ function AndroidDashboard() {
           <small>
             {text.chat.tapToSwitchGroup(text.modelCount(models.length))}
           </small>
+        </button>
+      </section>
+
+      <section className={styles["quick-grid"]}>
+        <button type="button" onClick={openSkillCenter}>
+          <BotIcon />
+          <strong>{text.dashboard.skillCenter}</strong>
+          <span>{text.dashboard.skillCenterHint}</span>
+        </button>
+        <button type="button" onClick={openCollaborationChat}>
+          <ChatIcon />
+          <strong>{text.dashboard.agentCollaboration}</strong>
+          <span>{text.dashboard.agentCollaborationHint}</span>
         </button>
       </section>
 
@@ -2839,7 +2914,7 @@ function AndroidDashboard() {
                   item?.prompt ||
                   imageTaskStatusText(item, text);
                 return (
-                  <button
+                  <article
                     key={item.id || `${item.status}-${preview}`}
                     className={styles["conversation-item"]}
                     onClick={() =>
@@ -2857,8 +2932,23 @@ function AndroidDashboard() {
                       <strong>{item.model || text.image.generate}</strong>
                       <small>{preview}</small>
                     </span>
-                    <em>{imageTaskStatusText(item, text)}</em>
-                  </button>
+                    <div className={styles["conversation-actions"]}>
+                      <em>{imageTaskStatusText(item, text)}</em>
+                      {item.status !== "running" &&
+                        item.status !== "queued" && (
+                          <button
+                            type="button"
+                            aria-label={text.image.deleteTask}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void deleteDashboardImageTask(item);
+                            }}
+                          >
+                            <DeleteIcon />
+                          </button>
+                        )}
+                    </div>
+                  </article>
                 );
               })
             : visibleSessions.slice(0, 12).map((session) => {
@@ -3390,6 +3480,7 @@ function ChatAgentLibrarySheet(props: {
   const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
   const categories = [
     { id: "all", label: props.text.common.all },
+    { id: "collaboration", label: zh ? "协作" : "Collab" },
     { id: "writing", label: zh ? "写作" : "Writing" },
     { id: "code", label: zh ? "代码" : "Code" },
     { id: "operation", label: zh ? "运营" : "Ops" },
@@ -4069,6 +4160,31 @@ function AndroidChat() {
       navigate(Path.Chat, { replace: true, state: null });
     }
   }, [location.state, navigate]);
+
+  useEffect(() => {
+    const state = location.state as any;
+    if (!state?.openAgentSheet && !state?.selectAgentId) return;
+    if (state.openAgentSheet) setAgentSheetOpen(true);
+    if (state.selectAgentId && currentSession?.id) {
+      const agent = CHAT_AGENT_TEMPLATES.find(
+        (item) => item.id === state.selectAgentId,
+      );
+      if (agent) {
+        mobileStore.updateChatSession(currentSession.id, {
+          agentId: agent.id,
+        });
+        if (agent.starter) {
+          setInput((value) =>
+            value.trim()
+              ? value
+              : localizedValue(agent.starter as LocalizedString, text),
+          );
+        }
+      }
+    }
+    navigate(Path.Chat, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession?.id, location.state, navigate, text]);
 
   useLayoutEffect(() => {
     if (!currentSession?.id) return;
@@ -6274,6 +6390,69 @@ function AndroidImageStudio() {
     });
   }
 
+  async function deleteImageTasks(ids: string[], confirmMessage?: string) {
+    const targetIds = ids.filter(Boolean);
+    if (!targetIds.length) return false;
+    if (!window.confirm(confirmMessage || text.image.deleteTaskConfirm))
+      return false;
+    setError("");
+    try {
+      const items = sdStore.draw.filter((item: any) =>
+        targetIds.includes(String(item.id)),
+      );
+      const removedUrls = items.flatMap(imageResults);
+      const localFileNames = items.flatMap(imageLocalFileNames);
+      if (localFileNames.length) {
+        await deleteAppImages(localFileNames);
+      }
+      await Promise.allSettled(
+        removedUrls
+          .filter((url: string) => url.startsWith("/api/cache"))
+          .map((url: string) => removeImage(url)),
+      );
+      sdStore.update((state) => {
+        state.draw = state.draw.filter(
+          (item: any) => !targetIds.includes(String(item.id)),
+        );
+        state.currentId += 1;
+      });
+      if (preview && targetIds.includes(String(preview.id))) {
+        setPreview(null);
+      }
+      setError(text.common.done);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : text.errors.saveFailed);
+      return false;
+    }
+  }
+
+  function clearFailedImageTasks() {
+    const failedIds = sdStore.draw
+      .filter((item: any) => {
+        if (item.status === "running" || item.status === "queued") {
+          return false;
+        }
+        const hasResult = imageResults(item).length > 0;
+        return (
+          item.status === "error" ||
+          item.status === "cancelled" ||
+          item.status === "failed" ||
+          (item.status === "partial" && !hasResult)
+        );
+      })
+      .map((item: any) => String(item.id));
+    if (!failedIds.length) {
+      setError(text.image.failedCleared);
+      return;
+    }
+    void deleteImageTasks(failedIds, text.image.clearFailedConfirm).then(
+      (deleted) => {
+        if (deleted) setError(text.image.failedCleared);
+      },
+    );
+  }
+
   function applyPromptTemplate(template: ImagePromptTemplate) {
     setPrompt(localizedValue(template.prompt, text));
     if (template.params.size) setSize(template.params.size);
@@ -6600,7 +6779,9 @@ function AndroidImageStudio() {
       <section className={styles["section"]}>
         <div className={styles["section-head"]}>
           <h2>{text.image.details}</h2>
-          <span>{text.shortCount(sdStore.draw.length)}</span>
+          <button type="button" onClick={clearFailedImageTasks}>
+            {text.image.clearFailed}
+          </button>
         </div>
         <div className={styles["task-list"]}>
           {sdStore.draw.length === 0 && (
@@ -6634,18 +6815,31 @@ function AndroidImageStudio() {
                   <strong>{item.params?.prompt || item.model_name}</strong>
                   <small>{status}</small>
                 </span>
-                {(item.status === "error" ||
-                  item.status === "cancelled" ||
-                  item.status === "partial") && (
-                  <em
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      retryTask(item);
-                    }}
-                  >
-                    {text.image.retryTask}
-                  </em>
-                )}
+                <div className={styles["image-task-actions"]}>
+                  {(item.status === "error" ||
+                    item.status === "cancelled" ||
+                    item.status === "partial") && (
+                    <em
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        retryTask(item);
+                      }}
+                    >
+                      {text.image.retryTask}
+                    </em>
+                  )}
+                  {item.status !== "running" && item.status !== "queued" && (
+                    <em
+                      className={styles["danger-pill"]}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteImageTasks([String(item.id)]);
+                      }}
+                    >
+                      {text.common.delete}
+                    </em>
+                  )}
+                </div>
               </button>
             );
           })}
