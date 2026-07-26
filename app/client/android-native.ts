@@ -1,0 +1,736 @@
+import { Capacitor, registerPlugin } from "@capacitor/core";
+
+export interface NativePermissionResult {
+  granted: boolean;
+  status?: string;
+  canAskAgain?: boolean;
+}
+
+export interface NativeDownloadResult {
+  id?: string;
+  path?: string;
+  status?: string;
+}
+
+export interface NativeDownloadStatus {
+  id?: string;
+  status: "pending" | "running" | "success" | "failed" | "unknown";
+  bytesDownloaded?: number;
+  totalBytes?: number;
+  progress?: number;
+  reason?: string;
+  localUri?: string;
+}
+
+export interface NativeCaptureImageResult {
+  dataUrl?: string;
+  uri?: string;
+}
+
+export interface NativeSpeechResult {
+  text?: string;
+  matches?: string[];
+  cancelled?: boolean;
+}
+
+export interface NativeAppImage {
+  id?: string;
+  fileName: string;
+  localUrl: string;
+  mimeType?: string;
+  prompt?: string;
+  model?: string;
+  size?: number;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface NativeDeviceInfo {
+  platform?: string;
+  manufacturer?: string;
+  brand?: string;
+  model?: string;
+  device?: string;
+  product?: string;
+  androidVersion?: string;
+  sdkInt?: number;
+  appVersionName?: string;
+  appVersionCode?: number;
+}
+
+export interface NativeOpenUrlResult {
+  opened: boolean;
+  channel?: string;
+  reason?: string;
+}
+
+export interface NativeSharedMaterial {
+  id: string;
+  name: string;
+  fileName?: string;
+  mimeType: string;
+  size: number;
+  kind?: "image" | "audio" | "video" | "text" | "pdf" | "file" | string;
+  createdAt?: number;
+}
+
+export interface NativeRejectedSharedMaterial {
+  reason: string;
+  detail?: string;
+}
+
+export interface NativeSharedMaterialLimits {
+  maxFiles: number;
+  maxFileBytes: number;
+  maxTotalBytes: number;
+}
+
+export interface NativeSharePayload {
+  action?: string;
+  type?: string;
+  subject?: string;
+  text?: string;
+  files: NativeSharedMaterial[];
+  rejected?: NativeRejectedSharedMaterial[];
+  limits?: NativeSharedMaterialLimits;
+}
+
+export interface NativeSharedMaterialData extends NativeSharedMaterial {
+  base64?: string;
+  dataUrl?: string;
+}
+
+interface NextChatNativePlugin {
+  requestGalleryPermissions(): Promise<NativePermissionResult>;
+  requestCameraPermission(): Promise<NativePermissionResult>;
+  requestMicrophonePermission(): Promise<NativePermissionResult>;
+  requestNotificationPermission(): Promise<NativePermissionResult>;
+  captureImage(options?: {
+    fileName?: string;
+  }): Promise<NativeCaptureImageResult>;
+  recognizeSpeech(options?: {
+    language?: string;
+    prompt?: string;
+  }): Promise<NativeSpeechResult>;
+  startHoldSpeech?(options?: {
+    language?: string;
+    prompt?: string;
+  }): Promise<NativeSpeechResult>;
+  stopHoldSpeech?(): Promise<void>;
+  cancelHoldSpeech?(): Promise<void>;
+  saveImageToGallery(options: {
+    dataUrl: string;
+    fileName?: string;
+  }): Promise<{ uri?: string; fileName?: string }>;
+  saveImageToAppStorage?(options: {
+    dataUrl: string;
+    fileName?: string;
+    prompt?: string;
+    model?: string;
+    taskId?: string;
+  }): Promise<NativeAppImage>;
+  listAppImages?(): Promise<{ items?: NativeAppImage[] }>;
+  deleteAppImages?(options: {
+    fileNames: string[];
+  }): Promise<{ deleted?: number }>;
+  shareImage(options: {
+    dataUrl: string;
+    fileName?: string;
+    title?: string;
+    text?: string;
+  }): Promise<void>;
+  shareText(options: { title?: string; text: string }): Promise<void>;
+  showNotification(options: { title: string; body: string }): Promise<void>;
+  downloadFile(options: {
+    url: string;
+    fileName?: string;
+    title?: string;
+  }): Promise<NativeDownloadResult>;
+  getDownloadStatus(options: { id: string }): Promise<NativeDownloadStatus>;
+  installApk?(options: { id?: string; uri?: string }): Promise<void>;
+  openUrl(options: { url: string }): Promise<NativeOpenUrlResult | void>;
+  openAppSettings?(): Promise<void>;
+  getDeviceInfo?(): Promise<NativeDeviceInfo>;
+}
+
+const NextChatNative = registerPlugin<NextChatNativePlugin>("NextChatNative");
+
+declare global {
+  interface Window {
+    JisudengNativeBridge?: {
+      request(payload: string): void;
+    };
+    __jisudengNativeResolve?: (id: string, payload: unknown) => void;
+    __jisudengNativeReject?: (
+      id: string,
+      payload?: { message?: string },
+    ) => void;
+    __jisudengNativeStream?: (
+      id: string,
+      type: "status" | "data" | "done" | "error",
+      payload?: { status?: number; line?: string; message?: string },
+    ) => void;
+  }
+}
+
+const pendingDirectNativeRequests = new Map<
+  string,
+  {
+    resolve: (value: any) => void;
+    reject: (reason?: unknown) => void;
+  }
+>();
+
+const pendingNativeStreams = new Map<
+  string,
+  {
+    onStatus?: (status: number) => void;
+    onLine: (line: string) => void;
+    resolve: () => void;
+    reject: (reason?: unknown) => void;
+  }
+>();
+
+function getDirectNativeBridge() {
+  if (typeof window === "undefined") return undefined;
+  return window.JisudengNativeBridge;
+}
+
+function isDirectNativeBridgeAvailable() {
+  return !!getDirectNativeBridge();
+}
+
+function ensureDirectNativeCallbacks() {
+  if (typeof window === "undefined") return;
+  window.__jisudengNativeResolve = (id, payload) => {
+    const pending = pendingDirectNativeRequests.get(id);
+    if (!pending) return;
+    pendingDirectNativeRequests.delete(id);
+    pending.resolve(payload);
+  };
+  window.__jisudengNativeReject = (id, payload) => {
+    const pending = pendingDirectNativeRequests.get(id);
+    if (!pending) return;
+    pendingDirectNativeRequests.delete(id);
+    pending.reject(new Error(payload?.message || "native request failed"));
+  };
+  window.__jisudengNativeStream = (id, type, payload) => {
+    const pending = pendingNativeStreams.get(id);
+    if (!pending) return;
+    if (type === "status") {
+      pending.onStatus?.(Number(payload?.status || 0));
+      return;
+    }
+    if (type === "data") {
+      pending.onLine(String(payload?.line ?? ""));
+      return;
+    }
+    pendingNativeStreams.delete(id);
+    if (type === "done") {
+      pending.resolve();
+      return;
+    }
+    pending.reject(
+      new Error(
+        payload?.message ||
+          (payload?.status
+            ? `HTTP ${payload.status}`
+            : "stream request failed"),
+      ),
+    );
+  };
+}
+
+function callDirectNative<T>(method: string, options?: unknown) {
+  const bridge = getDirectNativeBridge();
+  if (!bridge) {
+    return Promise.reject(new Error("native bridge is not available"));
+  }
+  ensureDirectNativeCallbacks();
+  const explicitId =
+    options &&
+    typeof options === "object" &&
+    "id" in options &&
+    typeof (options as { id?: unknown }).id === "string"
+      ? (options as { id: string }).id
+      : "";
+  const id =
+    explicitId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise<T>((resolve, reject) => {
+    pendingDirectNativeRequests.set(id, { resolve, reject });
+    try {
+      bridge.request(JSON.stringify({ id, method, options: options ?? {} }));
+    } catch (error) {
+      pendingDirectNativeRequests.delete(id);
+      reject(error);
+    }
+  });
+}
+
+export function isDirectNativeStreamAvailable() {
+  return isDirectNativeBridgeAvailable();
+}
+
+export async function startDirectNativeStreamRequest(
+  options: {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    connectTimeout?: number;
+    readTimeout?: number;
+  },
+  callbacks: {
+    onStatus?: (status: number) => void;
+    onLine: (line: string) => void;
+  },
+) {
+  ensureDirectNativeCallbacks();
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const done = new Promise<void>((resolve, reject) => {
+    pendingNativeStreams.set(id, {
+      ...callbacks,
+      resolve,
+      reject,
+    });
+  });
+  try {
+    await callDirectNative<{ id?: string }>("streamRequest", {
+      ...options,
+      id,
+    });
+  } catch (error) {
+    pendingNativeStreams.delete(id);
+    throw error;
+  }
+  return {
+    id,
+    done,
+    cancel: async () => {
+      const pending = pendingNativeStreams.get(id);
+      pendingNativeStreams.delete(id);
+      pending?.reject(new DOMException("Aborted", "AbortError"));
+      try {
+        await callDirectNative<void>("cancelStreamRequest", { id });
+      } catch {
+        // The UI has already been released locally; native cleanup is best effort.
+      }
+    },
+  };
+}
+
+export function isNativeAndroid() {
+  return (
+    Capacitor.getPlatform() === "android" || isDirectNativeBridgeAvailable()
+  );
+}
+
+export async function imageUrlToDataUrl(url: string) {
+  if (url.startsWith("data:")) return url;
+  const response = await fetch(url);
+  const blob = await response.blob();
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function downloadInBrowser(url: string, fileName: string) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.rel = "noopener";
+  link.click();
+}
+
+export async function requestGalleryPermissions() {
+  if (!isNativeAndroid()) return { granted: true };
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePermissionResult>(
+      "requestGalleryPermissions",
+    );
+  }
+  return NextChatNative.requestGalleryPermissions();
+}
+
+export async function requestNotificationPermission() {
+  if (!isNativeAndroid()) return { granted: true };
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePermissionResult>(
+      "requestNotificationPermission",
+    );
+  }
+  return NextChatNative.requestNotificationPermission();
+}
+
+export async function requestCameraPermission() {
+  if (!isNativeAndroid()) return { granted: true };
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePermissionResult>("requestCameraPermission");
+  }
+  return NextChatNative.requestCameraPermission();
+}
+
+export async function requestMicrophonePermission() {
+  if (!isNativeAndroid()) return { granted: true };
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePermissionResult>(
+      "requestMicrophonePermission",
+    );
+  }
+  return NextChatNative.requestMicrophonePermission();
+}
+
+export async function captureImage(fileName = "jisudengchat-camera.jpg") {
+  if (!isNativeAndroid()) {
+    throw new Error("camera is only available in the Android app");
+  }
+  await requestCameraPermission();
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativeCaptureImageResult>("captureImage", {
+      fileName,
+    });
+  }
+  return NextChatNative.captureImage({ fileName });
+}
+
+export async function recognizeSpeech(language?: string, prompt?: string) {
+  if (!isNativeAndroid()) {
+    throw new Error("speech recognition is only available in the Android app");
+  }
+  await requestMicrophonePermission();
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativeSpeechResult>("recognizeSpeech", {
+      language,
+      prompt,
+    });
+  }
+  return NextChatNative.recognizeSpeech({ language, prompt });
+}
+
+export async function startHoldSpeechRecognition(
+  language?: string,
+  prompt?: string,
+) {
+  if (!isNativeAndroid()) {
+    throw new Error("speech recognition is only available in the Android app");
+  }
+  await requestMicrophonePermission();
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativeSpeechResult>("startHoldSpeech", {
+      language,
+      prompt,
+    });
+  }
+  if (NextChatNative.startHoldSpeech) {
+    return NextChatNative.startHoldSpeech({ language, prompt });
+  }
+  return NextChatNative.recognizeSpeech({ language, prompt });
+}
+
+export async function stopHoldSpeechRecognition() {
+  if (!isNativeAndroid()) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("stopHoldSpeech");
+    return;
+  }
+  if (NextChatNative.stopHoldSpeech) {
+    await NextChatNative.stopHoldSpeech();
+  }
+}
+
+export async function cancelHoldSpeechRecognition() {
+  if (!isNativeAndroid()) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("cancelHoldSpeech");
+    return;
+  }
+  if (NextChatNative.cancelHoldSpeech) {
+    await NextChatNative.cancelHoldSpeech();
+  }
+}
+
+export async function saveImageToGallery(url: string, fileName: string) {
+  const dataUrl = await imageUrlToDataUrl(url);
+  if (isNativeAndroid()) {
+    await requestGalleryPermissions();
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<{ uri?: string; fileName?: string }>(
+        "saveImageToGallery",
+        { dataUrl, fileName },
+      );
+    }
+    return NextChatNative.saveImageToGallery({ dataUrl, fileName });
+  }
+  downloadInBrowser(dataUrl, fileName);
+  return { fileName };
+}
+
+export async function saveImageToAppStorage(
+  url: string,
+  fileName: string,
+  metadata: { prompt?: string; model?: string; taskId?: string } = {},
+) {
+  const dataUrl = await imageUrlToDataUrl(url);
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<NativeAppImage>("saveImageToAppStorage", {
+        dataUrl,
+        fileName,
+        ...metadata,
+      });
+    }
+    if (NextChatNative.saveImageToAppStorage) {
+      return NextChatNative.saveImageToAppStorage({
+        dataUrl,
+        fileName,
+        ...metadata,
+      });
+    }
+  }
+  return {
+    id: metadata.taskId || fileName,
+    fileName,
+    localUrl: dataUrl,
+    mimeType: dataUrl.slice(5, dataUrl.indexOf(";")) || "image/png",
+    prompt: metadata.prompt,
+    model: metadata.model,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+export async function listAppImages() {
+  if (!isNativeAndroid()) return [] as NativeAppImage[];
+  if (isDirectNativeBridgeAvailable()) {
+    const result = await callDirectNative<{ items?: NativeAppImage[] }>(
+      "listAppImages",
+    );
+    return result.items || [];
+  }
+  if (NextChatNative.listAppImages) {
+    const result = await NextChatNative.listAppImages();
+    return result.items || [];
+  }
+  return [];
+}
+
+export async function deleteAppImages(fileNames: string[]) {
+  if (!fileNames.length) return { deleted: 0 };
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<{ deleted?: number }>("deleteAppImages", {
+        fileNames,
+      });
+    }
+    if (NextChatNative.deleteAppImages) {
+      return NextChatNative.deleteAppImages({ fileNames });
+    }
+  }
+  return { deleted: 0 };
+}
+
+export async function shareImage(url: string, fileName: string, text?: string) {
+  const dataUrl = await imageUrlToDataUrl(url);
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<void>("shareImage", {
+        dataUrl,
+        fileName,
+        title: "JisudengChat",
+        text,
+      });
+    }
+    return NextChatNative.shareImage({
+      dataUrl,
+      fileName,
+      title: "JisudengChat",
+      text,
+    });
+  }
+  if (navigator.share) {
+    const blob = await (await fetch(dataUrl)).blob();
+    const file = new File([blob], fileName, { type: blob.type || "image/png" });
+    const payload: ShareData = {
+      title: "JisudengChat",
+      text,
+      files: [file],
+    };
+    if (navigator.canShare?.(payload)) {
+      await navigator.share(payload);
+      return;
+    }
+  }
+  downloadInBrowser(dataUrl, fileName);
+}
+
+export async function shareText(text: string, title = "JisudengChat") {
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<void>("shareText", { title, text });
+    }
+    return NextChatNative.shareText({ title, text });
+  }
+  if (navigator.share) {
+    await navigator.share({ title, text });
+    return;
+  }
+  await navigator.clipboard?.writeText(text);
+}
+
+export async function showNativeNotification(title: string, body: string) {
+  if (!isNativeAndroid()) return;
+  const permission = await requestNotificationPermission();
+  if (!permission.granted) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("showNotification", { title, body });
+    return;
+  }
+  await NextChatNative.showNotification({ title, body });
+}
+
+function emptyNativeSharePayload(): NativeSharePayload {
+  return {
+    files: [],
+    rejected: [],
+    limits: {
+      maxFiles: 0,
+      maxFileBytes: 0,
+      maxTotalBytes: 0,
+    },
+  };
+}
+
+function nativeOpenFailureMessage(result?: NativeOpenUrlResult | void) {
+  return result && "reason" in result && result.reason
+    ? result.reason
+    : "open_url_failed";
+}
+
+export async function getPendingNativeShare(): Promise<NativeSharePayload> {
+  if (!isNativeAndroid()) return emptyNativeSharePayload();
+  if (isDirectNativeBridgeAvailable()) {
+    const payload =
+      await callDirectNative<NativeSharePayload>("getPendingShare");
+    return {
+      ...emptyNativeSharePayload(),
+      ...payload,
+      files: Array.isArray(payload.files) ? payload.files : [],
+      rejected: Array.isArray(payload.rejected) ? payload.rejected : [],
+    };
+  }
+  return emptyNativeSharePayload();
+}
+
+export async function readNativeSharedMaterial(
+  id: string,
+  encoding: "dataUrl" | "base64" | "metadata" | "none" = "dataUrl",
+): Promise<NativeSharedMaterialData> {
+  if (!id) throw new Error("shared material id is required");
+  if (!isNativeAndroid() || !isDirectNativeBridgeAvailable()) {
+    throw new Error(
+      "native shared materials are only available in the Android app",
+    );
+  }
+  return callDirectNative<NativeSharedMaterialData>("readSharedMaterial", {
+    id,
+    encoding,
+  });
+}
+
+export async function openExternalUrl(
+  url: string,
+): Promise<NativeOpenUrlResult> {
+  if (!url) {
+    return { opened: false, reason: "open_url_empty" };
+  }
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      const result = await callDirectNative<NativeOpenUrlResult>("openUrl", {
+        url,
+      });
+      if (result && result.opened === false) {
+        throw new Error(nativeOpenFailureMessage(result));
+      }
+      return result || { opened: true, channel: "native" };
+    }
+    const result = await NextChatNative.openUrl({ url });
+    if (result && result.opened === false) {
+      throw new Error(nativeOpenFailureMessage(result));
+    }
+    return result || { opened: true, channel: "capacitor" };
+  }
+  const handle = window.open(url, "_blank", "noopener,noreferrer");
+  if (!handle) {
+    throw new Error("open_url_popup_blocked");
+  }
+  return { opened: true, channel: "browser" };
+}
+
+export async function openAppSettings() {
+  if (!isNativeAndroid()) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("openAppSettings");
+    return;
+  }
+  if (NextChatNative.openAppSettings) {
+    await NextChatNative.openAppSettings();
+  }
+}
+
+export async function getNativeDeviceInfo(): Promise<NativeDeviceInfo> {
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<NativeDeviceInfo>("getDeviceInfo");
+    }
+    if (NextChatNative.getDeviceInfo) {
+      return NextChatNative.getDeviceInfo();
+    }
+  }
+  return {
+    platform: "web",
+    model: typeof navigator !== "undefined" ? navigator.userAgent : "browser",
+  } as NativeDeviceInfo;
+}
+
+export async function startNativeDownload(
+  url: string,
+  fileName: string,
+  title = "JisudengChat",
+) {
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<NativeDownloadResult>("downloadFile", {
+        url,
+        fileName,
+        title,
+      });
+    }
+    return NextChatNative.downloadFile({ url, fileName, title });
+  }
+  downloadInBrowser(url, fileName);
+  return { status: "success", path: url };
+}
+
+export async function getNativeDownloadStatus(id: string) {
+  if (!isNativeAndroid() || !id) {
+    return { id, status: "success" as const, progress: 100 };
+  }
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativeDownloadStatus>("getDownloadStatus", { id });
+  }
+  return NextChatNative.getDownloadStatus({ id });
+}
+
+export async function installDownloadedApk(id?: string, uri?: string) {
+  if (!isNativeAndroid()) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("installApk", { id, uri });
+    return;
+  }
+  if (NextChatNative.installApk) {
+    await NextChatNative.installApk({ id, uri });
+  }
+}

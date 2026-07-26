@@ -1,0 +1,23 @@
+{
+  "name": "创作灵感库",
+  "source": "Jisudeng",
+  "author": "Jisudeng",
+  "version": "2026.07.26",
+  "defaultLocale": "zh",
+  "locales": ["zh", "en"],
+  "count": 50,
+  "categoryFiles": {
+    "zh": "/image-prompts/categories.zh.json",
+    "en": "/image-prompts/categories.en.json"
+  },
+  "promptFiles": {
+    "zh": [
+      "/image-prompts/prompts.zh.part-001.json",
+      "/image-prompts/prompts.zh.part-002.json"
+    ],
+    "en": [
+      "/image-prompts/prompts.en.part-001.json",
+      "/image-prompts/prompts.en.part-002.json"
+    ]
+  }
+}
