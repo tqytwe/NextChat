@@ -26,6 +26,8 @@ export const MANAGED_MOBILE_TEXT = {
       invalidCredentials: "邮箱或密码不正确",
       unauthorized: "登录状态已失效，请重新登录",
       serviceUnavailable: "服务器暂时不可用，请稍后重试",
+      serviceBusy: "服务暂时繁忙，请稍后重试",
+      connectionClosed: "连接已中断，请重试；如多次出现请切换网络或模型",
       loginFailed: "登录失败",
       verifyFailed: "验证失败",
       syncFailed: "同步失败",
@@ -53,7 +55,8 @@ export const MANAGED_MOBILE_TEXT = {
       imageSizeUnsupported: (reason: string) =>
         `当前尺寸不被模型支持：${reason}`,
       imageStyleUnsupported: "该模型不支持风格参数，已自动忽略",
-      upstreamBusy: "图片服务暂时繁忙，请稍后重试",
+      imageServiceBusy: "图片服务暂时繁忙，请稍后重试",
+      upstreamBusy: "服务暂时繁忙，请稍后重试",
       permissionDenied: "权限未开启，请在系统设置中允许后重试",
       saveFailed: "保存失败，请稍后重试",
       shareFailed: "分享失败，请稍后重试",
@@ -576,6 +579,9 @@ export const MANAGED_MOBILE_TEXT = {
       unauthorized: "Your session expired. Please sign in again.",
       serviceUnavailable:
         "The server is temporarily unavailable. Please try again later.",
+      serviceBusy: "The service is busy. Please try again later.",
+      connectionClosed:
+        "The connection was interrupted. Please retry or switch network/model if it repeats.",
       loginFailed: "Sign-in failed",
       verifyFailed: "Verification failed",
       syncFailed: "Sync failed",
@@ -607,7 +613,8 @@ export const MANAGED_MOBILE_TEXT = {
         `This size is not supported by the selected model: ${reason}`,
       imageStyleUnsupported:
         "This model does not support style. It has been ignored automatically.",
-      upstreamBusy: "The image service is busy. Please try again later.",
+      imageServiceBusy: "The image service is busy. Please try again later.",
+      upstreamBusy: "The service is busy. Please try again later.",
       permissionDenied:
         "Permission is not enabled. Please allow it in system settings.",
       saveFailed: "Failed to save. Please try again later.",
@@ -1183,6 +1190,13 @@ export function localizeManagedMobileError(input: {
   if (/failed to fetch|network|网络/.test(normalized)) {
     return text.errors.networkFailed;
   }
+  if (
+    /connection closed|closed connection|socket closed|unexpected end|eof|stream closed|连接.*(中断|关闭)|网络连接.*(中断|关闭)/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.connectionClosed;
+  }
   if (/cancelled|canceled|已取消/.test(normalized)) {
     return text.errors.requestCancelled;
   }
@@ -1251,13 +1265,16 @@ export function localizeManagedMobileError(input: {
   ) {
     return text.errors.serviceUnavailable;
   }
+  if (/图片服务暂时繁忙|image service is busy/.test(normalized)) {
+    return text.errors.imageServiceBusy;
+  }
   if (
     input.status === 502 ||
     /bad gateway|cloudflare|origin server|retry_after|upstream|overloaded/.test(
       normalized,
     )
   ) {
-    return text.errors.upstreamBusy;
+    return text.errors.serviceBusy;
   }
   if (
     /image generation is not enabled|image_studio_image_not_allowed|未开启图片生成/.test(

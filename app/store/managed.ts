@@ -86,6 +86,18 @@ export const useManagedNextChatStore = createPersistStore<
       return error instanceof Error && error.message ? error.message : fallback;
     }
 
+    function workspaceHasModel(
+      workspaceModels: ManagedWorkspaceBootstrap["models"] | undefined,
+      modelName: string | undefined,
+    ) {
+      if (!modelName) return false;
+      return (workspaceModels?.groups ?? []).some((group) =>
+        (group.models ?? []).some(
+          (model) => (model.name || model.id) === modelName,
+        ),
+      );
+    }
+
     const methods = {
       setBackendBaseUrl(url: string) {
         set({ backendBaseUrl: normalizeManagedBaseUrl(url) });
@@ -365,14 +377,20 @@ export const useManagedNextChatStore = createPersistStore<
             config.models = models;
           }
           config.modelConfig.providerName = ServiceProvider.OpenAI;
-          config.modelConfig.model = defaultModel as any;
+          if (!workspaceHasModel(chatModels, config.modelConfig.model)) {
+            config.modelConfig.model = defaultModel as any;
+          }
         });
 
         const chatStore = useChatStore.getState();
         const sessionForUpdate = chatStore.currentSession();
         chatStore.updateTargetSession(sessionForUpdate, (chatSession) => {
           chatSession.mask.modelConfig.providerName = ServiceProvider.OpenAI;
-          chatSession.mask.modelConfig.model = defaultModel as any;
+          if (
+            !workspaceHasModel(chatModels, chatSession.mask.modelConfig.model)
+          ) {
+            chatSession.mask.modelConfig.model = defaultModel as any;
+          }
         });
 
         set({
