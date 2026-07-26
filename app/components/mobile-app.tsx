@@ -4035,14 +4035,25 @@ function AndroidChat() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fallbackModel, currentSession?.id, models.length]);
+  }, [
+    fallbackModel,
+    currentSession?.id,
+    currentSession?.groupId,
+    models.length,
+  ]);
 
   useEffect(() => {
     if (!currentSession || !effectiveChatGroupId) return;
     if (currentSession.groupId === effectiveChatGroupId) return;
+    const sessionModelStillAvailable = chatModelsForGroup(
+      workspace,
+      effectiveChatGroupId,
+    ).some((model) => modelValue(model) === currentSession.model);
     mobileStore.updateChatSession(currentSession.id, {
       groupId: effectiveChatGroupId,
-      model: fallbackModel || currentSession.model,
+      model: sessionModelStillAvailable
+        ? currentSession.model
+        : fallbackModel || currentSession.model,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -4064,9 +4075,19 @@ function AndroidChat() {
     if (lastScrolledSessionRef.current === currentSession.id) return;
     lastScrolledSessionRef.current = currentSession.id;
     autoFollowRef.current = true;
-    const list = listRef.current;
-    if (!list) return;
-    list.scrollTop = list.scrollHeight;
+    const jumpToBottom = () => {
+      const list = listRef.current;
+      if (!list) return;
+      list.style.scrollBehavior = "auto";
+      list.scrollTop = list.scrollHeight;
+      requestAnimationFrame(() => {
+        const nextList = listRef.current;
+        if (!nextList) return;
+        nextList.scrollTop = nextList.scrollHeight;
+        nextList.style.scrollBehavior = "";
+      });
+    };
+    jumpToBottom();
   }, [currentSession?.id]);
 
   useEffect(() => {
@@ -4683,7 +4704,7 @@ function AndroidChat() {
       const message = aborted
         ? text.errors.requestCancelled
         : err instanceof Error
-        ? err.message
+        ? localizeManagedMobileError({ message: err.message, path })
         : text.errors.networkFailed;
       mobileStore.updateChatMessage(sessionId, assistantId, {
         content: contentBuffer,
@@ -8006,8 +8027,12 @@ function AndroidAccountSettings() {
       if (supportTicket) {
         setSupportTicket(await client.support.tickets.detail(supportTicket.id));
       }
-    } catch {
-      setSupportError(text.platform.supportTicketRefreshFailed);
+    } catch (error) {
+      setSupportError(
+        error instanceof Error && error.message
+          ? localizeManagedMobileError({ message: error.message })
+          : text.platform.supportTicketRefreshFailed,
+      );
     } finally {
       setSupportBusy(false);
     }
@@ -8019,8 +8044,12 @@ function AndroidAccountSettings() {
       const client = await mobilePlatformClient();
       setSupportTicket(await client.support.tickets.detail(ticket.id));
       setSupportError("");
-    } catch {
-      setSupportError(text.platform.supportTicketRefreshFailed);
+    } catch (error) {
+      setSupportError(
+        error instanceof Error && error.message
+          ? localizeManagedMobileError({ message: error.message })
+          : text.platform.supportTicketRefreshFailed,
+      );
     } finally {
       setSupportBusy(false);
     }
@@ -8042,8 +8071,12 @@ function AndroidAccountSettings() {
       setSupportReply("");
       setSupportTicket(await client.support.tickets.detail(supportTicket.id));
       setSupportError("");
-    } catch {
-      setSupportError(text.platform.supportTicketRefreshFailed);
+    } catch (error) {
+      setSupportError(
+        error instanceof Error && error.message
+          ? localizeManagedMobileError({ message: error.message })
+          : text.platform.supportTicketRefreshFailed,
+      );
     } finally {
       setSupportBusy(false);
     }
@@ -8060,8 +8093,12 @@ function AndroidAccountSettings() {
       });
       setSupportTicket(null);
       await refreshSupportTickets();
-    } catch {
-      setSupportError(text.platform.supportTicketRefreshFailed);
+    } catch (error) {
+      setSupportError(
+        error instanceof Error && error.message
+          ? localizeManagedMobileError({ message: error.message })
+          : text.platform.supportTicketRefreshFailed,
+      );
     } finally {
       setSupportBusy(false);
     }
@@ -8110,7 +8147,10 @@ function AndroidAccountSettings() {
         setAccountData((state) => ({
           ...state,
           loading: false,
-          error: text.errors.syncFailed,
+          error:
+            error instanceof Error && error.message
+              ? localizeManagedMobileError({ message: error.message })
+              : text.errors.syncFailed,
         }));
         return;
       }

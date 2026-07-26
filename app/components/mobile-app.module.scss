@@ -77,8 +77,8 @@
   height: 100%;
   overflow-y: auto;
   padding: calc(env(safe-area-inset-top) + 20px) 16px
-    calc(env(safe-area-inset-bottom) + 126px);
-  scroll-padding-bottom: calc(env(safe-area-inset-bottom) + 126px);
+    calc(env(safe-area-inset-bottom) + 172px);
+  scroll-padding-bottom: calc(env(safe-area-inset-bottom) + 172px);
 }
 
 .login-screen,
@@ -309,13 +309,13 @@
     margin: 4px 0 0;
     overflow-wrap: anywhere;
     color: var(--black);
-    font-size: 34px;
+    font-size: 30px;
     line-height: 1;
   }
 }
 
 .dashboard-header h1 {
-  font-size: 34px;
+  font-size: 30px;
 }
 
 .avatar,
@@ -1626,7 +1626,7 @@
 }
 
 .compact-library-sheet {
-  max-height: min(44vh, 360px);
+  max-height: min(38vh, 320px);
   padding-top: 10px;
 
   .sheet-head {
@@ -1666,8 +1666,10 @@
   }
 
   .library-list {
-    max-height: min(29vh, 238px);
+    max-height: min(24vh, 210px);
+    gap: 7px;
   }
+
 }
 
 .confirm-dialog {
@@ -2523,8 +2525,8 @@
   grid-template-columns: 1fr auto;
   align-items: center;
   gap: 12px;
-  margin: 12px 0;
-  padding: 13px;
+  margin: 8px 0;
+  padding: 10px;
 
   div {
     display: grid;
@@ -2548,8 +2550,8 @@
   em {
     display: grid;
     place-items: center;
-    width: 48px;
-    height: 48px;
+    width: 42px;
+    height: 42px;
     border-radius: 50%;
     background: rgba(52, 199, 89, 0.16);
     color: var(--ios-green);
@@ -2569,7 +2571,7 @@
     display: grid;
     justify-items: center;
     gap: 5px;
-    min-height: 58px;
+    min-height: 50px;
     border: 0;
     border-radius: 13px;
     background: var(--gray);
@@ -2594,6 +2596,7 @@
   grid-template-columns: repeat(2, 1fr);
   gap: 9px;
   min-height: 120px;
+  padding-bottom: calc(env(safe-area-inset-bottom) + 42px);
 
   button {
     position: relative;
@@ -2620,7 +2623,7 @@
     img {
       height: 100%;
       aspect-ratio: auto;
-      min-height: 210px;
+      min-height: 176px;
     }
   }
 
@@ -2772,9 +2775,11 @@
     img {
       width: auto;
       max-width: 100%;
-      max-height: 100%;
+      height: 100%;
+      max-height: none;
       border-radius: 0;
       background: #000;
+      object-fit: contain;
     }
   }
 
