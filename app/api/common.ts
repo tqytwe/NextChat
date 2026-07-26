@@ -3,10 +3,11 @@ import { getServerSideConfig } from "../config/server";
 import { OPENAI_BASE_URL, ServiceProvider } from "../constant";
 import { cloudflareAIGatewayUrl } from "../utils/cloudflare";
 import { getModelProvider, isModelNotavailableInServer } from "../utils/model";
+import { isSub2APIManagedMode } from "./sub2api-managed";
 
 const serverConfig = getServerSideConfig();
 
-export async function requestOpenai(req: NextRequest) {
+export async function requestOpenai(req: NextRequest, upstreamPath?: string) {
   const controller = new AbortController();
 
   const isAzure = req.nextUrl.pathname.includes("azure/deployments");
@@ -27,10 +28,32 @@ export async function requestOpenai(req: NextRequest) {
     authHeaderName = "Authorization";
   }
 
-  let path = `${req.nextUrl.pathname}`.replaceAll("/api/openai/", "");
+  let path =
+    upstreamPath ??
+    stripRoutePrefix(
+      req.nextUrl.pathname,
+      isAzure ? "/api/azure/" : "/api/openai/",
+      serverConfig.nextChatBasePath,
+    );
 
-  let baseUrl =
-    (isAzure ? serverConfig.azureUrl : serverConfig.baseUrl) || OPENAI_BASE_URL;
+  const managedMode = isSub2APIManagedMode(serverConfig);
+  let baseUrl = managedMode
+    ? serverConfig.sub2apiBaseUrl
+    : (isAzure ? serverConfig.azureUrl : serverConfig.baseUrl) ||
+      OPENAI_BASE_URL;
+
+  if (managedMode && !baseUrl) {
+    return NextResponse.json(
+      {
+        error: true,
+        message: "missing SUB2API_BASE_URL in server env vars",
+      },
+      {
+        status: 500,
+      },
+    );
+  }
+  baseUrl = baseUrl || OPENAI_BASE_URL;
 
   if (!baseUrl.startsWith("http")) {
     baseUrl = `https://${baseUrl}`;
@@ -50,7 +73,7 @@ export async function requestOpenai(req: NextRequest) {
     10 * 60 * 1000,
   );
 
-  if (isAzure) {
+  if (!managedMode && isAzure) {
     const azureApiVersion =
       req?.nextUrl?.searchParams?.get("api-version") ||
       serverConfig.azureApiVersion;
@@ -109,7 +132,7 @@ export async function requestOpenai(req: NextRequest) {
   };
 
   // #1815 try to refuse gpt4 request
-  if (serverConfig.customModels && req.body) {
+  if (!managedMode && serverConfig.customModels && req.body) {
     try {
       const clonedBody = await req.text();
       fetchOptions.body = clonedBody;
@@ -183,4 +206,17 @@ export async function requestOpenai(req: NextRequest) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function stripRoutePrefix(
+  pathname: string,
+  prefix: string,
+  basePath?: string,
+): string {
+  const normalizedBasePath = basePath || "";
+  const normalizedPath =
+    normalizedBasePath && pathname.startsWith(`${normalizedBasePath}/`)
+      ? pathname.slice(normalizedBasePath.length)
+      : pathname;
+  return normalizedPath.replace(prefix, "");
 }

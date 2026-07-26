@@ -9,6 +9,16 @@ console.log("[Next] build with chunk: ", !disableChunk);
 
 const isAndroidBuild =
   process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
+const sub2apiManagedMode = ["1", "true", "yes", "on"].includes(
+  (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
+);
+const rawBasePath =
+  process.env.NEXTCHAT_BASE_PATH ?? (sub2apiManagedMode ? "/ai" : "");
+const basePath =
+  rawBasePath.trim() === "" || rawBasePath.trim() === "/"
+    ? ""
+    : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
+console.log("[Next] base path", basePath || "/");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -48,6 +58,10 @@ const nextConfig = {
     forceSwcTransforms: true,
   },
 };
+
+if (basePath) {
+  nextConfig.basePath = basePath;
+}
 
 const CorsHeaders = [
   { key: "Access-Control-Allow-Credentials", value: "true" },

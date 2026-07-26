@@ -12,6 +12,15 @@ export const getBuildConfig = () => {
   const isApp = !!process.env.BUILD_APP;
   const isAndroidApp =
     process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
+  const sub2apiManagedMode = ["1", "true", "yes", "on"].includes(
+    (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
+  );
+  const rawBasePath =
+    process.env.NEXTCHAT_BASE_PATH ?? (sub2apiManagedMode ? "/ai" : "");
+  const basePath =
+    rawBasePath.trim() === "" || rawBasePath.trim() === "/"
+      ? ""
+      : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
   const version = "v" + tauriConfig.package.version;
 
   const commitInfo = (() => {
@@ -56,6 +65,8 @@ export const getBuildConfig = () => {
     androidApkSha256: process.env.NEXT_PUBLIC_ANDROID_APK_SHA256 ?? "",
     androidApkSize: process.env.NEXT_PUBLIC_ANDROID_APK_SIZE ?? "",
     androidReleaseNotes: process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES ?? "",
+    basePath,
+    sub2apiManagedMode,
     template: process.env.DEFAULT_INPUT_TEMPLATE ?? DEFAULT_INPUT_TEMPLATE,
   };
 };

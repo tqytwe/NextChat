@@ -36,6 +36,7 @@ export default function RootLayout({
   const clientConfig = getClientConfig();
   const isAndroidBuild =
     process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
+  const basePath = serverConfig.nextChatBasePath;
 
   return (
     <html lang="en">
@@ -47,11 +48,11 @@ export default function RootLayout({
         />
         <link
           rel="manifest"
-          href="/site.webmanifest"
+          href={`${basePath}/site.webmanifest`}
           crossOrigin="use-credentials"
         ></link>
         {!isAndroidBuild && (
-          <script src="/serviceWorkerRegister.js" defer></script>
+          <script src={`${basePath}/serviceWorkerRegister.js`} defer></script>
         )}
       </head>
       <body>
