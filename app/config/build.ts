@@ -10,6 +10,8 @@ export const getBuildConfig = () => {
 
   const buildMode = process.env.BUILD_MODE ?? "standalone";
   const isApp = !!process.env.BUILD_APP;
+  const isAndroidApp =
+    process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
   const version = "v" + tauriConfig.package.version;
 
   const commitInfo = (() => {
@@ -39,6 +41,21 @@ export const getBuildConfig = () => {
     ...commitInfo,
     buildMode,
     isApp,
+    isAndroidApp,
+    managedBackendBaseUrl:
+      process.env.NEXT_PUBLIC_SUB2API_BASE_URL ?? "https://api.jisudeng.com",
+    nextchatWebUrl:
+      process.env.NEXT_PUBLIC_NEXTCHAT_WEB_URL ?? "https://www.jisudeng.com",
+    androidApkUrl:
+      process.env.NEXT_PUBLIC_ANDROID_APK_URL ??
+      "/downloads/jisudengchat-android.apk",
+    androidManifestUrl:
+      process.env.NEXT_PUBLIC_ANDROID_MANIFEST_URL ??
+      "/downloads/android-version.json",
+    androidVersion: process.env.NEXT_PUBLIC_ANDROID_VERSION ?? version,
+    androidApkSha256: process.env.NEXT_PUBLIC_ANDROID_APK_SHA256 ?? "",
+    androidApkSize: process.env.NEXT_PUBLIC_ANDROID_APK_SIZE ?? "",
+    androidReleaseNotes: process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES ?? "",
     template: process.env.DEFAULT_INPUT_TEMPLATE ?? DEFAULT_INPUT_TEMPLATE,
   };
 };

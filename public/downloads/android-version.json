@@ -1,0 +1,20 @@
+{
+  "platform": "android",
+  "version": "2.0.36",
+  "apkUrl": "/downloads/jisudengchat-android.apk",
+  "size": "7.1 MB",
+  "sha256": "4ae903fc3266dcabb9f76b2f1c2a2cfeb14f29c9da9a47802d9195598df501f0",
+  "minAndroidVersion": "8.0",
+  "releaseDate": "2026-07-26",
+  "notes": [
+    "新增素材库与系统分享文件上传",
+    "新增服务端技能中心与智能体提示词调用",
+    "新增跨设备任务历史、取消和重试",
+    "新增客服工单、脱敏网络诊断和支付查单闭环",
+    "聊天与生图分组模型保持完全独立"
+  ],
+  "versionCode": 236,
+  "bytes": 7394527,
+  "packageName": "com.jisudeng.chat",
+  "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
+}

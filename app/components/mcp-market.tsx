@@ -20,7 +20,7 @@ import {
   pauseMcpServer,
   restartAllClients,
   resumeMcpServer,
-} from "../mcp/actions";
+} from "@/app/mcp/actions";
 import {
   ListToolsResponse,
   McpConfigData,

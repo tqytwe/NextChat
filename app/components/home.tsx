@@ -29,7 +29,8 @@ import { getClientConfig } from "../config/client";
 import { type ClientApi, getClientApi } from "../client/api";
 import { useAccessStore } from "../store";
 import clsx from "clsx";
-import { initializeMcpSystem, isMcpEnabled } from "../mcp/actions";
+import { initializeMcpSystem, isMcpEnabled } from "@/app/mcp/actions";
+import { AndroidManagedGate } from "./mobile-app";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
@@ -265,7 +266,13 @@ export function Home() {
   return (
     <ErrorBoundary>
       <Router>
-        <Screen />
+        {getClientConfig()?.isAndroidApp ? (
+          <AndroidManagedGate>
+            <Screen />
+          </AndroidManagedGate>
+        ) : (
+          <Screen />
+        )}
       </Router>
     </ErrorBoundary>
   );

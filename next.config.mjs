@@ -1,10 +1,14 @@
 import webpack from "webpack";
+import path from "path";
 
 const mode = process.env.BUILD_MODE ?? "standalone";
 console.log("[Next] build mode", mode);
 
 const disableChunk = !!process.env.DISABLE_CHUNK || mode === "export";
 console.log("[Next] build with chunk: ", !disableChunk);
+
+const isAndroidBuild =
+  process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -23,6 +27,16 @@ const nextConfig = {
     config.resolve.fallback = {
       child_process: false,
     };
+
+    if (isAndroidBuild) {
+      config.resolve.alias = {
+        ...(config.resolve.alias ?? {}),
+        "@/app/mcp/actions$": path.resolve(
+          process.cwd(),
+          "app/mcp/actions.android.ts",
+        ),
+      };
+    }
 
     return config;
   },

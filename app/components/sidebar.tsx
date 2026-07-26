@@ -8,6 +8,7 @@ import GithubIcon from "../icons/github.svg";
 import ChatGptIcon from "../icons/chatgpt.svg";
 import AddIcon from "../icons/add.svg";
 import DeleteIcon from "../icons/delete.svg";
+import DownloadIcon from "../icons/download.svg";
 import MaskIcon from "../icons/mask.svg";
 import McpIcon from "../icons/mcp.svg";
 import DragIcon from "../icons/drag.svg";
@@ -31,7 +32,7 @@ import { isIOS, useMobileScreen } from "../utils";
 import dynamic from "next/dynamic";
 import { Selector, showConfirm } from "./ui-lib";
 import clsx from "clsx";
-import { isMcpEnabled } from "../mcp/actions";
+import { isMcpEnabled } from "@/app/mcp/actions";
 
 const DISCOVERY = [
   { name: Locale.Plugin.Name, path: Path.Plugins },
@@ -250,8 +251,8 @@ export function SideBar(props: { className?: string }) {
       {...props}
     >
       <SideBarHeader
-        title="NextChat"
-        subTitle="Build your own AI assistant."
+        title="JisudengChat"
+        subTitle="Chat and image AI workspace."
         logo={<ChatGptIcon />}
         shouldNarrow={shouldNarrow}
       >
@@ -335,6 +336,16 @@ export function SideBar(props: { className?: string }) {
                   shadow
                 />
               </Link>
+            </div>
+            <div className={styles["sidebar-action"]}>
+              <a href={Path.AndroidDownload}>
+                <IconButton
+                  aria={Locale.Home.DownloadApp}
+                  icon={<DownloadIcon />}
+                  text={shouldNarrow ? undefined : Locale.Home.DownloadApp}
+                  shadow
+                />
+              </a>
             </div>
             <div className={styles["sidebar-action"]}>
               <a href={REPO_URL} target="_blank" rel="noopener noreferrer">

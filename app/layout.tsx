@@ -9,10 +9,10 @@ import { GoogleTagManager, GoogleAnalytics } from "@next/third-parties/google";
 import { getServerSideConfig } from "./config/server";
 
 export const metadata: Metadata = {
-  title: "NextChat",
-  description: "Your personal ChatGPT Chat Bot.",
+  title: "JisudengChat",
+  description: "JisudengChat Android and Web AI workspace.",
   appleWebApp: {
-    title: "NextChat",
+    title: "JisudengChat",
     statusBarStyle: "default",
   },
 };
@@ -33,11 +33,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   const serverConfig = getServerSideConfig();
+  const clientConfig = getClientConfig();
+  const isAndroidBuild =
+    process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
 
   return (
     <html lang="en">
       <head>
-        <meta name="config" content={JSON.stringify(getClientConfig())} />
+        <meta name="config" content={JSON.stringify(clientConfig)} />
         <meta
           name="viewport"
           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
@@ -47,21 +50,23 @@ export default function RootLayout({
           href="/site.webmanifest"
           crossOrigin="use-credentials"
         ></link>
-        <script src="/serviceWorkerRegister.js" defer></script>
+        {!isAndroidBuild && (
+          <script src="/serviceWorkerRegister.js" defer></script>
+        )}
       </head>
       <body>
         {children}
-        {serverConfig?.isVercel && (
+        {!isAndroidBuild && serverConfig?.isVercel && (
           <>
             <SpeedInsights />
           </>
         )}
-        {serverConfig?.gtmId && (
+        {!isAndroidBuild && serverConfig?.gtmId && (
           <>
             <GoogleTagManager gtmId={serverConfig.gtmId} />
           </>
         )}
-        {serverConfig?.gaId && (
+        {!isAndroidBuild && serverConfig?.gaId && (
           <>
             <GoogleAnalytics gaId={serverConfig.gaId} />
           </>
