@@ -1,20 +1,16 @@
 {
   "platform": "android",
-  "version": "2.0.39",
+  "version": "2.0.40",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "e16031091279a8ac8b054b8fdaea0edc588101259f693a142236bc0ef2b23bb2",
+  "sha256": "ddd343d20538b1c5bb721d8009ff5e8068add929cb4e5bca378459d978bb4c52",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-27",
   "notes": [
-    "增强登录态自动续期和弱网恢复",
-    "拆分智能体与技能中心，新增 12 个本机任务技能",
-    "隐藏模型内部 tool_call 输出",
-    "创作灵感库扩充到 200 条完整中英提示词",
-    "生图网络错误中文化。"
+    "增强 APP 无感会话恢复，统一认证刷新、请求重放和弱网重试。"
   ],
-  "versionCode": 239,
-  "bytes": 7425248,
+  "versionCode": 240,
+  "bytes": 7426073,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

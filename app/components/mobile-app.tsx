@@ -133,10 +133,197 @@ function clientRequestID(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isManagedNetworkLikeError(error: unknown) {
+  const category = diagnosticCategory(error);
+  const message = error instanceof Error ? error.message : String(error || "");
+  return (
+    category === "network" ||
+    category === "offline" ||
+    category === "timeout" ||
+    /failed to fetch|network|timeout|timed out|网络请求失败|网络连接失败|超时/i.test(
+      message,
+    )
+  );
+}
+
+async function requestWithManagedAuth<T>(
+  run: (input: { accessToken: string; baseUrl: string }) => Promise<T>,
+  options: { networkRetries?: number; authRetries?: number } = {},
+) {
+  const networkRetries = options.networkRetries ?? 2;
+  const authRetries = options.authRetries ?? 1;
+  let networkAttempt = 0;
+  let authAttempt = 0;
+  let forceRefresh = false;
+  let lastError: unknown = null;
+
+  while (networkAttempt <= networkRetries) {
+    try {
+      const currentStore = useManagedNextChatStore.getState();
+      const accessToken = await currentStore.ensureFreshAuthToken(forceRefresh);
+      const latest = useManagedNextChatStore.getState();
+      return await run({ accessToken, baseUrl: latest.backendBaseUrl });
+    } catch (error) {
+      lastError = error;
+      if (isManagedAuthError(error) && authAttempt < authRetries) {
+        authAttempt += 1;
+        forceRefresh = true;
+        await useManagedNextChatStore
+          .getState()
+          .bootstrap({ silent: true })
+          .catch(() => undefined);
+        continue;
+      }
+      if (isManagedNetworkLikeError(error) && networkAttempt < networkRetries) {
+        networkAttempt += 1;
+        await sleep(350 * networkAttempt);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 async function mobilePlatformClient() {
-  const store = useManagedNextChatStore.getState();
-  const accessToken = await store.ensureFreshAuthToken();
-  return createMobilePlatformClient(store.backendBaseUrl, accessToken);
+  type MobilePlatformClient = ReturnType<typeof createMobilePlatformClient>;
+  const makeClient = createMobilePlatformClient;
+  return {
+    assets: {
+      list: (...args: Parameters<MobilePlatformClient["assets"]["list"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.list(...args),
+        ),
+      detail: (...args: Parameters<MobilePlatformClient["assets"]["detail"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.detail(...args),
+        ),
+      delete: (...args: Parameters<MobilePlatformClient["assets"]["delete"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.delete(...args),
+        ),
+      upload: (...args: Parameters<MobilePlatformClient["assets"]["upload"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.upload(...args),
+        ),
+    },
+    skills: {
+      list: (...args: Parameters<MobilePlatformClient["skills"]["list"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.list(...args),
+        ),
+      detail: (...args: Parameters<MobilePlatformClient["skills"]["detail"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.detail(...args),
+        ),
+      install: (
+        ...args: Parameters<MobilePlatformClient["skills"]["install"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.install(...args),
+        ),
+      uninstall: (
+        ...args: Parameters<MobilePlatformClient["skills"]["uninstall"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.uninstall(...args),
+        ),
+      use: (...args: Parameters<MobilePlatformClient["skills"]["use"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.use(...args),
+        ),
+    },
+    tasks: {
+      create: (...args: Parameters<MobilePlatformClient["tasks"]["create"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.create(...args),
+        ),
+      list: (...args: Parameters<MobilePlatformClient["tasks"]["list"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.list(...args),
+        ),
+      detail: (...args: Parameters<MobilePlatformClient["tasks"]["detail"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.detail(...args),
+        ),
+      cancel: (...args: Parameters<MobilePlatformClient["tasks"]["cancel"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.cancel(...args),
+        ),
+      retry: (...args: Parameters<MobilePlatformClient["tasks"]["retry"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.retry(...args),
+        ),
+      status: (...args: Parameters<MobilePlatformClient["tasks"]["status"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.status(...args),
+        ),
+    },
+    support: {
+      tickets: {
+        list: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["list"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.list(...args),
+          ),
+        detail: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["detail"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.detail(...args),
+          ),
+        message: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["message"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.message(...args),
+          ),
+        close: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["close"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.close(...args),
+          ),
+      },
+    },
+    devices: {
+      register: (
+        ...args: Parameters<MobilePlatformClient["devices"]["register"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).devices.register(...args),
+        ),
+      delete: (
+        ...args: Parameters<MobilePlatformClient["devices"]["delete"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).devices.delete(...args),
+        ),
+    },
+    diagnostics: {
+      submit: (
+        ...args: Parameters<MobilePlatformClient["diagnostics"]["submit"]>
+      ) =>
+        requestWithManagedAuth(
+          ({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).diagnostics.submit(...args),
+          { networkRetries: 0, authRetries: 0 },
+        ),
+    },
+  };
 }
 
 async function uploadMaterial(
@@ -144,13 +331,13 @@ async function uploadMaterial(
   name: string,
   source: "camera" | "gallery" | "share" | "upload" = "upload",
 ) {
-  const store = useManagedNextChatStore.getState();
-  const accessToken = await store.ensureFreshAuthToken();
   const form = new FormData();
   form.append("file", file, name);
   form.append("name", name);
   form.append("source", source);
-  return uploadMobileAssetFormData(store.backendBaseUrl, accessToken, form);
+  return requestWithManagedAuth(({ baseUrl, accessToken }) =>
+    uploadMobileAssetFormData(baseUrl, accessToken, form),
+  );
 }
 
 function blobToDataUrl(blob: Blob) {
@@ -2064,79 +2251,105 @@ async function managedAuthenticatedJsonRequest<T>(
   path: string,
   init: RequestInit = {},
 ) {
-  const request = async (forceRefresh = false) => {
-    const store = useManagedNextChatStore.getState();
-    const accessToken = await store.ensureFreshAuthToken(forceRefresh);
-    const current = useManagedNextChatStore.getState();
-    return managedApiJsonRequest<T>(
-      current.backendBaseUrl,
-      path,
-      init,
-      accessToken,
-    );
-  };
-  try {
-    return await request();
-  } catch (error) {
-    if (!isManagedAuthError(error)) throw error;
-    return request(true);
-  }
+  return requestWithManagedAuth(({ baseUrl, accessToken }) =>
+    managedApiJsonRequest<T>(baseUrl, path, init, accessToken),
+  );
 }
 
 async function managedFormDataRequest<T>(
-  baseUrl: string,
   path: string,
   body: FormData,
-  accessToken: string,
   text: ManagedMobileText,
 ) {
-  let response: Response;
-  try {
-    response = await fetch(managedApiUrl(baseUrl, path), {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Accept-Language": text.dateLocale,
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body,
-    });
-  } catch (error) {
-    if (
-      error instanceof TypeError &&
-      /failed to fetch|network/i.test(error.message)
-    ) {
-      throw new Error(text.errors.networkFailed);
+  return requestWithManagedAuth(async ({ baseUrl, accessToken }) => {
+    let response: Response;
+    try {
+      response = await fetch(managedApiUrl(baseUrl, path), {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Accept-Language": text.dateLocale,
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body,
+      });
+    } catch (error) {
+      if (
+        error instanceof TypeError &&
+        /failed to fetch|network/i.test(error.message)
+      ) {
+        throw new Error(text.errors.networkFailed);
+      }
+      throw error;
     }
-    throw error;
-  }
-  const bodyText = await response.text().catch(() => "");
-  const payload = bodyText
-    ? (() => {
-        try {
-          return JSON.parse(bodyText) as {
-            code?: number;
-            message?: string;
-            data?: T;
-          };
-        } catch {
-          return null;
-        }
-      })()
-    : null;
-  if (!response.ok || !payload || payload.code !== 0) {
-    throw new Error(
-      localizeManagedMobileError({
-        message: payload?.message || bodyText,
-        status: response.status,
+    const bodyText = await response.text().catch(() => "");
+    const payload = bodyText
+      ? (() => {
+          try {
+            return JSON.parse(bodyText) as {
+              code?: number;
+              message?: string;
+              data?: T;
+            };
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+    if (!response.ok || !payload || payload.code !== 0) {
+      throw new ManagedApiError(
+        localizeManagedMobileError({
+          message: payload?.message || bodyText,
+          status: response.status,
+          path,
+        }),
+        response.status,
         path,
-      }),
-    );
-  }
-  return payload.data as T;
+        payload?.code,
+      );
+    }
+    return payload.data as T;
+  });
 }
 
 async function managedGatewayRequestText(
+  baseUrl: string,
+  path: string,
+  init: RequestInit,
+  accessToken: string,
+  text: ManagedMobileText,
+) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= 2; attempt += 1) {
+    try {
+      const result = await managedGatewayRequestTextOnce(
+        baseUrl,
+        path,
+        init,
+        accessToken,
+        text,
+      );
+      if (attempt < 2 && [408, 425, 502, 503, 504].includes(result.status)) {
+        await sleep(300 * (attempt + 1));
+        continue;
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (
+        init.signal?.aborted ||
+        !isManagedNetworkLikeError(error) ||
+        attempt >= 2
+      ) {
+        throw error;
+      }
+      await sleep(300 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+async function managedGatewayRequestTextOnce(
   baseUrl: string,
   path: string,
   init: RequestInit,
@@ -6450,11 +6663,13 @@ function AndroidImageStudio() {
     }
     if (taskReferences.length) basePayload.input_fidelity = "high";
 
-    function buildImageRequest() {
+    function buildImageRequest(
+      imageApiKey = managed.imageSession?.api_key || "",
+    ) {
       const payload: Record<string, any> = { ...basePayload, n: 1 };
       const headers: Record<string, string> = {
         Accept: "application/json",
-        Authorization: `Bearer ${managed.imageSession?.api_key || ""}`,
+        Authorization: `Bearer ${imageApiKey}`,
       };
       let body: BodyInit;
       if (taskReferences.length) {
@@ -6476,6 +6691,91 @@ function AndroidImageStudio() {
       }
       return { headers, body };
     }
+
+    const requestImageText = async () => {
+      let authAttempt = 0;
+      let networkAttempt = 0;
+      let lastError: unknown = null;
+      while (authAttempt <= 1 && networkAttempt <= 2) {
+        const latestManaged = useManagedNextChatStore.getState();
+        const request = buildImageRequest(
+          latestManaged.imageSession?.api_key || "",
+        );
+        try {
+          const response =
+            request.body instanceof FormData
+              ? await fetch(
+                  `${managedGatewayBaseUrl(
+                    latestManaged.backendBaseUrl,
+                  )}${endpoint}`,
+                  {
+                    method: "POST",
+                    headers: request.headers,
+                    body: request.body,
+                    signal: controller.signal,
+                  },
+                )
+                  .then(async (res) => {
+                    if (controller.signal.aborted) {
+                      throw new DOMException("Aborted", "AbortError");
+                    }
+                    if (!res.ok) {
+                      recordGatewayDiagnostic(`/v1${endpoint}`, {
+                        method: "POST",
+                        transport: "web",
+                        status: res.status,
+                      });
+                    }
+                    return {
+                      ok: res.ok,
+                      status: res.status,
+                      text: await res.text().catch(() => ""),
+                    };
+                  })
+                  .catch((error) => {
+                    recordGatewayDiagnostic(`/v1${endpoint}`, {
+                      method: "POST",
+                      transport: "web",
+                      error,
+                    });
+                    throw error;
+                  })
+              : await managedGatewayRequestText(
+                  latestManaged.backendBaseUrl,
+                  `/v1${endpoint}`,
+                  {
+                    method: "POST",
+                    headers: request.headers,
+                    body: request.body,
+                    signal: controller.signal,
+                  },
+                  latestManaged.imageSession?.api_key || "",
+                  text,
+                );
+          if (
+            (response.status === 401 || response.status === 403) &&
+            authAttempt < 1
+          ) {
+            authAttempt += 1;
+            await managed.bootstrap({ silent: true }).catch(() => undefined);
+            continue;
+          }
+          return response;
+        } catch (error) {
+          lastError = error;
+          if (
+            controller.signal.aborted ||
+            !isManagedNetworkLikeError(error) ||
+            networkAttempt >= 2
+          ) {
+            throw error;
+          }
+          networkAttempt += 1;
+          await sleep(350 * networkAttempt);
+        }
+      }
+      throw lastError;
+    };
 
     const savedResults: string[] = [];
     const localFiles: string[] = [];
@@ -6512,62 +6812,7 @@ function AndroidImageStudio() {
           result_items: [...resultItems],
         });
         try {
-          const request = buildImageRequest();
-          const response =
-            request.body instanceof FormData
-              ? await fetch(
-                  `${managedGatewayBaseUrl(
-                    activeManaged.backendBaseUrl,
-                  )}${endpoint}`,
-                  {
-                    method: "POST",
-                    headers: {
-                      ...request.headers,
-                      Authorization: `Bearer ${
-                        activeManaged.imageSession?.api_key || ""
-                      }`,
-                    },
-                    body: request.body,
-                    signal: controller.signal,
-                  },
-                )
-                  .then(async (res) => {
-                    if (controller.signal.aborted) {
-                      throw new DOMException("Aborted", "AbortError");
-                    }
-                    if (!res.ok) {
-                      recordGatewayDiagnostic(`/v1${endpoint}`, {
-                        method: "POST",
-                        transport: "web",
-                        status: res.status,
-                      });
-                    }
-                    return {
-                      ok: res.ok,
-                      status: res.status,
-                      text: await res.text().catch(() => ""),
-                    };
-                  })
-                  .catch((error) => {
-                    recordGatewayDiagnostic(`/v1${endpoint}`, {
-                      method: "POST",
-                      transport: "web",
-                      error,
-                    });
-                    throw error;
-                  })
-              : await managedGatewayRequestText(
-                  activeManaged.backendBaseUrl,
-                  `/v1${endpoint}`,
-                  {
-                    method: "POST",
-                    headers: request.headers,
-                    body: request.body,
-                    signal: controller.signal,
-                  },
-                  activeManaged.imageSession?.api_key || "",
-                  text,
-                );
+          const response = await requestImageText();
           if (controller.signal.aborted) {
             throw new DOMException("Aborted", "AbortError");
           }
@@ -7545,15 +7790,25 @@ function AndroidGallery() {
   }
 
   async function cloudAssetDataUrl(asset: MobileAsset) {
-    const store = useManagedNextChatStore.getState();
-    const token = await store.ensureFreshAuthToken();
     const path =
       asset.content_url ||
       `/api/v1/mobile/assets/${encodeURIComponent(asset.id)}/content`;
-    const response = await fetch(managedApiUrl(store.backendBaseUrl, path), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error(text.platform.materialRefreshFailed);
+    const response = await requestWithManagedAuth(
+      async ({ baseUrl, accessToken }) => {
+        const res = await fetch(managedApiUrl(baseUrl, path), {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          throw new ManagedApiError(
+            text.platform.materialRefreshFailed,
+            res.status,
+            path,
+          );
+        }
+        return res;
+      },
+    );
     const blob = await response.blob();
     return asset.kind === "image"
       ? compressImage(blob, 2 * 1024 * 1024)
@@ -9162,13 +9417,9 @@ function AndroidAccountSettings() {
           shot.fileName || `feedback-${index + 1}.png`,
         );
       });
-      const accessToken = await managed.ensureFreshAuthToken();
-      const activeManaged = useManagedNextChatStore.getState();
       const result = await managedFormDataRequest<any>(
-        activeManaged.backendBaseUrl,
         "/api/v1/play/mobile-feedback",
         form,
-        accessToken,
         text,
       );
       setFeedbackMessage(
@@ -11032,6 +11283,60 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managed._hasHydrated, managed.accessToken, managed.session]);
+
+  useEffect(() => {
+    if (
+      !managed._hasHydrated ||
+      !managed.accessToken ||
+      !managed.backendBaseUrl
+    )
+      return;
+    let disposed = false;
+    let recovering = false;
+    let lastRecoveredAt = 0;
+    const recoverSession = async (force = false) => {
+      if (disposed || recovering) return;
+      const now = Date.now();
+      if (!force && now - lastRecoveredAt < 60_000) return;
+      recovering = true;
+      lastRecoveredAt = now;
+      try {
+        const store = useManagedNextChatStore.getState();
+        await store.ensureFreshAuthToken(force).catch(() => undefined);
+        const latest = useManagedNextChatStore.getState();
+        if (
+          shouldRefreshManagedSession(latest.session) ||
+          shouldRefreshManagedSession(latest.imageSession)
+        ) {
+          await latest.bootstrap({ silent: true }).catch(() => undefined);
+        }
+      } finally {
+        recovering = false;
+      }
+    };
+    const recoverAfterResume = () => {
+      if (document.visibilityState === "visible") {
+        void recoverSession(false);
+      }
+    };
+    const recoverAfterOnline = () => {
+      void recoverSession(true);
+    };
+    document.addEventListener("visibilitychange", recoverAfterResume);
+    window.addEventListener("jisudeng-native-resume", recoverAfterOnline);
+    window.addEventListener("online", recoverAfterOnline);
+    const timer = window.setInterval(() => {
+      void recoverSession(false);
+    }, 5 * 60_000);
+    void recoverSession(false);
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", recoverAfterResume);
+      window.removeEventListener("jisudeng-native-resume", recoverAfterOnline);
+      window.removeEventListener("online", recoverAfterOnline);
+      window.clearInterval(timer);
+    };
+  }, [managed._hasHydrated, managed.accessToken, managed.backendBaseUrl]);
 
   useEffect(() => {
     if (!managed.accessToken || !managed.backendBaseUrl) return;
