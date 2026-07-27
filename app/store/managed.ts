@@ -53,6 +53,7 @@ export const useManagedNextChatStore = createPersistStore<
   {
     setBackendBaseUrl: (url: string) => void;
     clearLastError: () => void;
+    cancel2FA: () => void;
     isAuthenticated: () => boolean;
     login: (
       email: string,
@@ -109,6 +110,15 @@ export const useManagedNextChatStore = createPersistStore<
 
       clearLastError() {
         set({ lastError: "" });
+      },
+
+      cancel2FA() {
+        set({
+          pendingTotpToken: "",
+          pendingTotpEmail: "",
+          loading: false,
+          lastError: "",
+        });
       },
 
       isAuthenticated() {

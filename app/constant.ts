@@ -60,6 +60,7 @@ export enum Path {
   AccountSubscriptions = "/account/subscriptions",
   AccountSupport = "/account/support",
   AccountPermissions = "/account/permissions",
+  AccountAdmin = "/account/admin",
   AccountUpdate = "/account/update",
   AccountFeedback = "/account/feedback",
   Artifacts = "/artifacts",

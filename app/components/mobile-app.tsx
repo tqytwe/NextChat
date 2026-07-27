@@ -386,6 +386,24 @@ function serverSkillDescription(skill: MobileSkill, text: ManagedMobileText) {
   );
 }
 
+function normalizedSkillCategory(value?: string) {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return "";
+  if (/doc|文档|summary|总结|pdf/.test(raw)) return "document";
+  if (/image|图片|生图|prompt|提示词/.test(raw)) return "image";
+  if (/market|营销|social|小红书|内容|copy/.test(raw)) return "marketing";
+  if (/business|commerce|商业|电商|销售/.test(raw)) return "business";
+  if (/code|dev|代码|开发|debug/.test(raw)) return "code";
+  if (/support|客服|工单|售后/.test(raw)) return "support";
+  if (/legal|law|合同|法律/.test(raw)) return "legal";
+  if (/edu|study|学习|教育/.test(raw)) return "education";
+  if (/office|meeting|办公|会议/.test(raw)) return "office";
+  if (/translation|translate|翻译|本地化/.test(raw)) return "translation";
+  return raw;
+}
+
 type AndroidUpdateManifest = {
   version?: string;
   latestVersion?: string;
@@ -1269,6 +1287,25 @@ function formatMoney(value?: number | string) {
   const numberValue =
     typeof value === "string" ? Number.parseFloat(value) : Number(value || 0);
   return `¥${Number.isFinite(numberValue) ? numberValue.toFixed(2) : "0.00"}`;
+}
+
+function isManagedAdminWorkspace(workspace?: { user?: unknown } | null) {
+  const user = workspace?.user as any;
+  const roles = [
+    user?.role,
+    user?.user_role,
+    user?.account_role,
+    ...(Array.isArray(user?.roles) ? user.roles : []),
+    ...(Array.isArray(user?.permissions) ? user.permissions : []),
+  ]
+    .filter(Boolean)
+    .map((item) => String(item).toLowerCase());
+  return Boolean(
+    user?.is_admin ||
+      user?.is_root ||
+      user?.admin ||
+      roles.some((role) => /admin|root|owner|super/.test(role)),
+  );
 }
 
 function useMobileText() {
@@ -2798,6 +2835,31 @@ function AndroidLogin() {
     }
   }
 
+  async function submitTotpCode() {
+    if (!backendBaseUrl || busy || totpCode.trim().length < 6) return;
+    setError("");
+    setMessage("");
+    try {
+      managed.setBackendBaseUrl(backendBaseUrl);
+      await managed.login2FA(totpCode.trim());
+      setTotpCode("");
+      navigate(Path.Home);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? localizeManagedMobileError({ message: err.message })
+          : text.errors.verifyFailed,
+      );
+    }
+  }
+
+  useEffect(() => {
+    if (!managed.pendingTotpToken) return;
+    if (!/^\d{6}$/.test(totpCode.trim())) return;
+    void submitTotpCode();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managed.pendingTotpToken, totpCode]);
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!backendBaseUrl) return;
@@ -2806,8 +2868,7 @@ function AndroidLogin() {
     try {
       managed.setBackendBaseUrl(backendBaseUrl);
       if (managed.pendingTotpToken) {
-        await managed.login2FA(totpCode);
-        navigate(Path.Home);
+        await submitTotpCode();
         return;
       }
       if (mode === "login") {
@@ -3041,16 +3102,36 @@ function AndroidLogin() {
               )}
             </>
           ) : (
-            <label>
-              <span>{managed.pendingTotpEmail || text.login.totpFallback}</span>
-              <input
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.currentTarget.value)}
-                placeholder={text.login.totpPlaceholder}
-                inputMode="numeric"
-                maxLength={6}
-              />
-            </label>
+            <div className={styles["totp-panel"]}>
+              <label>
+                <span>
+                  {managed.pendingTotpEmail || text.login.totpFallback}
+                </span>
+                <input
+                  autoFocus
+                  value={totpCode}
+                  onChange={(e) =>
+                    setTotpCode(
+                      e.currentTarget.value.replace(/\D/g, "").slice(0, 6),
+                    )
+                  }
+                  placeholder={text.login.totpPlaceholder}
+                  inputMode="numeric"
+                  maxLength={6}
+                />
+              </label>
+              <button
+                type="button"
+                className={styles["ghost-action"]}
+                onClick={() => {
+                  managed.cancel2FA();
+                  setTotpCode("");
+                  setError("");
+                }}
+              >
+                {text.common.back}
+              </button>
+            </div>
           )}
 
           {(configError || managed.lastError || error) && (
@@ -3117,6 +3198,11 @@ function AndroidDashboard() {
   );
   const showingImages = dashboardFilter === "image";
   const showingTasks = dashboardFilter === "tasks";
+  const isAdmin = isManagedAdminWorkspace(workspace);
+  const [sessionActionTarget, setSessionActionTarget] =
+    useState<ManagedMobileChatSession | null>(null);
+  const [renameTarget, setRenameTarget] =
+    useState<ManagedMobileChatSession | null>(null);
 
   async function refreshCloudTasks() {
     if (!managed.accessToken) return;
@@ -3182,24 +3268,39 @@ function AndroidDashboard() {
   }
 
   function openChat() {
-    mobileStore.createChatSession(fallbackModel, dashboardChatGroupId);
+    mobileStore.setCurrentChatId("");
     navigate(Path.Chat);
   }
 
   function openSkillCenter() {
-    mobileStore.createChatSession(fallbackModel, dashboardChatGroupId);
+    mobileStore.setCurrentChatId("");
     navigate(Path.Chat, { state: { openSkillSheet: true } });
   }
 
   function openCollaborationChat() {
-    const sessionId = mobileStore.createChatSession(
-      fallbackModel,
-      dashboardChatGroupId,
-    );
-    mobileStore.updateChatSession(sessionId, {
-      agentId: COLLABORATION_AGENT_ID,
-    });
+    mobileStore.setCurrentChatId("");
+    navigate(Path.Chat, { state: { selectAgentId: COLLABORATION_AGENT_ID } });
+  }
+
+  function openSession(session: ManagedMobileChatSession) {
+    mobileStore.setCurrentChatId(session.id);
+    setSessionActionTarget(null);
     navigate(Path.Chat);
+  }
+
+  function deleteSession(session: ManagedMobileChatSession) {
+    if (!window.confirm(text.account.deleteSessionConfirm)) return;
+    mobileStore.removeChatSession(session.id);
+    setSessionActionTarget(null);
+  }
+
+  function renameSessionFromDashboard(
+    session: ManagedMobileChatSession,
+    title: string,
+  ) {
+    mobileStore.renameChatSession(session.id, title);
+    setRenameTarget(null);
+    setSessionActionTarget(null);
   }
 
   return (
@@ -3259,6 +3360,13 @@ function AndroidDashboard() {
           <strong>{text.dashboard.agentCollaboration}</strong>
           <span>{text.dashboard.agentCollaborationHint}</span>
         </button>
+        {isAdmin && (
+          <button type="button" onClick={() => navigate(Path.AccountAdmin)}>
+            <SettingsIcon />
+            <strong>{text.account.adminCenter}</strong>
+            <span>{text.account.adminRecognized}</span>
+          </button>
+        )}
       </section>
 
       <div className={styles["conversation-filters"]}>
@@ -3438,9 +3546,31 @@ function AndroidDashboard() {
                   <button
                     key={session.id}
                     className={styles["conversation-item"]}
-                    onClick={() => {
-                      mobileStore.setCurrentChatId(session.id);
-                      navigate(Path.Chat);
+                    onClick={() => openSession(session)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setSessionActionTarget(session);
+                    }}
+                    onTouchStart={(event) => {
+                      const target = event.currentTarget;
+                      const timer = window.setTimeout(() => {
+                        setSessionActionTarget(session);
+                      }, 520);
+                      target.dataset.longPressTimer = String(timer);
+                    }}
+                    onTouchMove={(event) => {
+                      const timer = Number(
+                        event.currentTarget.dataset.longPressTimer || 0,
+                      );
+                      if (timer) window.clearTimeout(timer);
+                      delete event.currentTarget.dataset.longPressTimer;
+                    }}
+                    onTouchEnd={(event) => {
+                      const timer = Number(
+                        event.currentTarget.dataset.longPressTimer || 0,
+                      );
+                      if (timer) window.clearTimeout(timer);
+                      delete event.currentTarget.dataset.longPressTimer;
                     }}
                   >
                     <i>{chatSessionDisplayTitle(session, text).slice(0, 1)}</i>
@@ -3459,6 +3589,35 @@ function AndroidDashboard() {
       {managed.lastError && !workspace && (
         <div className={styles["form-error"]}>{managed.lastError}</div>
       )}
+      <SessionActionSheet
+        session={sessionActionTarget}
+        text={text}
+        onClose={() => setSessionActionTarget(null)}
+        onOpen={() => sessionActionTarget && openSession(sessionActionTarget)}
+        onRename={() => {
+          if (sessionActionTarget) setRenameTarget(sessionActionTarget);
+        }}
+        onTogglePin={() => {
+          if (!sessionActionTarget) return;
+          mobileStore.togglePinChatSession(sessionActionTarget.id);
+          setSessionActionTarget(null);
+        }}
+        onDelete={() => {
+          if (sessionActionTarget) deleteSession(sessionActionTarget);
+        }}
+      />
+      <RenameSessionDialog
+        open={Boolean(renameTarget)}
+        title={text.chat.renameSession}
+        initialValue={
+          renameTarget ? chatSessionDisplayTitle(renameTarget, text) : ""
+        }
+        text={text}
+        onClose={() => setRenameTarget(null)}
+        onSubmit={(value) => {
+          if (renameTarget) renameSessionFromDashboard(renameTarget, value);
+        }}
+      />
     </AndroidAppShell>
   );
 }
@@ -4054,7 +4213,13 @@ function ChatSkillLibrarySheet(props: {
     { id: "translation", label: zh ? "翻译" : "Translation" },
   ];
   const items = CHAT_SKILL_TEMPLATES.filter(
-    (item) => category === "all" || item.category === category,
+    (item) =>
+      category === "all" || normalizedSkillCategory(item.category) === category,
+  );
+  const serverItems = props.serverSkills.filter(
+    (skill) =>
+      category === "all" ||
+      normalizedSkillCategory(skill.category || skill.slug) === category,
   );
   return (
     <LibrarySheet
@@ -4097,7 +4262,7 @@ function ChatSkillLibrarySheet(props: {
             </button>
           </div>
         </article>
-        {props.serverSkills.map((skill) => (
+        {serverItems.map((skill) => (
           <article
             key={`server-${skill.id}`}
             className={clsx(
@@ -4155,6 +4320,9 @@ function ChatSkillLibrarySheet(props: {
             </div>
           </article>
         ))}
+        {!props.serverLoading && serverItems.length + items.length === 0 && (
+          <p className={styles["empty-copy"]}>{props.text.common.empty}</p>
+        )}
       </div>
     </LibrarySheet>
   );
@@ -4218,6 +4386,157 @@ function MessageActionSheet(props: {
           <button onClick={props.onRetry} disabled={!canRetry}>
             <ReloadIcon />
             <span>{props.text.chat.retryMessage}</span>
+          </button>
+          <button className={styles["danger-inline"]} onClick={props.onDelete}>
+            <DeleteIcon />
+            <span>{props.text.common.delete}</span>
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function SessionActionSheet(props: {
+  session: ManagedMobileChatSession | null;
+  text: ManagedMobileText;
+  onClose: () => void;
+  onOpen: () => void;
+  onRename: () => void;
+  onTogglePin: () => void;
+  onDelete: () => void;
+}) {
+  if (!props.session) return null;
+  return (
+    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+      <aside
+        className={styles["session-sheet"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className={styles["sheet-head"]}>
+          <div>
+            <h2>{props.text.chat.sessions}</h2>
+            <small>{chatSessionDisplayTitle(props.session, props.text)}</small>
+          </div>
+          <IconButton label={props.text.common.close} onClick={props.onClose}>
+            <CloseIcon />
+          </IconButton>
+        </div>
+        <div className={styles["message-actions"]}>
+          <button onClick={props.onOpen}>
+            <ChatIcon />
+            <span>{props.text.common.open}</span>
+          </button>
+          <button onClick={props.onRename}>
+            <CopyIcon />
+            <span>{props.text.common.rename}</span>
+          </button>
+          <button onClick={props.onTogglePin}>
+            <HistoryIcon />
+            <span>
+              {props.session.pinned
+                ? props.text.common.unpin
+                : props.text.common.pin}
+            </span>
+          </button>
+          <button className={styles["danger-inline"]} onClick={props.onDelete}>
+            <DeleteIcon />
+            <span>{props.text.common.delete}</span>
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function RenameSessionDialog(props: {
+  open: boolean;
+  title: string;
+  initialValue: string;
+  text: ManagedMobileText;
+  onClose: () => void;
+  onSubmit: (value: string) => void;
+}) {
+  const [value, setValue] = useState(props.initialValue);
+  useEffect(() => {
+    if (props.open) setValue(props.initialValue);
+  }, [props.initialValue, props.open]);
+  if (!props.open) return null;
+  return (
+    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+      <aside
+        className={styles["confirm-dialog"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2>{props.title}</h2>
+        <label className={styles["session-search"]}>
+          <input
+            autoFocus
+            value={value}
+            maxLength={60}
+            onChange={(event) => setValue(event.currentTarget.value)}
+            placeholder={props.text.chat.renamePrompt}
+          />
+        </label>
+        <div className={styles["dialog-actions"]}>
+          <button type="button" onClick={props.onClose}>
+            {props.text.common.cancel}
+          </button>
+          <button
+            type="button"
+            disabled={!value.trim()}
+            onClick={() => props.onSubmit(value.trim())}
+          >
+            {props.text.common.save}
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function ImageTaskActionSheet(props: {
+  item: any | null;
+  text: ManagedMobileText;
+  onClose: () => void;
+  onOpen: () => void;
+  onReuse: () => void;
+  onRetry: () => void;
+  onDelete: () => void;
+}) {
+  if (!props.item) return null;
+  const canRetry = !["running", "queued"].includes(String(props.item.status));
+  return (
+    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+      <aside
+        className={styles["session-sheet"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className={styles["sheet-head"]}>
+          <div>
+            <h2>{props.text.image.details}</h2>
+            <small>
+              {props.item.params?.prompt ||
+                props.item.prompt ||
+                props.text.image.generate}
+            </small>
+          </div>
+          <IconButton label={props.text.common.close} onClick={props.onClose}>
+            <CloseIcon />
+          </IconButton>
+        </div>
+        <div className={styles["message-actions"]}>
+          <button onClick={props.onOpen}>
+            <ImageIcon />
+            <span>{props.text.image.viewOriginal}</span>
+          </button>
+          <button onClick={props.onReuse}>
+            <CopyIcon />
+            <span>{props.text.image.applyPrompt}</span>
+          </button>
+          <button onClick={props.onRetry} disabled={!canRetry}>
+            <ReloadIcon />
+            <span>{props.text.image.retryTask}</span>
           </button>
           <button className={styles["danger-inline"]} onClick={props.onDelete}>
             <DeleteIcon />
@@ -4449,7 +4768,7 @@ function AndroidChat() {
   const currentSession =
     mobileStore.chatSessions.find(
       (session) => session.id === mobileStore.currentChatId,
-    ) || mobileStore.chatSessions[0];
+    ) || null;
   const defaultChatGroupId = preferredChatGroupID(
     workspace,
     preferredChatGroupId,
@@ -4462,7 +4781,6 @@ function AndroidChat() {
     currentSessionChatGroupId || defaultChatGroupId || chatGroup?.id;
   const models = chatModelsForGroup(workspace, effectiveChatGroupId);
   const fallbackModel = modelValue(models[0]);
-  const selectedModel = currentSession?.model || fallbackModel;
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
   const [sharedMaterials, setSharedMaterials] = useState<MaterialDraft[]>([]);
@@ -4473,6 +4791,11 @@ function AndroidChat() {
   const [serverSkillSelections, setServerSkillSelections] = useState<
     Record<string, ServerSkillSelection>
   >(() => readStoredJSON(SERVER_SKILL_SELECTION_KEY, {}));
+  const [draftModel, setDraftModel] = useState("");
+  const [draftAgentId, setDraftAgentId] = useState("");
+  const [draftSkillSelection, setDraftSkillSelection] =
+    useState<ServerSkillSelection | null>(null);
+  const selectedModel = currentSession?.model || draftModel || fallbackModel;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
@@ -4480,11 +4803,12 @@ function AndroidChat() {
   const [skillSheetOpen, setSkillSheetOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
   const activeAgent =
-    CHAT_AGENT_TEMPLATES.find((item) => item.id === currentSession?.agentId) ||
-    null;
+    CHAT_AGENT_TEMPLATES.find(
+      (item) => item.id === (currentSession?.agentId || draftAgentId),
+    ) || null;
   const activeSkill = currentSession?.id
     ? serverSkillSelections[currentSession.id]
-    : null;
+    : draftSkillSelection;
   const [running, setRunning] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [listening, setListening] = useState(false);
@@ -4499,6 +4823,8 @@ function AndroidChat() {
     useState<ChatMessageActionTarget | null>(null);
   const [messageViewerTarget, setMessageViewerTarget] =
     useState<ChatMessageActionTarget | null>(null);
+  const [chatRenameTarget, setChatRenameTarget] =
+    useState<ManagedMobileChatSession | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const platformTaskRef = useRef<MobileTask | null>(null);
@@ -4661,13 +4987,6 @@ function AndroidChat() {
   }, [currentSession?.id, location.state, navigate, text]);
 
   useEffect(() => {
-    if (!currentSession && fallbackModel) {
-      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fallbackModel, currentSession?.id, effectiveChatGroupId]);
-
-  useEffect(() => {
     if (!preferredChatGroupId && chatGroup?.id) {
       setPreferredChatGroupId(chatGroup.id);
     }
@@ -4736,14 +5055,19 @@ function AndroidChat() {
       return;
     if (state.openAgentSheet) setAgentSheetOpen(true);
     if (state.openSkillSheet) setSkillSheetOpen(true);
-    if (state.selectAgentId && currentSession?.id) {
+    if (state.selectAgentId) {
       const agent = CHAT_AGENT_TEMPLATES.find(
         (item) => item.id === state.selectAgentId,
       );
       if (agent) {
-        mobileStore.updateChatSession(currentSession.id, {
-          agentId: agent.id,
-        });
+        if (currentSession?.id) {
+          mobileStore.updateChatSession(currentSession.id, {
+            agentId: agent.id,
+          });
+          setDraftAgentId("");
+        } else {
+          setDraftAgentId(agent.id);
+        }
         if (agent.starter) {
           setInput((value) =>
             value.trim()
@@ -4947,14 +5271,18 @@ function AndroidChat() {
     stopHoldSpeechRecognition().catch(() => {});
   }
 
-  function makeGatewayMessages(sessionId: string, excludeMessageId?: string) {
+  function makeGatewayMessages(
+    sessionId: string,
+    excludeMessageId?: string,
+    skillOverride?: ServerSkillSelection | null,
+  ) {
     const session = useManagedMobileAppStore
       .getState()
       .chatSessions.find((item) => item.id === sessionId);
     const sessionAgent =
       CHAT_AGENT_TEMPLATES.find((item) => item.id === session?.agentId) ||
       activeAgent;
-    const selectedSkill = serverSkillSelections[sessionId];
+    const selectedSkill = skillOverride ?? serverSkillSelections[sessionId];
     const systemPrompt = [
       text.chat.mobileSystemPrompt,
       sessionAgent ? localizedValue(sessionAgent.systemPrompt, text) : "",
@@ -5089,10 +5417,28 @@ function AndroidChat() {
       setChatError(text.errors.noModel);
       return;
     }
+    const existingSessionId = currentSession?.id || "";
     const sessionId = mobileStore.ensureChatSession(
       model,
       effectiveChatGroupId,
     );
+    const skillForRequest = existingSessionId
+      ? serverSkillSelections[sessionId]
+      : draftSkillSelection;
+    if (!existingSessionId) {
+      mobileStore.updateChatSession(sessionId, {
+        model,
+        groupId: effectiveChatGroupId,
+        agentId: draftAgentId,
+      });
+      if (draftSkillSelection) {
+        setServerSkillSelections((current) => {
+          const next = { ...current, [sessionId]: draftSkillSelection };
+          writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+          return next;
+        });
+      }
+    }
     const readyAssetIds = sharedMaterials
       .filter((item) => item.state === "ready" && item.asset?.id)
       .map((item) => String(item.asset?.id));
@@ -5107,7 +5453,7 @@ function AndroidChat() {
         model,
         group_id: effectiveChatGroupId,
         asset_ids: readyAssetIds,
-        skill_id: serverSkillSelections[sessionId]?.id,
+        skill_id: skillForRequest?.id,
         locale: text.dateLocale,
       });
       platformTaskRef.current = projectedTask;
@@ -5129,6 +5475,9 @@ function AndroidChat() {
       status: "streaming",
     });
     mobileStore.updateChatSession(sessionId, { model });
+    setDraftModel("");
+    setDraftAgentId("");
+    setDraftSkillSelection(null);
     setInput("");
     setAttachments([]);
     setSharedMaterials([]);
@@ -5174,12 +5523,12 @@ function AndroidChat() {
       const payload = JSON.stringify({
         model,
         stream: true,
-        messages: makeGatewayMessages(sessionId, assistantId),
+        messages: makeGatewayMessages(sessionId, assistantId, skillForRequest),
       });
       const nonStreamingPayload = JSON.stringify({
         model,
         stream: false,
-        messages: makeGatewayMessages(sessionId, assistantId),
+        messages: makeGatewayMessages(sessionId, assistantId, skillForRequest),
       });
       const runNonStreamingChatFallback = async (reason: unknown) => {
         const fallbackTransport = isDirectNativeStreamAvailable()
@@ -5539,18 +5888,24 @@ function AndroidChat() {
   }
 
   function changeModel(model: string) {
-    const sessionId =
-      currentSession?.id ||
-      mobileStore.createChatSession(model, effectiveChatGroupId);
-    mobileStore.updateChatSession(sessionId, { model });
+    if (currentSession?.id) {
+      mobileStore.updateChatSession(currentSession.id, { model });
+      setDraftModel("");
+    } else {
+      setDraftModel(model);
+    }
     setChatError("");
   }
 
   function selectAgent(agent: ChatAgentTemplate | null) {
-    const sessionId =
-      currentSession?.id ||
-      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
-    mobileStore.updateChatSession(sessionId, { agentId: agent?.id || "" });
+    if (currentSession?.id) {
+      mobileStore.updateChatSession(currentSession.id, {
+        agentId: agent?.id || "",
+      });
+      setDraftAgentId("");
+    } else {
+      setDraftAgentId(agent?.id || "");
+    }
     setAgentSheetOpen(false);
     setChatError("");
     if (agent?.starter) {
@@ -5563,24 +5918,29 @@ function AndroidChat() {
   }
 
   function selectLocalSkill(skill: ChatSkillTemplate | null) {
-    const sessionId =
-      currentSession?.id ||
-      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
-    setServerSkillSelections((current) => {
-      const next = { ...current };
-      if (skill) {
-        next[sessionId] = {
+    const selection = skill
+      ? {
           id: `local:${skill.id}`,
           slug: skill.id,
           title: localizedValue(skill.title, text),
           systemPrompt: localizedValue(skill.instruction, text),
-        };
-      } else {
-        delete next[sessionId];
-      }
-      writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
-      return next;
-    });
+        }
+      : null;
+    if (currentSession?.id) {
+      setServerSkillSelections((current) => {
+        const next = { ...current };
+        if (selection) {
+          next[currentSession.id] = selection;
+        } else {
+          delete next[currentSession.id];
+        }
+        writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+        return next;
+      });
+      setDraftSkillSelection(null);
+    } else {
+      setDraftSkillSelection(selection);
+    }
     setSkillSheetOpen(false);
     setChatError("");
     if (skill?.starter) {
@@ -5593,9 +5953,6 @@ function AndroidChat() {
   }
 
   async function selectServerSkill(skill: MobileSkill) {
-    const sessionId =
-      currentSession?.id ||
-      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
     setUsingSkillId(String(skill.id));
     setChatError("");
     try {
@@ -5615,11 +5972,16 @@ function AndroidChat() {
         title: serverSkillTitle(used, text),
         systemPrompt,
       };
-      setServerSkillSelections((current) => {
-        const next = { ...current, [sessionId]: selection };
-        writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
-        return next;
-      });
+      if (currentSession?.id) {
+        setServerSkillSelections((current) => {
+          const next = { ...current, [currentSession.id]: selection };
+          writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+          return next;
+        });
+        setDraftSkillSelection(null);
+      } else {
+        setDraftSkillSelection(selection);
+      }
       setSkillSheetOpen(false);
     } catch (error) {
       setServerSkillsUnavailable(true);
@@ -5642,15 +6004,14 @@ function AndroidChat() {
       const nextModels = chatModelsForGroup(workspace, groupID);
       const nextModel = modelValue(nextModels[0]);
       setPreferredChatGroupId(groupID);
-      const sessionId =
-        currentSession?.id ||
-        (nextModel ? mobileStore.createChatSession(nextModel, groupID) : "");
-      if (sessionId) {
-        mobileStore.updateChatSession(sessionId, {
+      if (currentSession?.id) {
+        mobileStore.updateChatSession(currentSession.id, {
           groupId: groupID,
           model: nextModel,
           error: nextModel ? "" : text.errors.noModel,
         });
+      } else {
+        setDraftModel(nextModel || "");
       }
       if (!nextModel) {
         setChatError(text.errors.noModel);
@@ -5672,19 +6033,22 @@ function AndroidChat() {
   }
 
   function newSession() {
-    mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
+    mobileStore.setCurrentChatId("");
+    setDraftModel(fallbackModel);
+    setDraftAgentId("");
+    setDraftSkillSelection(null);
+    setInput("");
+    setAttachments([]);
+    setSharedMaterials([]);
+    setQuotedMessage(null);
     setDrawerOpen(false);
     setChatError("");
   }
 
   function renameSession(id: string) {
     const session = mobileStore.chatSessions.find((item) => item.id === id);
-    const nextTitle = window.prompt(
-      text.chat.renamePrompt,
-      session?.title || text.chat.unnamedSession,
-    );
-    if (!nextTitle?.trim()) return;
-    mobileStore.renameChatSession(id, nextTitle);
+    if (!session) return;
+    setChatRenameTarget(session);
   }
 
   function clearSession(id: string) {
@@ -5712,6 +6076,10 @@ function AndroidChat() {
   const currentGroupValue = String(effectiveChatGroupId || "");
 
   useNativeBackHandler(true, () => {
+    if (chatRenameTarget) {
+      setChatRenameTarget(null);
+      return;
+    }
     if (messageViewerTarget) {
       setMessageViewerTarget(null);
       return;
@@ -6128,7 +6496,10 @@ function AndroidChat() {
             setDrawerOpen(false);
           }}
           onNew={newSession}
-          onDelete={(id) => mobileStore.removeChatSession(id)}
+          onDelete={(id) => {
+            if (!window.confirm(text.account.deleteSessionConfirm)) return;
+            mobileStore.removeChatSession(id);
+          }}
           onRename={renameSession}
           onTogglePin={(id) => mobileStore.togglePinChatSession(id)}
           onClear={clearSession}
@@ -6180,7 +6551,7 @@ function AndroidChat() {
           activeId={
             currentSession?.id
               ? serverSkillSelections[currentSession.id]?.id
-              : ""
+              : draftSkillSelection?.id || ""
           }
           serverSkills={serverSkills}
           serverLoading={serverSkillsLoading}
@@ -6189,6 +6560,22 @@ function AndroidChat() {
           onClose={() => setSkillSheetOpen(false)}
           onSelectLocal={selectLocalSkill}
           onSelectServer={selectServerSkill}
+        />
+        <RenameSessionDialog
+          open={Boolean(chatRenameTarget)}
+          title={text.chat.renameSession}
+          initialValue={
+            chatRenameTarget
+              ? chatSessionDisplayTitle(chatRenameTarget, text)
+              : ""
+          }
+          text={text}
+          onClose={() => setChatRenameTarget(null)}
+          onSubmit={(value) => {
+            if (!chatRenameTarget) return;
+            mobileStore.renameChatSession(chatRenameTarget.id, value);
+            setChatRenameTarget(null);
+          }}
         />
         {messageActionTarget && (
           <MessageActionSheet
@@ -6275,6 +6662,7 @@ function AndroidImageStudio() {
   const [qualitySheetOpen, setQualitySheetOpen] = useState(false);
   const [styleSheetOpen, setStyleSheetOpen] = useState(false);
   const [groupSwitching, setGroupSwitching] = useState(false);
+  const [imageActionTarget, setImageActionTarget] = useState<any>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const platformTaskRef = useRef<MobileTask | null>(null);
@@ -6284,6 +6672,24 @@ function AndroidImageStudio() {
   );
   const activeTask = sdStore.draw.find(
     (item: any) => item.status === "running",
+  );
+  const failedImageTaskIds = useMemo(
+    () =>
+      sdStore.draw
+        .filter((item: any) => {
+          if (item.status === "running" || item.status === "queued") {
+            return false;
+          }
+          const hasResult = imageResults(item).length > 0;
+          return (
+            item.status === "error" ||
+            item.status === "cancelled" ||
+            item.status === "failed" ||
+            (item.status === "partial" && !hasResult)
+          );
+        })
+        .map((item: any) => String(item.id)),
+    [sdStore.draw],
   );
 
   useEffect(() => {
@@ -7046,6 +7452,18 @@ function AndroidImageStudio() {
     });
   }
 
+  function reuseImageTaskPrompt(item: any) {
+    setPrompt(item?.params?.prompt || item?.prompt || "");
+    if (item?.params?.size) setSize(item.params.size);
+    if (item?.params?.quality) setQuality(item.params.quality);
+    if (item?.params?.style) setStyle(item.params.style);
+    if (item?.params?.n) {
+      setCount(Math.max(1, Math.min(4, Number(item.params.n || 1))));
+    }
+    setImageActionTarget(null);
+    setError("");
+  }
+
   function retrySingleImage(item: any, index: number) {
     runImageTask({
       prompt: item?.params?.prompt,
@@ -7097,29 +7515,16 @@ function AndroidImageStudio() {
   }
 
   function clearFailedImageTasks() {
-    const failedIds = sdStore.draw
-      .filter((item: any) => {
-        if (item.status === "running" || item.status === "queued") {
-          return false;
-        }
-        const hasResult = imageResults(item).length > 0;
-        return (
-          item.status === "error" ||
-          item.status === "cancelled" ||
-          item.status === "failed" ||
-          (item.status === "partial" && !hasResult)
-        );
-      })
-      .map((item: any) => String(item.id));
-    if (!failedIds.length) {
+    if (!failedImageTaskIds.length) {
       setError(text.image.failedCleared);
       return;
     }
-    void deleteImageTasks(failedIds, text.image.clearFailedConfirm).then(
-      (deleted) => {
-        if (deleted) setError(text.image.failedCleared);
-      },
-    );
+    void deleteImageTasks(
+      failedImageTaskIds,
+      text.image.clearFailedConfirm,
+    ).then((deleted) => {
+      if (deleted) setError(text.image.failedCleared);
+    });
   }
 
   function applyPromptTemplate(template: ImagePromptTemplate) {
@@ -7210,6 +7615,10 @@ function AndroidImageStudio() {
   ];
 
   useNativeBackHandler(true, () => {
+    if (imageActionTarget) {
+      setImageActionTarget(null);
+      return;
+    }
     if (preview) {
       setPreview(null);
       return;
@@ -7448,9 +7857,11 @@ function AndroidImageStudio() {
       <section className={styles["section"]}>
         <div className={styles["section-head"]}>
           <h2>{text.image.details}</h2>
-          <button type="button" onClick={clearFailedImageTasks}>
-            {text.image.clearFailed}
-          </button>
+          {failedImageTaskIds.length > 0 && (
+            <button type="button" onClick={clearFailedImageTasks}>
+              {text.image.clearFailed}
+            </button>
+          )}
         </div>
         <div className={styles["task-list"]}>
           {sdStore.draw.length === 0 && (
@@ -7469,6 +7880,31 @@ function AndroidImageStudio() {
                 key={item.id}
                 className={styles["image-task-card"]}
                 onClick={() => setPreview(item)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setImageActionTarget(item);
+                }}
+                onTouchStart={(event) => {
+                  const target = event.currentTarget;
+                  const timer = window.setTimeout(() => {
+                    setImageActionTarget(item);
+                  }, 520);
+                  target.dataset.longPressTimer = String(timer);
+                }}
+                onTouchMove={(event) => {
+                  const timer = Number(
+                    event.currentTarget.dataset.longPressTimer || 0,
+                  );
+                  if (timer) window.clearTimeout(timer);
+                  delete event.currentTarget.dataset.longPressTimer;
+                }}
+                onTouchEnd={(event) => {
+                  const timer = Number(
+                    event.currentTarget.dataset.longPressTimer || 0,
+                  );
+                  if (timer) window.clearTimeout(timer);
+                  delete event.currentTarget.dataset.longPressTimer;
+                }}
               >
                 <i>
                   {urls[0] ? (
@@ -7495,17 +7931,6 @@ function AndroidImageStudio() {
                       }}
                     >
                       {text.image.retryTask}
-                    </em>
-                  )}
-                  {item.status !== "running" && item.status !== "queued" && (
-                    <em
-                      className={styles["danger-pill"]}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void deleteImageTasks([String(item.id)]);
-                      }}
-                    >
-                      {text.common.delete}
                     </em>
                   )}
                 </div>
@@ -7590,6 +8015,32 @@ function AndroidImageStudio() {
           </div>
         </div>
       )}
+      <ImageTaskActionSheet
+        item={imageActionTarget}
+        text={text}
+        onClose={() => setImageActionTarget(null)}
+        onOpen={() => {
+          if (!imageActionTarget) return;
+          setPreview(imageActionTarget);
+          setImageActionTarget(null);
+        }}
+        onReuse={() => {
+          if (imageActionTarget) reuseImageTaskPrompt(imageActionTarget);
+        }}
+        onRetry={() => {
+          if (!imageActionTarget) return;
+          retryTask(imageActionTarget);
+          setImageActionTarget(null);
+        }}
+        onDelete={() => {
+          if (!imageActionTarget) return;
+          void deleteImageTasks([String(imageActionTarget.id)]).then(
+            (deleted) => {
+              if (deleted) setImageActionTarget(null);
+            },
+          );
+        }}
+      />
       <ChoiceSheet
         open={groupSheetOpen}
         title={text.chat.group}
@@ -8885,6 +9336,7 @@ function AndroidAccountSettings() {
   const accountGroupID = storedChatGroupID(workspace);
   const accountGroupName = stableChatGroupName(workspace, text);
   const route = location.pathname;
+  const isAdmin = isManagedAdminWorkspace(workspace);
 
   async function refreshSupportTickets() {
     if (!managed.accessToken) return;
@@ -9879,6 +10331,78 @@ function AndroidAccountSettings() {
     }
     navigate(Path.Home);
   });
+
+  if (route === Path.AccountAdmin) {
+    return (
+      <AndroidDetailShell
+        title={text.account.adminCenter}
+        subtitle={
+          isAdmin ? text.account.adminRecognized : text.account.adminUnavailable
+        }
+        text={text}
+        onRefresh={() => managed.bootstrap({ silent: true })}
+      >
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.adminOverview}</h2>
+            <span>
+              {isAdmin ? text.account.synced : text.account.waitingSync}
+            </span>
+          </div>
+          <div className={styles["meta-list"]}>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.adminIdentity}</span>
+              <strong>
+                {workspace?.user?.username || workspace?.user?.email || "-"}
+              </strong>
+            </div>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.currentGroup}</span>
+              <strong>{accountGroupName}</strong>
+            </div>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.balance}</span>
+              <strong>{formatMoney(workspace?.user?.balance)}</strong>
+            </div>
+          </div>
+        </section>
+        <section className={styles["account-menu-group"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.adminAvailable}</h2>
+            <span>{text.account.adminReadonly}</span>
+          </div>
+          <div className={styles["account-menu-list"]}>
+            <AccountMenuItem
+              icon={<HistoryIcon />}
+              title={text.account.orders}
+              detail={text.account.adminCurrentAccountOnly}
+              onClick={() => navigate(Path.AccountOrders)}
+            />
+            <AccountMenuItem
+              icon={<ShareIcon />}
+              title={text.account.support}
+              detail={text.account.adminCurrentAccountOnly}
+              onClick={() => navigate(Path.AccountSupport)}
+            />
+            <AccountMenuItem
+              icon={<CopyIcon />}
+              title={text.account.balanceDetails}
+              detail={text.account.adminCurrentAccountOnly}
+              onClick={() => navigate(Path.AccountWallet)}
+            />
+          </div>
+        </section>
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.adminNeedsBackend}</h2>
+          </div>
+          <p className={styles["empty-copy"]}>
+            {text.account.adminBackendHint}
+          </p>
+        </section>
+      </AndroidDetailShell>
+    );
+  }
 
   if (route === Path.AccountRedeem) {
     return (
@@ -11154,6 +11678,14 @@ function AndroidAccountSettings() {
             }
             onClick={() => navigate(Path.AccountSupport)}
           />
+          {isAdmin && (
+            <AccountMenuItem
+              icon={<SettingsIcon />}
+              title={text.account.adminCenter}
+              detail={text.account.adminRecognized}
+              onClick={() => navigate(Path.AccountAdmin)}
+            />
+          )}
         </div>
       </section>
 
