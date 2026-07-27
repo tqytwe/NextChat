@@ -1,16 +1,17 @@
 {
   "platform": "android",
-  "version": "2.0.41",
+  "version": "2.0.42",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "3fe55788ea66598f0bff5275a97f1b615260afcff1565b6b67a1c7775aa5e63c",
+  "sha256": "368fced33fafbf000b2650ff7ac430cf3482a997f6f5417b273989206dabba5f",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-27",
   "notes": [
-    "优化 APP 交互：生图历史长按管理、智能体与技能中心大半屏筛选、空会话不入库、首页会话长按重命名删除、2FA 登录承接和管理员工作台入口。"
+    "完善技能中心详情、输入要求、示例、参数权限和消耗说明",
+    "登录态自动恢复过程不再用错误提示打扰用户。"
   ],
-  "versionCode": 241,
-  "bytes": 7428699,
+  "versionCode": 242,
+  "bytes": 7431674,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

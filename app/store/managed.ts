@@ -229,7 +229,9 @@ export const useManagedNextChatStore = createPersistStore<
           } catch (error) {
             if (isManagedAuthError(error)) {
               set({
-                lastError: getManagedMobileText().errors.authRecovering,
+                lastError: get().accessToken
+                  ? ""
+                  : getManagedMobileText().errors.authRecovering,
                 loading: false,
               });
             }

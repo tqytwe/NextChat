@@ -404,6 +404,123 @@ function normalizedSkillCategory(value?: string) {
   return raw;
 }
 
+function skillCategoryLabel(
+  category: string | undefined,
+  text: ManagedMobileText,
+) {
+  const zh = text.dateLocale.toLowerCase().startsWith("zh");
+  const normalized = normalizedSkillCategory(category);
+  const labels: Record<string, LocalizedString> = {
+    document: { cn: "文档处理", en: "Document" },
+    image: { cn: "图片与提示词", en: "Image" },
+    marketing: { cn: "营销内容", en: "Marketing" },
+    business: { cn: "商业经营", en: "Business" },
+    code: { cn: "代码开发", en: "Code" },
+    support: { cn: "客服售后", en: "Support" },
+    legal: { cn: "合同法务", en: "Legal" },
+    education: { cn: "学习教育", en: "Education" },
+    office: { cn: "办公协作", en: "Office" },
+    translation: { cn: "翻译本地化", en: "Translation" },
+  };
+  return localizedValue(
+    labels[normalized] || {
+      cn: category || "通用技能",
+      en: category || "General",
+    },
+    text,
+  );
+}
+
+function localSkillInputHint(
+  skill: ChatSkillTemplate,
+  text: ManagedMobileText,
+) {
+  const hints: Record<string, LocalizedString> = {
+    document: {
+      cn: "请提供文档正文、会议记录、PDF 摘录或要总结的长文本；如果有目标读者和输出长度，请一起说明。",
+      en: "Provide document text, meeting notes, PDF excerpts, or long text; add audience and length when useful.",
+    },
+    image: {
+      cn: "请提供图片、画面描述、用途、比例、风格偏好和需要避免的内容；有参考图时可一并加入素材。",
+      en: "Provide images or scene description, use case, ratio, style preference, and constraints; attach references when available.",
+    },
+    marketing: {
+      cn: "请提供产品/主题、目标用户、发布平台、语气、卖点和不能触碰的限制词。",
+      en: "Provide product/topic, audience, platform, tone, selling points, and restricted wording.",
+    },
+    business: {
+      cn: "请提供商品、服务、目标人群、平台规则、价格区间和已有素材。",
+      en: "Provide product/service, audience, platform rules, price range, and existing materials.",
+    },
+    code: {
+      cn: "请提供报错、相关代码、运行环境、复现步骤和最近改动；缺少日志时会先帮你列排查清单。",
+      en: "Provide errors, code, environment, reproduction steps, and recent changes; missing logs will be requested.",
+    },
+    support: {
+      cn: "请提供用户原话、订单/场景、已处理步骤、希望承诺的范围和不能承诺的内容。",
+      en: "Provide the user's message, order/context, handled steps, allowed promises, and forbidden promises.",
+    },
+    legal: {
+      cn: "请提供条款正文、签约场景、所在地区和你最担心的问题；输出仅供参考，不替代律师意见。",
+      en: "Provide clause text, scenario, region, and concerns; output is informational, not legal advice.",
+    },
+    education: {
+      cn: "请提供学习目标、当前基础、每天可用时间、截止日期和偏好的学习方式。",
+      en: "Provide learning goal, baseline, available time, deadline, and preferred method.",
+    },
+    office: {
+      cn: "请提供会议记录、参会角色、背景、希望产出的格式和重点事项。",
+      en: "Provide meeting notes, roles, background, desired format, and key concerns.",
+    },
+    translation: {
+      cn: "请提供原文、目标语言、使用场景、目标读者和语气要求；会保留变量、格式和专有名词。",
+      en: "Provide source text, target language, context, audience, and tone; variables and terms are preserved.",
+    },
+  };
+  return localizedValue(
+    hints[normalizedSkillCategory(skill.category)] || {
+      cn: "请提供任务目标、背景、素材和期望输出格式。",
+      en: "Provide the goal, context, materials, and desired output format.",
+    },
+    text,
+  );
+}
+
+function localSkillConsumptionHint(text: ManagedMobileText) {
+  return text.dateLocale.toLowerCase().startsWith("zh")
+    ? "技能本身不额外改变模型或分组，实际消耗按当前模型、套餐和生成内容计算。"
+    : "The skill does not change model or group; actual usage follows the current model, plan, and output.";
+}
+
+function serverSkillConsumptionHint(
+  skill: MobileSkill,
+  text: ManagedMobileText,
+) {
+  const note = skill.version?.consumption_note_zh;
+  if (text.dateLocale.toLowerCase().startsWith("zh") && note) return note;
+  return localSkillConsumptionHint(text);
+}
+
+function serverSkillInputHint(skill: MobileSkill, text: ManagedMobileText) {
+  const zh = text.dateLocale.toLowerCase().startsWith("zh");
+  const params = skill.parameters || [];
+  if (params.length > 0) {
+    const labels = params
+      .slice(0, 4)
+      .map((param) => (zh && param.label_zh ? param.label_zh : param.label))
+      .filter(Boolean)
+      .join("、");
+    if (labels) {
+      return zh
+        ? `建议提供：${labels}。缺少必要信息时，AI 会先追问补齐。`
+        : `Recommended inputs: ${labels}. The AI will ask for missing required details.`;
+    }
+  }
+  return zh
+    ? "请提供任务目标、素材、背景和期望输出格式；有文件或图片时可先加入素材。"
+    : "Provide the goal, materials, context, and desired output; attach files or images when needed.";
+}
+
 type AndroidUpdateManifest = {
   version?: string;
   latestVersion?: string;
@@ -4198,6 +4315,10 @@ function ChatSkillLibrarySheet(props: {
   onSelectServer: (skill: MobileSkill) => void;
 }) {
   const [category, setCategory] = useState("all");
+  const [localDetail, setLocalDetail] = useState<ChatSkillTemplate | null>(
+    null,
+  );
+  const [serverDetail, setServerDetail] = useState<MobileSkill | null>(null);
   const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
   const categories = [
     { id: "all", label: props.text.common.all },
@@ -4221,6 +4342,38 @@ function ChatSkillLibrarySheet(props: {
       category === "all" ||
       normalizedSkillCategory(skill.category || skill.slug) === category,
   );
+  const detailTitle = localDetail
+    ? localizedValue(localDetail.title, props.text)
+    : serverDetail
+    ? serverSkillTitle(serverDetail, props.text)
+    : "";
+  const detailDescription = localDetail
+    ? localizedValue(localDetail.description, props.text)
+    : serverDetail
+    ? serverSkillDescription(serverDetail, props.text)
+    : "";
+  const detailCategory = localDetail
+    ? skillCategoryLabel(localDetail.category, props.text)
+    : serverDetail
+    ? skillCategoryLabel(serverDetail.category || serverDetail.slug, props.text)
+    : "";
+  const detailExamples = localDetail
+    ? localDetail.examples.map((example) => localizedValue(example, props.text))
+    : serverDetail?.examples || [];
+  const detailInputHint = localDetail
+    ? localSkillInputHint(localDetail, props.text)
+    : serverDetail
+    ? serverSkillInputHint(serverDetail, props.text)
+    : "";
+  const detailConsumption = localDetail
+    ? localSkillConsumptionHint(props.text)
+    : serverDetail
+    ? serverSkillConsumptionHint(serverDetail, props.text)
+    : "";
+  const closeDetail = () => {
+    setLocalDetail(null);
+    setServerDetail(null);
+  };
   return (
     <LibrarySheet
       open={props.open}
@@ -4247,17 +4400,18 @@ function ChatSkillLibrarySheet(props: {
         <article
           className={clsx(
             styles["library-item"],
-            styles["agent-library-item"],
+            styles["skill-library-item"],
             { [styles["active"]]: !props.activeId },
           )}
         >
-          <div>
+          <div className={styles["library-item-main"]}>
             <strong>{props.text.platform.noSkill}</strong>
             <small>{props.text.platform.noSkillHint}</small>
+            <em>{zh ? "普通对话" : "Normal chat"}</em>
           </div>
           <div className={styles["inline-actions"]}>
             <button onClick={() => props.onSelectLocal(null)}>
-              <BotIcon />
+              <PromptIcon />
               <span>{props.text.common.select}</span>
             </button>
           </div>
@@ -4267,30 +4421,44 @@ function ChatSkillLibrarySheet(props: {
             key={`server-${skill.id}`}
             className={clsx(
               styles["library-item"],
-              styles["agent-library-item"],
+              styles["skill-library-item"],
               { [styles["active"]]: props.activeId === `server:${skill.slug}` },
             )}
           >
             <div className={styles["library-item-main"]}>
               <strong>{serverSkillTitle(skill, props.text)}</strong>
               <small>{serverSkillDescription(skill, props.text)}</small>
-              <em>
-                {[skill.category, skill.version?.version, skill.author]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </em>
-              {skill.examples?.[0] && <small>{skill.examples[0]}</small>}
+              <div className={styles["skill-badge-row"]}>
+                <span>{props.text.platform.skillServerSource}</span>
+                <span>
+                  {skillCategoryLabel(skill.category || skill.slug, props.text)}
+                </span>
+                {skill.version?.version && (
+                  <span>v{skill.version.version}</span>
+                )}
+              </div>
+              <em>{serverSkillInputHint(skill, props.text)}</em>
             </div>
             <div className={styles["inline-actions"]}>
+              <button
+                type="button"
+                onClick={() => {
+                  setLocalDetail(null);
+                  setServerDetail(skill);
+                }}
+              >
+                <PromptIcon />
+                <span>{props.text.platform.skillDetail}</span>
+              </button>
               <button
                 disabled={props.usingSkillId === String(skill.id)}
                 onClick={() => props.onSelectServer(skill)}
               >
-                <BotIcon />
+                <AddIcon />
                 <span>
                   {props.usingSkillId === String(skill.id)
                     ? props.text.platform.skillUsing
-                    : props.text.common.select}
+                    : props.text.platform.skillUse}
                 </span>
               </button>
             </div>
@@ -4301,21 +4469,33 @@ function ChatSkillLibrarySheet(props: {
             key={item.id}
             className={clsx(
               styles["library-item"],
-              styles["agent-library-item"],
+              styles["skill-library-item"],
               { [styles["active"]]: props.activeId === `local:${item.id}` },
             )}
           >
             <div className={styles["library-item-main"]}>
               <strong>{localizedValue(item.title, props.text)}</strong>
               <small>{localizedValue(item.description, props.text)}</small>
-              {item.examples[0] && (
-                <em>{localizedValue(item.examples[0], props.text)}</em>
-              )}
+              <div className={styles["skill-badge-row"]}>
+                <span>{props.text.platform.skillLocalSource}</span>
+                <span>{skillCategoryLabel(item.category, props.text)}</span>
+              </div>
+              <em>{localSkillInputHint(item, props.text)}</em>
             </div>
             <div className={styles["inline-actions"]}>
+              <button
+                type="button"
+                onClick={() => {
+                  setServerDetail(null);
+                  setLocalDetail(item);
+                }}
+              >
+                <PromptIcon />
+                <span>{props.text.platform.skillDetail}</span>
+              </button>
               <button onClick={() => props.onSelectLocal(item)}>
-                <BotIcon />
-                <span>{props.text.common.select}</span>
+                <AddIcon />
+                <span>{props.text.platform.skillUse}</span>
               </button>
             </div>
           </article>
@@ -4324,6 +4504,112 @@ function ChatSkillLibrarySheet(props: {
           <p className={styles["empty-copy"]}>{props.text.common.empty}</p>
         )}
       </div>
+      {(localDetail || serverDetail) && (
+        <div className={styles["skill-detail-overlay"]} role="dialog">
+          <section className={styles["skill-detail-card"]}>
+            <div className={styles["sheet-head"]}>
+              <div>
+                <span>{props.text.platform.skillDetail}</span>
+                <h2>{detailTitle}</h2>
+              </div>
+              <button className={styles["icon-button"]} onClick={closeDetail}>
+                <CloseIcon />
+              </button>
+            </div>
+            <p>{detailDescription}</p>
+            <div className={styles["skill-badge-row"]}>
+              <span>
+                {localDetail
+                  ? props.text.platform.skillLocalSource
+                  : props.text.platform.skillServerSource}
+              </span>
+              <span>{detailCategory}</span>
+              {serverDetail?.author && <span>{serverDetail.author}</span>}
+              {serverDetail?.version?.version && (
+                <span>v{serverDetail.version.version}</span>
+              )}
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillInputRequirements}</strong>
+              <p>{detailInputHint}</p>
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillOutput}</strong>
+              <p>
+                {localDetail
+                  ? localizedValue(localDetail.instruction, props.text)
+                  : detailDescription}
+              </p>
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillExamples}</strong>
+              {detailExamples.length > 0 ? (
+                <ul>
+                  {detailExamples.slice(0, 4).map((example, index) => (
+                    <li key={`${detailTitle}-example-${index}`}>{example}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>{props.text.platform.skillNoExamples}</p>
+              )}
+            </div>
+            {serverDetail && serverDetail.parameters?.length ? (
+              <div className={styles["skill-detail-section"]}>
+                <strong>{props.text.platform.skillParameters}</strong>
+                <ul>
+                  {serverDetail.parameters.slice(0, 6).map((param) => (
+                    <li key={param.key}>
+                      {zh && param.label_zh ? param.label_zh : param.label}
+                      {param.required ? ` · ${zh ? "必填" : "Required"}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillPermissions}</strong>
+              {serverDetail?.permissions?.length ? (
+                <ul>
+                  {serverDetail.permissions.slice(0, 6).map((permission) => (
+                    <li key={permission}>{permission}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>{props.text.platform.skillNoPermissions}</p>
+              )}
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillConsumption}</strong>
+              <p>{detailConsumption}</p>
+            </div>
+            <div className={styles["inline-actions"]}>
+              <button type="button" onClick={closeDetail}>
+                <CloseIcon />
+                <span>{props.text.common.close}</span>
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !!serverDetail &&
+                  props.usingSkillId === String(serverDetail.id)
+                }
+                onClick={() => {
+                  if (localDetail) props.onSelectLocal(localDetail);
+                  if (serverDetail) props.onSelectServer(serverDetail);
+                }}
+              >
+                <AddIcon />
+                <span>
+                  {serverDetail &&
+                  props.usingSkillId === String(serverDetail.id)
+                    ? props.text.platform.skillUsing
+                    : props.text.platform.skillUse}
+                </span>
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </LibrarySheet>
   );
 }
