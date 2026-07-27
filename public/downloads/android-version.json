@@ -1,17 +1,18 @@
 {
   "platform": "android",
-  "version": "2.0.42",
+  "version": "2.0.43",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "368fced33fafbf000b2650ff7ac430cf3482a997f6f5417b273989206dabba5f",
+  "sha256": "ffef6fcbbb483f2704cd8ca416317e1a241caab60aebe771f610e563d2b99bc5",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-27",
   "notes": [
-    "完善技能中心详情、输入要求、示例、参数权限和消耗说明",
-    "登录态自动恢复过程不再用错误提示打扰用户。"
+    "冻结移动端后端对接协议",
+    "APP 账户页优先使用新版聚合接口并保留旧接口兜底",
+    "补齐移动端 sessions、payments、redeem、image history 标准客户端。"
   ],
-  "versionCode": 242,
-  "bytes": 7431674,
+  "versionCode": 243,
+  "bytes": 7431891,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

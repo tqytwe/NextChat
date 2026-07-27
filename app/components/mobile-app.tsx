@@ -9726,10 +9726,28 @@ function AndroidAccountSettings() {
     }
     setAccountData((state) => ({ ...state, loading: true, error: "" }));
     try {
-      const summary =
-        await managedAuthenticatedJsonRequest<MobileAccountSummary>(
-          "/api/v1/nextchat/mobile/account-summary",
+      let summary: MobileAccountSummary | null = null;
+      for (const path of [
+        "/api/v1/mobile/account-summary",
+        "/api/v1/nextchat/mobile/account-summary",
+      ]) {
+        try {
+          summary =
+            await managedAuthenticatedJsonRequest<MobileAccountSummary>(path);
+          break;
+        } catch (error) {
+          if (!(error instanceof ManagedApiError) || error.status !== 404) {
+            throw error;
+          }
+        }
+      }
+      if (!summary) {
+        throw new ManagedApiError(
+          "account summary unavailable",
+          404,
+          "/api/v1/mobile/account-summary",
         );
+      }
       const labels: Record<string, string> = {
         orders: text.account.orders,
         transactions: text.account.balanceDetails,

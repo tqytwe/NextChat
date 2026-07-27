@@ -34,6 +34,12 @@ export interface MobilePage<T> {
   has_more?: boolean;
 }
 
+export interface MobileDeleteResult {
+  id: string;
+  deleted: boolean;
+  message?: string;
+}
+
 export interface MobileLocalizedText {
   zh?: string;
   en?: string;
@@ -101,6 +107,54 @@ export interface MobileAssetDeleteResult {
   id: string;
   deleted: boolean;
   message?: string;
+}
+
+export type MobileSessionPurpose = "chat" | "image";
+
+export interface MobileManagedSession {
+  purpose: MobileSessionPurpose;
+  api_key: string;
+  api_key_id: number;
+  group_id?: number;
+  group_name?: string;
+  model?: string;
+  expires_at?: string;
+}
+
+export interface MobileSessionBundle {
+  chat: MobileManagedSession;
+  image: MobileManagedSession;
+}
+
+export interface MobileSwitchSessionGroupRequest {
+  group_id: number;
+  model?: string;
+  client_request_id?: string;
+}
+
+export interface MobileQuotaSummary {
+  used?: number;
+  remaining?: number;
+  total?: number;
+  unit?: "currency" | "token" | "image" | "request" | string;
+  reset_at?: string;
+  feature?: "chat" | "image" | "file" | string;
+  model?: string;
+}
+
+export interface MobileAccountSummary {
+  user?: Record<string, unknown>;
+  balance?: number;
+  frozen_balance?: number;
+  current_group?: Record<string, unknown>;
+  chat_group?: Record<string, unknown>;
+  image_group?: Record<string, unknown>;
+  subscription?: Record<string, unknown>;
+  quotas?: MobileQuotaSummary[];
+  sessions?: Partial<MobileSessionBundle>;
+  models?: Record<string, unknown>;
+  payment?: Record<string, unknown>;
+  refreshed_at?: string;
 }
 
 export type MobileSkillStatus =
@@ -257,6 +311,115 @@ export interface MobileTaskStatusRequest {
 export interface MobileTaskRetryRequest {
   client_request_id?: string;
   overrides?: Partial<MobileTaskCreateRequest>;
+}
+
+export interface MobileImageHistoryItem extends MobileDisplayFields {
+  id: string;
+  task_id?: string;
+  status: MobileTaskStatus;
+  prompt?: string;
+  prompt_zh?: string;
+  prompt_en?: string;
+  model?: string;
+  group_id?: number;
+  asset_ids?: string[];
+  image_urls?: string[];
+  thumbnail_urls?: string[];
+  error_code?: string;
+  error_message?: string;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string;
+  cancellable?: boolean;
+  retryable?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MobileImageHistoryListQuery extends MobilePageQuery {
+  status?: MobileTaskStatus;
+  model?: string;
+  group_id?: number;
+}
+
+export interface MobileImageHistoryRetryRequest {
+  client_request_id?: string;
+  overrides?: Record<string, unknown>;
+}
+
+export interface MobileRedeemCodeRequest {
+  redeem_code: string;
+  client_request_id?: string;
+  locale?: MobileLocale;
+}
+
+export interface MobileRedeemCodeResult {
+  id?: string;
+  code?: string;
+  credited_amount?: number;
+  credited_plan?: string;
+  credited_quota?: MobileQuotaSummary;
+  expires_at?: string;
+  message?: string;
+  balance?: number;
+  subscription?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface MobileRedeemHistoryItem extends MobileRedeemCodeResult {
+  id: string;
+  status?: "succeeded" | "failed" | "cancelled" | string;
+  redeemed_at?: string;
+}
+
+export type MobilePaymentProvider =
+  | "wechat"
+  | "alipay"
+  | "balance"
+  | "stripe"
+  | string;
+
+export type MobilePaymentStatus =
+  | "pending"
+  | "paid"
+  | "failed"
+  | "cancelled"
+  | "expired"
+  | "refunded";
+
+export interface MobilePaymentCreateRequest {
+  product_id?: string;
+  plan_id?: string;
+  amount?: number;
+  provider: MobilePaymentProvider;
+  coupon_code?: string;
+  client_request_id: string;
+  return_url?: string;
+  locale?: MobileLocale;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MobilePaymentOrder {
+  order_id: string;
+  status: MobilePaymentStatus;
+  provider: MobilePaymentProvider;
+  amount?: number;
+  currency?: string;
+  deeplink?: string;
+  scheme_url?: string;
+  mweb_url?: string;
+  h5_url?: string;
+  pay_url?: string;
+  qr_code?: string;
+  return_url?: string;
+  expires_at?: string;
+  paid_at?: string;
+  created_at?: string;
+  updated_at?: string;
+  message?: string;
+}
+
+export interface MobilePaymentSyncRequest {
+  client_request_id?: string;
 }
 
 export type MobileSupportTicketStatus =
@@ -467,6 +630,47 @@ export function deleteMobileAsset(
   );
 }
 
+export function getMobileAccountSummary(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileAccountSummary>(
+    baseUrl,
+    accessToken,
+    "/account-summary",
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function getMobileSessions(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileSessionBundle>(
+    baseUrl,
+    accessToken,
+    "/sessions",
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function switchMobileSessionGroup(
+  baseUrl: string,
+  accessToken: string,
+  purpose: MobileSessionPurpose,
+  body: MobileSwitchSessionGroupRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileSessionBundle>(
+    baseUrl,
+    accessToken,
+    `/sessions/${purpose}/switch-group`,
+    jsonInit("POST", body, options),
+  );
+}
+
 export async function uploadMobileAssetFormData(
   baseUrl: string,
   accessToken: string,
@@ -665,6 +869,134 @@ export function updateMobileTaskStatus(
   );
 }
 
+export function deleteMobileTask(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileDeleteResult>(
+    baseUrl,
+    accessToken,
+    `/tasks/${encodePathId(taskId)}`,
+    jsonInit("DELETE", undefined, options),
+  );
+}
+
+export function listMobileImageHistory(
+  baseUrl: string,
+  accessToken: string,
+  query?: MobileImageHistoryListQuery,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePage<MobileImageHistoryItem>>(
+    baseUrl,
+    accessToken,
+    appendQuery("/image-history", query),
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function deleteMobileImageHistoryItem(
+  baseUrl: string,
+  accessToken: string,
+  historyId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileDeleteResult>(
+    baseUrl,
+    accessToken,
+    `/image-history/${encodePathId(historyId)}`,
+    jsonInit("DELETE", undefined, options),
+  );
+}
+
+export function retryMobileImageHistoryItem(
+  baseUrl: string,
+  accessToken: string,
+  historyId: MobileId,
+  body: MobileImageHistoryRetryRequest = {},
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileTask>(
+    baseUrl,
+    accessToken,
+    `/image-history/${encodePathId(historyId)}/retry`,
+    jsonInit("POST", body, options),
+  );
+}
+
+export function redeemMobileCode(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileRedeemCodeRequest,
+  options?: MobileRequestOptions,
+) {
+  return managedJsonRequest<MobileRedeemCodeResult>(
+    baseUrl,
+    "/api/v1/redeem-codes/redeem",
+    jsonInit("POST", body, options),
+    accessToken,
+  );
+}
+
+export function listMobileRedeemHistory(
+  baseUrl: string,
+  accessToken: string,
+  query?: MobilePageQuery,
+  options?: MobileRequestOptions,
+) {
+  return managedJsonRequest<MobilePage<MobileRedeemHistoryItem>>(
+    baseUrl,
+    appendQuery("/api/v1/redeem-codes/history", query),
+    jsonInit("GET", undefined, options),
+    accessToken,
+  );
+}
+
+export function createMobilePayment(
+  baseUrl: string,
+  accessToken: string,
+  body: MobilePaymentCreateRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePaymentOrder>(
+    baseUrl,
+    accessToken,
+    "/payments/create",
+    jsonInit("POST", body, options),
+  );
+}
+
+export function getMobilePayment(
+  baseUrl: string,
+  accessToken: string,
+  orderId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePaymentOrder>(
+    baseUrl,
+    accessToken,
+    `/payments/${encodePathId(orderId)}`,
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function syncMobilePayment(
+  baseUrl: string,
+  accessToken: string,
+  orderId: MobileId,
+  body: MobilePaymentSyncRequest = {},
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePaymentOrder>(
+    baseUrl,
+    accessToken,
+    `/payments/${encodePathId(orderId)}/sync`,
+    jsonInit("POST", body, options),
+  );
+}
+
 export function submitMobileDiagnostic(
   baseUrl: string,
   accessToken: string,
@@ -771,6 +1103,20 @@ export function createMobilePlatformClient(
   accessToken: string,
 ) {
   return {
+    account: {
+      summary: (options?: MobileRequestOptions) =>
+        getMobileAccountSummary(baseUrl, accessToken, options),
+    },
+    sessions: {
+      list: (options?: MobileRequestOptions) =>
+        getMobileSessions(baseUrl, accessToken, options),
+      switchGroup: (
+        purpose: MobileSessionPurpose,
+        body: MobileSwitchSessionGroupRequest,
+        options?: MobileRequestOptions,
+      ) =>
+        switchMobileSessionGroup(baseUrl, accessToken, purpose, body, options),
+    },
     assets: {
       list: (query?: MobileAssetListQuery, options?: MobileRequestOptions) =>
         listMobileAssets(baseUrl, accessToken, query, options),
@@ -821,6 +1167,47 @@ export function createMobilePlatformClient(
         body: MobileTaskStatusRequest,
         options?: MobileRequestOptions,
       ) => updateMobileTaskStatus(baseUrl, accessToken, taskId, body, options),
+      delete: (taskId: MobileId, options?: MobileRequestOptions) =>
+        deleteMobileTask(baseUrl, accessToken, taskId, options),
+    },
+    imageHistory: {
+      list: (
+        query?: MobileImageHistoryListQuery,
+        options?: MobileRequestOptions,
+      ) => listMobileImageHistory(baseUrl, accessToken, query, options),
+      delete: (historyId: MobileId, options?: MobileRequestOptions) =>
+        deleteMobileImageHistoryItem(baseUrl, accessToken, historyId, options),
+      retry: (
+        historyId: MobileId,
+        body?: MobileImageHistoryRetryRequest,
+        options?: MobileRequestOptions,
+      ) =>
+        retryMobileImageHistoryItem(
+          baseUrl,
+          accessToken,
+          historyId,
+          body,
+          options,
+        ),
+    },
+    redeemCodes: {
+      redeem: (body: MobileRedeemCodeRequest, options?: MobileRequestOptions) =>
+        redeemMobileCode(baseUrl, accessToken, body, options),
+      history: (query?: MobilePageQuery, options?: MobileRequestOptions) =>
+        listMobileRedeemHistory(baseUrl, accessToken, query, options),
+    },
+    payments: {
+      create: (
+        body: MobilePaymentCreateRequest,
+        options?: MobileRequestOptions,
+      ) => createMobilePayment(baseUrl, accessToken, body, options),
+      detail: (orderId: MobileId, options?: MobileRequestOptions) =>
+        getMobilePayment(baseUrl, accessToken, orderId, options),
+      sync: (
+        orderId: MobileId,
+        body?: MobilePaymentSyncRequest,
+        options?: MobileRequestOptions,
+      ) => syncMobilePayment(baseUrl, accessToken, orderId, body, options),
     },
     support: {
       tickets: {
