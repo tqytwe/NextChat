@@ -6281,41 +6281,66 @@ function AndroidChat() {
     }
   }
 
-  function switchGroup(groupID: number) {
+  async function switchGroup(groupID: number) {
     if (!Number.isFinite(groupID) || groupSwitching) return;
+    const previousGroupId = effectiveChatGroupId;
     setGroupSheetOpen(false);
     setGroupSwitching(true);
     setChatError("");
     try {
       const nextModels = chatModelsForGroup(workspace, groupID);
       const nextModel = modelValue(nextModels[0]);
+      if (!nextModel) {
+        await showNativeNotification(
+          text.chat.group,
+          text.errors.noModel,
+        ).catch(() => {});
+        setChatError(text.errors.noModel);
+        return;
+      }
+      await managed.switchGroup(groupID);
+      const latestWorkspace =
+        useManagedNextChatStore.getState().workspace || workspace;
+      const latestModels = chatModelsForGroup(latestWorkspace, groupID);
+      const sessionModelStillAvailable = latestModels.some(
+        (model) => modelValue(model) === selectedModel,
+      );
+      const confirmedModel =
+        (sessionModelStillAvailable
+          ? selectedModel
+          : modelValue(latestModels[0])) || nextModel;
       setPreferredChatGroupId(groupID);
       if (currentSession?.id) {
         mobileStore.updateChatSession(currentSession.id, {
           groupId: groupID,
-          model: nextModel,
-          error: nextModel ? "" : text.errors.noModel,
+          model: confirmedModel,
+          error: "",
         });
       } else {
-        setDraftModel(nextModel || "");
-      }
-      if (!nextModel) {
-        setChatError(text.errors.noModel);
+        setDraftModel(confirmedModel);
       }
     } catch (err) {
-      setChatError(
+      const message =
         err instanceof Error && err.message
           ? localizeManagedMobileError({ message: err.message })
-          : text.errors.switchGroupFailed,
-      );
+          : text.errors.switchGroupFailed;
+      setChatError(message);
+      await showNativeNotification(text.chat.group, message).catch(() => {});
+      await managed.bootstrap({ silent: true }).catch(() => {});
+      setPreferredChatGroupId(previousGroupId);
+      if (currentSession?.id) {
+        mobileStore.updateChatSession(currentSession.id, {
+          error: message,
+        });
+      }
     } finally {
       setGroupSwitching(false);
     }
   }
 
-  function switchToChatGroup() {
+  async function switchToChatGroup() {
     if (!chatGroup?.id) return;
-    switchGroup(chatGroup.id);
+    await switchGroup(chatGroup.id);
   }
 
   function newSession() {

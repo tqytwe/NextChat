@@ -1,18 +1,18 @@
 {
   "platform": "android",
-  "version": "2.0.43",
+  "version": "2.0.44",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "ffef6fcbbb483f2704cd8ca416317e1a241caab60aebe771f610e563d2b99bc5",
+  "sha256": "d4a5d3a05b98deb61dcf769c5565865b8073551dfa5d7ff92ab9128c3136ab93",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-27",
   "notes": [
-    "冻结移动端后端对接协议",
-    "APP 账户页优先使用新版聚合接口并保留旧接口兜底",
-    "补齐移动端 sessions、payments、redeem、image history 标准客户端。"
+    "修复聊天分组选择只本地切换的问题",
+    "选择分组时先向后端确认，失败保留原分组并提示原因",
+    "兼容新版 mobile session 分组接口。"
   ],
-  "versionCode": 243,
-  "bytes": 7431891,
+  "versionCode": 244,
+  "bytes": 7432018,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

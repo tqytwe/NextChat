@@ -305,14 +305,18 @@ export const useManagedNextChatStore = createPersistStore<
               groupID,
             );
           };
-          let bootstrap: ManagedMobileBootstrap;
+          let bootstrap: ManagedMobileBootstrap | null;
           try {
             bootstrap = await requestSwitch();
           } catch (error) {
             if (!isManagedAuthError(error) || !get().refreshToken) throw error;
             bootstrap = await requestSwitch(true);
           }
-          get().applyBootstrap(bootstrap);
+          if (bootstrap) {
+            get().applyBootstrap(bootstrap);
+          } else {
+            await get().bootstrap({ silent: true });
+          }
         } catch (error) {
           set({
             loading: false,
