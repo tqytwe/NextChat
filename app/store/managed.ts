@@ -86,6 +86,10 @@ export const useManagedNextChatStore = createPersistStore<
       return error instanceof Error && error.message ? error.message : fallback;
     }
 
+    function sleep(ms: number) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
     function workspaceHasModel(
       workspaceModels: ManagedWorkspaceBootstrap["models"] | undefined,
       modelName: string | undefined,
@@ -190,19 +194,36 @@ export const useManagedNextChatStore = createPersistStore<
         if (refreshInFlight) return refreshInFlight;
         refreshInFlight = (async () => {
           try {
-            const auth = await refreshManagedToken(
-              get().backendBaseUrl,
-              get().refreshToken,
-            );
+            let auth: ManagedAuthResponse | null = null;
+            let lastError: unknown = null;
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                auth = await refreshManagedToken(
+                  get().backendBaseUrl,
+                  get().refreshToken,
+                );
+                break;
+              } catch (error) {
+                lastError = error;
+                if (isManagedAuthError(error)) break;
+                await sleep(350 * (attempt + 1));
+              }
+            }
+            if (!auth) {
+              throw (
+                lastError || new Error(getManagedMobileText().errors.syncFailed)
+              );
+            }
             get().applyAuth(auth);
             return get().accessToken;
           } catch (error) {
             if (isManagedAuthError(error)) {
               set({
-                lastError: getManagedMobileText().errors.unauthorized,
+                lastError: getManagedMobileText().errors.authRecovering,
                 loading: false,
               });
             }
+            if (get().accessToken) return get().accessToken;
             throw error;
           } finally {
             refreshInFlight = null;

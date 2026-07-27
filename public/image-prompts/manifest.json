@@ -2,10 +2,13 @@
   "name": "创作灵感库",
   "source": "Jisudeng",
   "author": "Jisudeng",
-  "version": "2026.07.26",
+  "version": "2026.07.27",
   "defaultLocale": "zh",
-  "locales": ["zh", "en"],
-  "count": 50,
+  "locales": [
+    "zh",
+    "en"
+  ],
+  "count": 200,
   "categoryFiles": {
     "zh": "/image-prompts/categories.zh.json",
     "en": "/image-prompts/categories.en.json"

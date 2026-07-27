@@ -1,19 +1,20 @@
 {
   "platform": "android",
-  "version": "2.0.38",
+  "version": "2.0.39",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "2f2c012df9ddf306a7c5d9ae9834c0ebd56ac19ee23189f8c86071e741f6d305",
+  "sha256": "e16031091279a8ac8b054b8fdaea0edc588101259f693a142236bc0ef2b23bb2",
   "minAndroidVersion": "8.0",
-  "releaseDate": "2026-07-26",
+  "releaseDate": "2026-07-27",
   "notes": [
-    "修复临时网络/认证刷新失败导致突然退出登录",
-    "首页新增技能中心和多专家协作入口",
-    "生图失败/取消历史支持删除和一键清理",
-    "优化生图历史操作按钮布局。"
+    "增强登录态自动续期和弱网恢复",
+    "拆分智能体与技能中心，新增 12 个本机任务技能",
+    "隐藏模型内部 tool_call 输出",
+    "创作灵感库扩充到 200 条完整中英提示词",
+    "生图网络错误中文化。"
   ],
-  "versionCode": 238,
-  "bytes": 7396104,
+  "versionCode": 239,
+  "bytes": 7425248,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

@@ -436,6 +436,16 @@ type ChatAgentTemplate = {
   starter?: LocalizedString;
 };
 
+type ChatSkillTemplate = {
+  id: string;
+  category: string;
+  title: LocalizedString;
+  description: LocalizedString;
+  instruction: LocalizedString;
+  examples: LocalizedString[];
+  starter?: LocalizedString;
+};
+
 const PLACEHOLDER_BACKEND_RE =
   /^https?:\/\/api\.example\.com(?:[:/]|$)|^api\.example\.com(?:[:/]|$)/i;
 
@@ -801,6 +811,241 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
       en: "You are a legal reference assistant. Help identify clause meaning, risks, missing terms, negotiation points, and questions for a lawyer. Always state this is informational and not legal advice; avoid definitive legal conclusions.",
     },
     starter: { cn: "帮我看一下这段条款：", en: "Review this clause:" },
+  },
+];
+
+const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
+  {
+    id: "document-summary",
+    category: "document",
+    title: { cn: "文档总结", en: "Document summary" },
+    description: {
+      cn: "提炼长文、会议纪要、资料重点和待办。",
+      en: "Extract key points, decisions, and todos from long text.",
+    },
+    instruction: {
+      cn: "你正在使用“文档总结”技能。先识别文档主题、对象和上下文，再输出核心结论、关键证据、风险/疑问、待办事项和适合转发给团队的简短摘要。不要编造文档中不存在的信息。",
+      en: "You are using the Document Summary skill. Identify topic, audience, and context, then output key conclusions, evidence, risks/questions, todos, and a concise team-ready summary. Do not invent facts absent from the document.",
+    },
+    examples: [
+      {
+        cn: "总结这份会议记录并列出待办",
+        en: "Summarize this meeting note and list todos",
+      },
+    ],
+    starter: { cn: "请总结下面这份文档：", en: "Summarize this document:" },
+  },
+  {
+    id: "webpage-summary",
+    category: "document",
+    title: { cn: "网页总结", en: "Webpage summary" },
+    description: {
+      cn: "把链接、网页摘录整理成重点和行动建议。",
+      en: "Turn links or webpage excerpts into key points and next actions.",
+    },
+    instruction: {
+      cn: "你正在使用“网页总结”技能。根据用户提供的链接说明或网页摘录进行整理；无法访问外部网页时要明确说明需要用户粘贴正文。输出页面主题、关键信息、适合谁看、可执行建议和需要核实的点。",
+      en: "You are using the Webpage Summary skill. Work from the user's link description or pasted excerpt. If you cannot access the page, ask for pasted content. Output topic, key information, target audience, actionable suggestions, and facts to verify.",
+    },
+    examples: [
+      {
+        cn: "总结这个网页适合我关注什么",
+        en: "Summarize what matters from this webpage",
+      },
+    ],
+    starter: {
+      cn: "请总结这个网页/链接内容：",
+      en: "Summarize this webpage/link:",
+    },
+  },
+  {
+    id: "image-to-prompt",
+    category: "image",
+    title: { cn: "图片转提示词", en: "Image to prompt" },
+    description: {
+      cn: "分析图片风格、主体、镜头和可复用生图 prompt。",
+      en: "Analyze an image and produce reusable generation prompts.",
+    },
+    instruction: {
+      cn: "你正在使用“图片转提示词”技能。根据用户上传或描述的图片，拆解主体、场景、构图、镜头、光线、色彩、材质、风格、负面约束，并给出中文完整 prompt 和英文完整 prompt。不要声称看到了未提供的图片细节。",
+      en: "You are using the Image to Prompt skill. From the uploaded or described image, break down subject, scene, composition, camera, lighting, color, material, style, negative constraints, then provide full Chinese and English prompts. Do not claim unseen details.",
+    },
+    examples: [
+      {
+        cn: "把这张图转成可复用生图提示词",
+        en: "Turn this image into a reusable prompt",
+      },
+    ],
+    starter: {
+      cn: "请把这张图/这个画面转成提示词：",
+      en: "Turn this image/scene into a prompt:",
+    },
+  },
+  {
+    id: "prompt-polish",
+    category: "image",
+    title: { cn: "生图提示词优化", en: "Image prompt polish" },
+    description: {
+      cn: "把简单想法扩写成完整、高质量、通用的生图提示词。",
+      en: "Expand rough ideas into complete model-agnostic image prompts.",
+    },
+    instruction: {
+      cn: "你正在使用“生图提示词优化”技能。保留用户原意，不绑定特定模型；补全主体、场景、构图、镜头、光线、色彩、材质、风格、比例、负面约束和参考图建议。输出中文 prompt、英文 prompt、推荐参数和可选变体。",
+      en: "You are using the Image Prompt Polish skill. Preserve user intent and avoid binding to one model. Add subject, scene, composition, camera, lighting, color, material, style, ratio, negative constraints, and reference-image advice. Output Chinese prompt, English prompt, suggested parameters, and optional variants.",
+    },
+    examples: [
+      { cn: "优化这个生图提示词，让它更完整", en: "Polish this image prompt" },
+    ],
+    starter: { cn: "请优化这个生图提示词：", en: "Polish this image prompt:" },
+  },
+  {
+    id: "ecommerce-copy",
+    category: "business",
+    title: { cn: "电商文案", en: "E-commerce copy" },
+    description: {
+      cn: "生成商品标题、卖点、详情页结构和投放文案。",
+      en: "Generate titles, selling points, product pages, and ad copy.",
+    },
+    instruction: {
+      cn: "你正在使用“电商文案”技能。先确认商品、目标人群、平台和核心卖点；输出搜索友好标题、3-5 个主卖点、详情页结构、短视频/信息流文案和风险词提醒。不要夸大功效，不要写无法证明的绝对化承诺。",
+      en: "You are using the E-commerce Copy skill. Clarify product, audience, platform, and key value. Output search-friendly titles, 3-5 selling points, detail-page structure, short-video/feed copy, and risky wording warnings. Avoid exaggerated claims and unverifiable absolutes.",
+    },
+    examples: [
+      {
+        cn: "帮我写这个商品的主图和详情页文案",
+        en: "Write listing copy for this product",
+      },
+    ],
+    starter: {
+      cn: "请为这个商品生成电商文案：",
+      en: "Create e-commerce copy for this product:",
+    },
+  },
+  {
+    id: "xiaohongshu-note",
+    category: "marketing",
+    title: { cn: "小红书笔记", en: "Social note" },
+    description: {
+      cn: "生成种草笔记、标题、封面文字和评论引导。",
+      en: "Create social note posts, titles, cover text, and engagement hooks.",
+    },
+    instruction: {
+      cn: "你正在使用“小红书笔记”技能。根据用户目标输出 5 个标题、正文结构、口语化正文、封面文字建议、话题标签和评论区引导。语气自然可信，避免假体验、虚假背书和过度营销。",
+      en: "You are using the Social Note skill. Output 5 titles, content structure, conversational body copy, cover-text ideas, hashtags, and comment prompts. Keep it natural and credible; avoid fake experience, false endorsement, and over-selling.",
+    },
+    examples: [
+      {
+        cn: "写一篇适合小红书的种草笔记",
+        en: "Write a social recommendation note",
+      },
+    ],
+    starter: { cn: "请写一篇小红书笔记：", en: "Write a social note:" },
+  },
+  {
+    id: "contract-review",
+    category: "legal",
+    title: { cn: "合同风险初筛", en: "Contract risk scan" },
+    description: {
+      cn: "梳理合同重点、风险条款、缺失条款和谈判建议。",
+      en: "Scan contract clauses, risks, missing terms, and negotiation points.",
+    },
+    instruction: {
+      cn: "你正在使用“合同风险初筛”技能。内容仅供参考，不替代律师意见。按条款含义、风险等级、可能后果、建议修改、需补充信息输出；对无法判断的法律事实明确标注需专业确认。",
+      en: "You are using the Contract Risk Scan skill. This is informational and not legal advice. Output clause meaning, risk level, possible consequence, suggested revision, and missing information. Mark legal uncertainties that require professional review.",
+    },
+    examples: [
+      { cn: "帮我检查这份合同有哪些风险", en: "Scan this contract for risks" },
+    ],
+    starter: { cn: "请初步检查这份合同：", en: "Scan this contract:" },
+  },
+  {
+    id: "customer-reply",
+    category: "support",
+    title: { cn: "客服回复", en: "Support reply" },
+    description: {
+      cn: "把用户投诉、问题和售后情况转成清楚负责的回复。",
+      en: "Turn complaints or issues into clear support replies.",
+    },
+    instruction: {
+      cn: "你正在使用“客服回复”技能。先共情并复述问题，再给处理步骤、预计时间、补充信息要求和后续跟进方式。语气负责，不甩锅，不承诺无法保证的结果。",
+      en: "You are using the Support Reply skill. Acknowledge and restate the issue, then provide steps, expected timing, requested details, and follow-up. Be accountable without overpromising.",
+    },
+    examples: [
+      { cn: "帮我回复这个用户投诉", en: "Help me reply to this complaint" },
+    ],
+    starter: { cn: "请帮我回复这个用户：", en: "Help me reply to this user:" },
+  },
+  {
+    id: "code-debug",
+    category: "code",
+    title: { cn: "代码排错", en: "Code debugging" },
+    description: {
+      cn: "分析报错、定位原因、给修复步骤和验证命令。",
+      en: "Analyze errors, locate causes, and provide fixes and verification.",
+    },
+    instruction: {
+      cn: "你正在使用“代码排错”技能。先复述现象和环境，按最可能原因排序，给排查命令、最小修复、回归风险和验证步骤。缺少日志时明确需要哪些信息，不编造结果。",
+      en: "You are using the Code Debugging skill. Restate symptoms and environment, rank likely causes, give diagnostic commands, minimal fix, regression risks, and verification. Ask for missing logs instead of inventing results.",
+    },
+    examples: [{ cn: "帮我排查这段报错", en: "Debug this error" }],
+    starter: { cn: "请帮我排查这个报错：", en: "Debug this error:" },
+  },
+  {
+    id: "study-plan",
+    category: "education",
+    title: { cn: "学习计划", en: "Study plan" },
+    description: {
+      cn: "根据目标、基础和时间制定学习路径。",
+      en: "Create a learning path from goals, baseline, and schedule.",
+    },
+    instruction: {
+      cn: "你正在使用“学习计划”技能。先判断用户目标、基础、可投入时间和截止日期；输出阶段目标、每日/每周安排、练习任务、检查点和调整建议。计划要可执行，不堆砌资源。",
+      en: "You are using the Study Plan skill. Identify goal, baseline, available time, and deadline. Output stages, daily/weekly schedule, practice tasks, checkpoints, and adjustment advice. Keep it executable, not resource-heavy.",
+    },
+    examples: [
+      { cn: "给我制定一个 30 天学习计划", en: "Create a 30-day study plan" },
+    ],
+    starter: { cn: "请给我制定学习计划：", en: "Create a study plan:" },
+  },
+  {
+    id: "meeting-minutes",
+    category: "office",
+    title: { cn: "会议纪要", en: "Meeting minutes" },
+    description: {
+      cn: "把会议内容整理成决策、待办、负责人和时间点。",
+      en: "Convert meeting text into decisions, todos, owners, and dates.",
+    },
+    instruction: {
+      cn: "你正在使用“会议纪要”技能。输出会议主题、参会角色、关键讨论、已确认决策、待办事项、负责人、截止时间和未决问题。未知负责人或时间要标注待确认。",
+      en: "You are using the Meeting Minutes skill. Output topic, attendees/roles, key discussion, decisions, action items, owners, deadlines, and open questions. Mark unknown owners or dates as to-be-confirmed.",
+    },
+    examples: [
+      { cn: "整理这段会议录音转写", en: "Organize this meeting transcript" },
+    ],
+    starter: {
+      cn: "请整理这段会议内容：",
+      en: "Organize these meeting notes:",
+    },
+  },
+  {
+    id: "translation-localize",
+    category: "translation",
+    title: { cn: "翻译本地化", en: "Translation localization" },
+    description: {
+      cn: "中英互译、润色、适配平台语气和目标用户。",
+      en: "Translate and localize tone for platform and audience.",
+    },
+    instruction: {
+      cn: "你正在使用“翻译本地化”技能。保留专有名词、变量、格式和事实；根据目标地区和平台调整语气。默认给自然版，如有必要再给正式版和口语版，并说明关键取舍。",
+      en: "You are using the Translation Localization skill. Preserve names, variables, formatting, and facts; adapt tone to region and platform. Provide a natural version by default, plus formal and casual variants when useful, with key tradeoffs.",
+    },
+    examples: [
+      {
+        cn: "把这段中文翻译成自然英文",
+        en: "Translate this into natural English",
+      },
+    ],
+    starter: { cn: "请翻译并本地化：", en: "Translate and localize:" },
   },
 ];
 
@@ -1417,6 +1662,9 @@ function describeImageError(
       : context.text.errors.noImageModels;
   }
   const normalized = (message || "").toLowerCase();
+  if (/failed to fetch|network|timeout|timed out|网络/.test(normalized)) {
+    return context.text.errors.networkFailed;
+  }
   if (/404|not found|model.*not.*found|model_not_found/.test(normalized)) {
     return context.text.errors.imageModelUnavailable(
       context.selectedModel || "",
@@ -2038,6 +2286,21 @@ async function gatewayFetchText(
   });
   const bodyText = await response.text().catch(() => "");
   return { ok: response.ok, status: response.status, text: bodyText };
+}
+
+function containsVisibleToolCallMarkup(value: string) {
+  return /<\s*tool_(?:call|name)\b|<\s*param\b|<\/\s*tool_(?:call|name)\s*>|```json\s*\{\s*"tool_/i.test(
+    value,
+  );
+}
+
+function stripVisibleToolCallMarkup(value: string) {
+  return value
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/<tool_name>[\s\S]*?<\/tool_name>/gi, "")
+    .replace(/<param\b[\s\S]*?<\/param>/gi, "")
+    .replace(/```json\s*\{[\s\S]*?"tool_[\s\S]*?```\s*/gi, "")
+    .trim();
 }
 
 async function readImageFiles(files: FileList | File[], limit = 6) {
@@ -2712,7 +2975,7 @@ function AndroidDashboard() {
 
   function openSkillCenter() {
     mobileStore.createChatSession(fallbackModel, dashboardChatGroupId);
-    navigate(Path.Chat, { state: { openAgentSheet: true } });
+    navigate(Path.Chat, { state: { openSkillSheet: true } });
   }
 
   function openCollaborationChat() {
@@ -3468,13 +3731,8 @@ function ChatAgentLibrarySheet(props: {
   open: boolean;
   text: ManagedMobileText;
   activeId?: string;
-  serverSkills: MobileSkill[];
-  serverLoading: boolean;
-  serverUnavailable: boolean;
-  usingSkillId: string;
   onClose: () => void;
   onSelect: (template: ChatAgentTemplate | null) => void;
-  onSelectServer: (skill: MobileSkill) => void;
 }) {
   const [category, setCategory] = useState("all");
   const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
@@ -3508,6 +3766,96 @@ function ChatAgentLibrarySheet(props: {
       onClose={props.onClose}
     >
       <div className={styles["library-list"]}>
+        <article
+          className={clsx(
+            styles["library-item"],
+            styles["agent-library-item"],
+            { [styles["active"]]: !props.activeId },
+          )}
+        >
+          <div>
+            <strong>{props.text.chat.defaultAgent}</strong>
+            <small>{props.text.chat.defaultAgentHint}</small>
+          </div>
+          <div className={styles["inline-actions"]}>
+            <button onClick={() => props.onSelect(null)}>
+              <BotIcon />
+              <span>{props.text.common.select}</span>
+            </button>
+          </div>
+        </article>
+        {items.map((item) => (
+          <article
+            key={item.id}
+            className={clsx(
+              styles["library-item"],
+              styles["agent-library-item"],
+              {
+                [styles["active"]]: props.activeId === item.id,
+              },
+            )}
+          >
+            <div>
+              <strong>{localizedValue(item.title, props.text)}</strong>
+              <small>{localizedValue(item.description, props.text)}</small>
+              <em>{localizedValue(item.personality, props.text)}</em>
+            </div>
+            <div className={styles["inline-actions"]}>
+              <button onClick={() => props.onSelect(item)}>
+                <BotIcon />
+                <span>{props.text.common.select}</span>
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </LibrarySheet>
+  );
+}
+
+function ChatSkillLibrarySheet(props: {
+  open: boolean;
+  text: ManagedMobileText;
+  activeId?: string;
+  serverSkills: MobileSkill[];
+  serverLoading: boolean;
+  serverUnavailable: boolean;
+  usingSkillId: string;
+  onClose: () => void;
+  onSelectLocal: (skill: ChatSkillTemplate | null) => void;
+  onSelectServer: (skill: MobileSkill) => void;
+}) {
+  const [category, setCategory] = useState("all");
+  const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
+  const categories = [
+    { id: "all", label: props.text.common.all },
+    { id: "document", label: zh ? "文档" : "Docs" },
+    { id: "image", label: zh ? "图片" : "Image" },
+    { id: "business", label: zh ? "商业" : "Business" },
+    { id: "marketing", label: zh ? "营销" : "Marketing" },
+    { id: "code", label: zh ? "代码" : "Code" },
+    { id: "support", label: zh ? "客服" : "Support" },
+    { id: "legal", label: zh ? "合同" : "Legal" },
+    { id: "education", label: zh ? "学习" : "Study" },
+    { id: "office", label: zh ? "办公" : "Office" },
+    { id: "translation", label: zh ? "翻译" : "Translation" },
+  ];
+  const items = CHAT_SKILL_TEMPLATES.filter(
+    (item) => category === "all" || item.category === category,
+  );
+  return (
+    <LibrarySheet
+      open={props.open}
+      title={props.text.platform.skills}
+      subtitle={props.text.platform.skillHint}
+      text={props.text}
+      compact
+      categories={categories}
+      activeCategory={category}
+      onCategory={setCategory}
+      onClose={props.onClose}
+    >
+      <div className={styles["library-list"]}>
         {props.serverLoading && (
           <p className={styles["empty-copy"]}>
             {props.text.platform.skillLoading}
@@ -3526,11 +3874,11 @@ function ChatAgentLibrarySheet(props: {
           )}
         >
           <div>
-            <strong>{props.text.chat.defaultAgent}</strong>
-            <small>{props.text.chat.defaultAgentHint}</small>
+            <strong>{props.text.platform.noSkill}</strong>
+            <small>{props.text.platform.noSkillHint}</small>
           </div>
           <div className={styles["inline-actions"]}>
-            <button onClick={() => props.onSelect(null)}>
+            <button onClick={() => props.onSelectLocal(null)}>
               <BotIcon />
               <span>{props.text.common.select}</span>
             </button>
@@ -3576,18 +3924,18 @@ function ChatAgentLibrarySheet(props: {
             className={clsx(
               styles["library-item"],
               styles["agent-library-item"],
-              {
-                [styles["active"]]: props.activeId === item.id,
-              },
+              { [styles["active"]]: props.activeId === `local:${item.id}` },
             )}
           >
-            <div>
+            <div className={styles["library-item-main"]}>
               <strong>{localizedValue(item.title, props.text)}</strong>
               <small>{localizedValue(item.description, props.text)}</small>
-              <em>{localizedValue(item.personality, props.text)}</em>
+              {item.examples[0] && (
+                <em>{localizedValue(item.examples[0], props.text)}</em>
+              )}
             </div>
             <div className={styles["inline-actions"]}>
-              <button onClick={() => props.onSelect(item)}>
+              <button onClick={() => props.onSelectLocal(item)}>
                 <BotIcon />
                 <span>{props.text.common.select}</span>
               </button>
@@ -3916,10 +4264,14 @@ function AndroidChat() {
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
+  const [skillSheetOpen, setSkillSheetOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
   const activeAgent =
     CHAT_AGENT_TEMPLATES.find((item) => item.id === currentSession?.agentId) ||
     null;
+  const activeSkill = currentSession?.id
+    ? serverSkillSelections[currentSession.id]
+    : null;
   const [running, setRunning] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [listening, setListening] = useState(false);
@@ -4064,10 +4416,10 @@ function AndroidChat() {
   }, []);
 
   useEffect(() => {
-    if (!agentSheetOpen || serverSkills.length || serverSkillsLoading) return;
+    if (!skillSheetOpen || serverSkills.length || serverSkillsLoading) return;
     void loadServerSkills();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentSheetOpen]);
+  }, [skillSheetOpen]);
 
   useEffect(() => {
     const state = location.state as any;
@@ -4163,8 +4515,14 @@ function AndroidChat() {
 
   useEffect(() => {
     const state = location.state as any;
-    if (!state?.openAgentSheet && !state?.selectAgentId) return;
+    if (
+      !state?.openAgentSheet &&
+      !state?.openSkillSheet &&
+      !state?.selectAgentId
+    )
+      return;
     if (state.openAgentSheet) setAgentSheetOpen(true);
+    if (state.openSkillSheet) setSkillSheetOpen(true);
     if (state.selectAgentId && currentSession?.id) {
       const agent = CHAT_AGENT_TEMPLATES.find(
         (item) => item.id === state.selectAgentId,
@@ -4383,12 +4741,16 @@ function AndroidChat() {
     const sessionAgent =
       CHAT_AGENT_TEMPLATES.find((item) => item.id === session?.agentId) ||
       activeAgent;
-    const selectedServerSkill = serverSkillSelections[sessionId];
-    const systemPrompt = selectedServerSkill?.systemPrompt
-      ? `${text.chat.mobileSystemPrompt}\n\n${selectedServerSkill.systemPrompt}`
-      : sessionAgent
-      ? localizedValue(sessionAgent.systemPrompt, text)
-      : text.chat.mobileSystemPrompt;
+    const selectedSkill = serverSkillSelections[sessionId];
+    const systemPrompt = [
+      text.chat.mobileSystemPrompt,
+      sessionAgent ? localizedValue(sessionAgent.systemPrompt, text) : "",
+      selectedSkill?.systemPrompt
+        ? `当前启用技能：${selectedSkill.title}\n${selectedSkill.systemPrompt}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const messages = (session?.messages || [])
       .filter((message) => message.id !== excludeMessageId)
       .filter(
@@ -4615,21 +4977,31 @@ function AndroidChat() {
           transport: fallbackTransport,
           error: reason,
         });
-        const fallback = await managedGatewayRequestText(
-          activeManaged.backendBaseUrl,
-          "/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
+        const requestFallback = () =>
+          managedGatewayRequestText(
+            activeManaged.backendBaseUrl,
+            "/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: nonStreamingPayload,
+              signal: controller.signal,
             },
-            body: nonStreamingPayload,
-            signal: controller.signal,
-          },
-          activeManaged.session?.api_key || "",
-          text,
-        );
+            activeManaged.session?.api_key || "",
+            text,
+          );
+        let fallback = await requestFallback();
+        if (
+          (fallback.status === 401 || fallback.status === 403) &&
+          !contentBuffer
+        ) {
+          await managed.bootstrap({ silent: true }).catch(() => {});
+          activeManaged = useManagedNextChatStore.getState();
+          fallback = await requestFallback();
+        }
         recordGatewayDiagnostic("/v1/chat/completions", {
           method: "POST",
           transport: fallbackTransport,
@@ -4779,6 +5151,10 @@ function AndroidChat() {
               status: response.status,
             });
             if (!contentBuffer) {
+              if (response.status === 401 || response.status === 403) {
+                await managed.bootstrap({ silent: true }).catch(() => {});
+                activeManaged = useManagedNextChatStore.getState();
+              }
               await runNonStreamingChatFallback(
                 new Error(`HTTP ${response.status}`),
               );
@@ -4803,6 +5179,10 @@ function AndroidChat() {
           if (contentBuffer) throw streamError;
           await runNonStreamingChatFallback(streamError);
         }
+      }
+      if (containsVisibleToolCallMarkup(contentBuffer)) {
+        const cleaned = stripVisibleToolCallMarkup(contentBuffer);
+        contentBuffer = cleaned || text.chat.assistantThinking;
       }
       mobileStore.updateChatMessage(sessionId, assistantId, {
         content: contentBuffer || text.chat.assistantThinking,
@@ -4958,14 +5338,6 @@ function AndroidChat() {
       currentSession?.id ||
       mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
     mobileStore.updateChatSession(sessionId, { agentId: agent?.id || "" });
-    if (serverSkillSelections[sessionId]) {
-      setServerSkillSelections((current) => {
-        const next = { ...current };
-        delete next[sessionId];
-        writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
-        return next;
-      });
-    }
     setAgentSheetOpen(false);
     setChatError("");
     if (agent?.starter) {
@@ -4973,6 +5345,36 @@ function AndroidChat() {
         value.trim()
           ? value
           : localizedValue(agent.starter as LocalizedString, text),
+      );
+    }
+  }
+
+  function selectLocalSkill(skill: ChatSkillTemplate | null) {
+    const sessionId =
+      currentSession?.id ||
+      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
+    setServerSkillSelections((current) => {
+      const next = { ...current };
+      if (skill) {
+        next[sessionId] = {
+          id: `local:${skill.id}`,
+          slug: skill.id,
+          title: localizedValue(skill.title, text),
+          systemPrompt: localizedValue(skill.instruction, text),
+        };
+      } else {
+        delete next[sessionId];
+      }
+      writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+      return next;
+    });
+    setSkillSheetOpen(false);
+    setChatError("");
+    if (skill?.starter) {
+      setInput((value) =>
+        value.trim()
+          ? value
+          : localizedValue(skill.starter as LocalizedString, text),
       );
     }
   }
@@ -5005,10 +5407,7 @@ function AndroidChat() {
         writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
         return next;
       });
-      mobileStore.updateChatSession(sessionId, {
-        agentId: `server:${skill.slug}`,
-      });
-      setAgentSheetOpen(false);
+      setSkillSheetOpen(false);
     } catch (error) {
       setServerSkillsUnavailable(true);
       setChatError(
@@ -5124,6 +5523,10 @@ function AndroidChat() {
       setAgentSheetOpen(false);
       return;
     }
+    if (skillSheetOpen) {
+      setSkillSheetOpen(false);
+      return;
+    }
     if (moreToolsOpen) {
       setMoreToolsOpen(false);
       return;
@@ -5189,6 +5592,11 @@ function AndroidChat() {
                 ? localizedValue(activeAgent.title, text)
                 : text.chat.defaultAgent}
             </strong>
+          </button>
+          <button type="button" onClick={() => setSkillSheetOpen(true)}>
+            <PromptIcon />
+            <span>{text.platform.skills}</span>
+            <strong>{activeSkill?.title || text.platform.noSkill}</strong>
           </button>
         </div>
 
@@ -5550,12 +5958,23 @@ function AndroidChat() {
           open={agentSheetOpen}
           text={text}
           activeId={currentSession?.agentId || activeAgent?.id}
+          onClose={() => setAgentSheetOpen(false)}
+          onSelect={selectAgent}
+        />
+        <ChatSkillLibrarySheet
+          open={skillSheetOpen}
+          text={text}
+          activeId={
+            currentSession?.id
+              ? serverSkillSelections[currentSession.id]?.id
+              : ""
+          }
           serverSkills={serverSkills}
           serverLoading={serverSkillsLoading}
           serverUnavailable={serverSkillsUnavailable}
           usingSkillId={usingSkillId}
-          onClose={() => setAgentSheetOpen(false)}
-          onSelect={selectAgent}
+          onClose={() => setSkillSheetOpen(false)}
+          onSelectLocal={selectLocalSkill}
           onSelectServer={selectServerSkill}
         />
         {messageActionTarget && (
@@ -6315,7 +6734,12 @@ function AndroidImageStudio() {
       const message = aborted
         ? text.errors.requestCancelled
         : err instanceof Error
-        ? err.message
+        ? describeImageError(err.message, {
+            text,
+            selectedModel: model,
+            imageModelCount: imageModelOptions.length,
+            hasImageGroup,
+          })
         : text.image.generateFailed;
       updateTask(id, {
         status: aborted ? "cancelled" : "error",
