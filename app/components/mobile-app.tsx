@@ -5742,25 +5742,6 @@ function AndroidChat() {
     const readyAssetIds = sharedMaterials
       .filter((item) => item.state === "ready" && item.asset?.id)
       .map((item) => String(item.asset?.id));
-    let projectedTask: MobileTask | null = null;
-    try {
-      const client = await mobilePlatformClient();
-      projectedTask = await client.tasks.create({
-        kind: "chat",
-        operation: "chat.completions",
-        client_request_id: clientRequestID("chat"),
-        title_zh: prompt.slice(0, 80) || text.chat.imageMessage,
-        model,
-        group_id: requestGroupId,
-        asset_ids: readyAssetIds,
-        skill_id: skillForRequest?.id,
-        locale: text.dateLocale,
-      });
-      platformTaskRef.current = projectedTask;
-      await client.tasks.status(projectedTask.id, { status: "running" });
-    } catch {
-      projectedTask = null;
-    }
     if (appendUser) {
       mobileStore.addChatMessage(sessionId, {
         role: "user",
@@ -5789,16 +5770,41 @@ function AndroidChat() {
 
     const controller = new AbortController();
     abortRef.current = controller;
-    const cancellationTimer = projectedTask
-      ? window.setInterval(() => {
+    let projectedTask: MobileTask | null = null;
+    let projectedTaskId = "";
+    let cancellationTimer: number | undefined;
+    const projectedTaskPromise = (async () => {
+      try {
+        const client = await mobilePlatformClient();
+        const task = await client.tasks.create({
+          kind: "chat",
+          operation: "chat.completions",
+          client_request_id: clientRequestID("chat"),
+          title_zh: prompt.slice(0, 80) || text.chat.imageMessage,
+          model,
+          group_id: requestGroupId,
+          asset_ids: readyAssetIds,
+          skill_id: skillForRequest?.id,
+          locale: text.dateLocale,
+        });
+        projectedTask = task;
+        projectedTaskId = task.id;
+        platformTaskRef.current = task;
+        await client.tasks.status(task.id, { status: "running" });
+        if (abortRef.current !== controller) return task;
+        cancellationTimer = window.setInterval(() => {
           void mobilePlatformClient()
-            .then((client) => client.tasks.detail(projectedTask!.id))
+            .then((client) => client.tasks.detail(task.id))
             .then((task) => {
               if (task.status === "cancelled") controller.abort();
             })
             .catch(() => undefined);
-        }, 2500)
-      : undefined;
+        }, 2500);
+        return task;
+      } catch {
+        return null;
+      }
+    })();
     let contentBuffer = "";
     const path = "/v1/chat/completions";
     try {
@@ -6050,12 +6056,13 @@ function AndroidChat() {
         content: contentBuffer || text.chat.assistantThinking,
         status: "done",
       });
-      if (projectedTask) {
+      void projectedTaskPromise.then(async (completedTask) => {
+        if (!completedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
         await client?.tasks
-          .status(projectedTask.id, { status: "completed", progress: 100 })
+          .status(completedTask.id, { status: "completed", progress: 100 })
           .catch(() => {});
-      }
+      });
       await managed.bootstrap({ silent: true }).catch(() => {});
     } catch (err) {
       const aborted = controller.signal.aborted;
@@ -6071,17 +6078,18 @@ function AndroidChat() {
       });
       mobileStore.updateChatSession(sessionId, { error: message });
       setChatError(message);
-      if (projectedTask) {
+      void projectedTaskPromise.then(async (failedTask) => {
+        if (!failedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
         await client?.tasks
-          .status(projectedTask.id, {
+          .status(failedTask.id, {
             status: aborted ? "cancelled" : "failed",
             error: aborted
               ? undefined
               : { code: "chat_failed", message, retryable: true },
           })
           .catch(() => {});
-      }
+      });
     } finally {
       if (cancellationTimer) window.clearInterval(cancellationTimer);
       if (abortRef.current === controller) {
@@ -6089,7 +6097,7 @@ function AndroidChat() {
         nativeStreamCancelRef.current = null;
         setRunning(false);
       }
-      if (platformTaskRef.current?.id === projectedTask?.id) {
+      if (projectedTaskId && platformTaskRef.current?.id === projectedTaskId) {
         platformTaskRef.current = null;
       }
     }

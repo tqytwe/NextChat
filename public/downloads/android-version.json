@@ -1,17 +1,16 @@
 {
   "platform": "android",
-  "version": "2.0.45",
+  "version": "2.0.46",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "89a9c828e8845cdeca6ca65d79f51b95a0ea8bea02c514fd2da01c31e96d1e07",
+  "sha256": "96ab9219b9e136381560c36b6096dbe00f7e295e98ef36c5ada7646d0271fa33",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-27",
   "notes": [
-    "修复新对话草稿状态下切换聊天分组不生效的问题",
-    "新对话会独立保存草稿分组，发送第一条消息时按所选分组创建会话。"
+    "优化聊天发送速度：点击发送后立即显示用户消息和生成状态，任务历史创建改为后台执行，不再阻塞发送。"
   ],
-  "versionCode": 245,
-  "bytes": 7432050,
+  "versionCode": 246,
+  "bytes": 7432118,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }
