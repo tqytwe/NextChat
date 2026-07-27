@@ -170,6 +170,8 @@ describe("mobile platform client", () => {
   test("wraps account, session, image history, redeem, and payment operations", async () => {
     const client = platform.createMobilePlatformClient(baseUrl, accessToken);
 
+    await client.protocol.get();
+    await client.session.status();
     await client.account.summary();
     await client.sessions.list();
     await client.sessions.switchGroup("image", {
@@ -199,6 +201,8 @@ describe("mobile platform client", () => {
     });
 
     expect(managedJsonRequest.mock.calls.map((call) => call[1])).toEqual([
+      "/api/v1/mobile/protocol",
+      "/api/v1/mobile/session/status",
       "/api/v1/mobile/account-summary",
       "/api/v1/mobile/sessions",
       "/api/v1/mobile/sessions/image/switch-group",
@@ -212,7 +216,7 @@ describe("mobile platform client", () => {
       "/api/v1/mobile/payments/order-1",
       "/api/v1/mobile/payments/order-1/sync",
     ]);
-    expect(managedJsonRequest.mock.calls[2][2]).toMatchObject({
+    expect(managedJsonRequest.mock.calls[4][2]).toMatchObject({
       method: "POST",
       body: JSON.stringify({
         group_id: 12,
@@ -220,10 +224,10 @@ describe("mobile platform client", () => {
         client_request_id: "switch-1",
       }),
     });
-    expect(managedJsonRequest.mock.calls[3][2]).toMatchObject({
+    expect(managedJsonRequest.mock.calls[5][2]).toMatchObject({
       method: "DELETE",
     });
-    expect(managedJsonRequest.mock.calls[7][2]).toMatchObject({
+    expect(managedJsonRequest.mock.calls[9][2]).toMatchObject({
       method: "POST",
     });
   });

@@ -10230,11 +10230,27 @@ function AndroidAccountSettings() {
           shot.fileName || `feedback-${index + 1}.png`,
         );
       });
-      const result = await managedFormDataRequest<any>(
-        "/api/v1/play/mobile-feedback",
-        form,
-        text,
-      );
+      let result: any;
+      try {
+        result = await managedFormDataRequest<any>(
+          "/api/v1/mobile/support/tickets",
+          form,
+          text,
+        );
+      } catch (error) {
+        if (
+          error instanceof ManagedApiError &&
+          [404, 405, 501].includes(error.status || 0)
+        ) {
+          result = await managedFormDataRequest<any>(
+            "/api/v1/play/mobile-feedback",
+            form,
+            text,
+          );
+        } else {
+          throw error;
+        }
+      }
       setFeedbackMessage(
         result?.ticket_id || result?.id
           ? `${text.account.feedbackSubmitted} · #${

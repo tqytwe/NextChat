@@ -1,16 +1,18 @@
 {
   "platform": "android",
-  "version": "2.0.46",
+  "version": "2.0.48",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "96ab9219b9e136381560c36b6096dbe00f7e295e98ef36c5ada7646d0271fa33",
+  "sha256": "958e2689a8ed5e238954bfe0a92730f1ea76a457e5cc7366005148026eb4f144",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-27",
   "notes": [
-    "优化聊天发送速度：点击发送后立即显示用户消息和生成状态，任务历史创建改为后台执行，不再阻塞发送。"
+    "新增移动端统一协议 v1 与登录态自检接口适配",
+    "补齐 streaming 任务状态类型",
+    "继续优化反馈、账户、任务、支付、兑换和生图历史统一能力。"
   ],
-  "versionCode": 246,
-  "bytes": 7432118,
+  "versionCode": 248,
+  "bytes": 7432247,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

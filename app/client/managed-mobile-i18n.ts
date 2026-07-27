@@ -114,6 +114,7 @@ export const MANAGED_MOBILE_TEXT = {
       taskStatuses: {
         queued: "排队中",
         running: "处理中",
+        streaming: "生成中",
         completed: "已完成",
         partial: "部分完成",
         failed: "失败",
@@ -716,6 +717,7 @@ export const MANAGED_MOBILE_TEXT = {
       taskStatuses: {
         queued: "Queued",
         running: "Running",
+        streaming: "Generating",
         completed: "Completed",
         partial: "Partially completed",
         failed: "Failed",

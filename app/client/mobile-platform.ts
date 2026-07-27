@@ -157,6 +157,33 @@ export interface MobileAccountSummary {
   refreshed_at?: string;
 }
 
+export interface MobileProtocolEndpoint {
+  method: string;
+  path: string;
+  status: "canonical" | "legacy" | "observe" | "removed" | string;
+  description?: string;
+  replacement?: string;
+  remove_after?: string;
+}
+
+export interface MobileProtocol {
+  version: number;
+  generated_at: string;
+  session: {
+    authenticated?: boolean;
+    user_id?: number;
+    role?: string;
+    refresh_path: string;
+    login_path: string;
+    logout_path: string;
+  };
+  task_kinds: MobileTaskKind[];
+  task_statuses: MobileTaskStatus[];
+  terminal_statuses: MobileTaskStatus[];
+  endpoints: MobileProtocolEndpoint[];
+  privacy?: Record<string, unknown>;
+}
+
 export type MobileSkillStatus =
   | "available"
   | "installed"
@@ -230,6 +257,7 @@ export type MobileTaskKind = "chat" | "image" | "file";
 export type MobileTaskStatus =
   | "queued"
   | "running"
+  | "streaming"
   | "completed"
   | "partial"
   | "failed"
@@ -586,6 +614,32 @@ export function mobilePlatformRequestText(
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
   return managedRequestText(baseUrl, mobileApiPath(path), init, headers);
+}
+
+export function getMobileProtocol(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProtocol>(
+    baseUrl,
+    accessToken,
+    "/protocol",
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function getMobileSessionStatus(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProtocol>(
+    baseUrl,
+    accessToken,
+    "/session/status",
+    jsonInit("GET", undefined, options),
+  );
 }
 
 export function listMobileAssets(
@@ -1103,6 +1157,14 @@ export function createMobilePlatformClient(
   accessToken: string,
 ) {
   return {
+    protocol: {
+      get: (options?: MobileRequestOptions) =>
+        getMobileProtocol(baseUrl, accessToken, options),
+    },
+    session: {
+      status: (options?: MobileRequestOptions) =>
+        getMobileSessionStatus(baseUrl, accessToken, options),
+    },
     account: {
       summary: (options?: MobileRequestOptions) =>
         getMobileAccountSummary(baseUrl, accessToken, options),
