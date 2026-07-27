@@ -1,18 +1,17 @@
 {
   "platform": "android",
-  "version": "2.0.44",
+  "version": "2.0.45",
   "apkUrl": "/downloads/jisudengchat-android.apk",
   "size": "7.1 MB",
-  "sha256": "d4a5d3a05b98deb61dcf769c5565865b8073551dfa5d7ff92ab9128c3136ab93",
+  "sha256": "89a9c828e8845cdeca6ca65d79f51b95a0ea8bea02c514fd2da01c31e96d1e07",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-07-27",
   "notes": [
-    "修复聊天分组选择只本地切换的问题",
-    "选择分组时先向后端确认，失败保留原分组并提示原因",
-    "兼容新版 mobile session 分组接口。"
+    "修复新对话草稿状态下切换聊天分组不生效的问题",
+    "新对话会独立保存草稿分组，发送第一条消息时按所选分组创建会话。"
   ],
-  "versionCode": 244,
-  "bytes": 7432018,
+  "versionCode": 245,
+  "bytes": 7432050,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
 }

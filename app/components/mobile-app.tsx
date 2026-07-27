@@ -5059,12 +5059,21 @@ function AndroidChat() {
     workspace,
     preferredChatGroupId,
   );
+  const [draftGroupId, setDraftGroupId] = useState<number | undefined>(
+    () =>
+      Number(readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId) ||
+      undefined,
+  );
   const currentSessionChatGroupId = preferredChatGroupID(
     workspace,
     currentSession?.groupId,
   );
+  const draftChatGroupId = preferredChatGroupID(workspace, draftGroupId);
   const effectiveChatGroupId =
-    currentSessionChatGroupId || defaultChatGroupId || chatGroup?.id;
+    currentSessionChatGroupId ||
+    draftChatGroupId ||
+    defaultChatGroupId ||
+    chatGroup?.id;
   const models = chatModelsForGroup(workspace, effectiveChatGroupId);
   const fallbackModel = modelValue(models[0]);
   const [input, setInput] = useState("");
@@ -5277,6 +5286,12 @@ function AndroidChat() {
       setPreferredChatGroupId(chatGroup.id);
     }
   }, [chatGroup?.id, preferredChatGroupId]);
+
+  useEffect(() => {
+    if (!currentSession && !draftGroupId && defaultChatGroupId) {
+      setDraftGroupId(defaultChatGroupId);
+    }
+  }, [currentSession, defaultChatGroupId, draftGroupId]);
 
   useEffect(() => {
     writeStoredJSON(CHAT_PREF_STORAGE_KEY, {
@@ -5703,18 +5718,17 @@ function AndroidChat() {
       setChatError(text.errors.noModel);
       return;
     }
+    const requestGroupId =
+      currentSession?.groupId || draftChatGroupId || effectiveChatGroupId;
     const existingSessionId = currentSession?.id || "";
-    const sessionId = mobileStore.ensureChatSession(
-      model,
-      effectiveChatGroupId,
-    );
+    const sessionId = mobileStore.ensureChatSession(model, requestGroupId);
     const skillForRequest = existingSessionId
       ? serverSkillSelections[sessionId]
       : draftSkillSelection;
     if (!existingSessionId) {
       mobileStore.updateChatSession(sessionId, {
         model,
-        groupId: effectiveChatGroupId,
+        groupId: requestGroupId,
         agentId: draftAgentId,
       });
       if (draftSkillSelection) {
@@ -5737,7 +5751,7 @@ function AndroidChat() {
         client_request_id: clientRequestID("chat"),
         title_zh: prompt.slice(0, 80) || text.chat.imageMessage,
         model,
-        group_id: effectiveChatGroupId,
+        group_id: requestGroupId,
         asset_ids: readyAssetIds,
         skill_id: skillForRequest?.id,
         locale: text.dateLocale,
@@ -5797,10 +5811,10 @@ function AndroidChat() {
         activeManaged = useManagedNextChatStore.getState();
       }
       if (
-        effectiveChatGroupId &&
-        currentGroupID(activeManaged.workspace) !== effectiveChatGroupId
+        requestGroupId &&
+        currentGroupID(activeManaged.workspace) !== requestGroupId
       ) {
-        await managed.switchGroup(effectiveChatGroupId);
+        await managed.switchGroup(requestGroupId);
         activeManaged = useManagedNextChatStore.getState();
       }
       if (controller.signal.aborted) {
@@ -6317,6 +6331,7 @@ function AndroidChat() {
           error: "",
         });
       } else {
+        setDraftGroupId(groupID);
         setDraftModel(confirmedModel);
       }
     } catch (err) {
@@ -6328,6 +6343,9 @@ function AndroidChat() {
       await showNativeNotification(text.chat.group, message).catch(() => {});
       await managed.bootstrap({ silent: true }).catch(() => {});
       setPreferredChatGroupId(previousGroupId);
+      if (!currentSession?.id) {
+        setDraftGroupId(previousGroupId);
+      }
       if (currentSession?.id) {
         mobileStore.updateChatSession(currentSession.id, {
           error: message,
@@ -6344,8 +6362,14 @@ function AndroidChat() {
   }
 
   function newSession() {
+    const nextGroupId =
+      preferredChatGroupId || defaultChatGroupId || chatGroup?.id;
+    const nextModel =
+      modelValue(chatModelsForGroup(workspace, nextGroupId)[0]) ||
+      fallbackModel;
     mobileStore.setCurrentChatId("");
-    setDraftModel(fallbackModel);
+    setDraftGroupId(nextGroupId);
+    setDraftModel(nextModel);
     setDraftAgentId("");
     setDraftSkillSelection(null);
     setInput("");
