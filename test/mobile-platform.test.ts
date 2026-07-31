@@ -167,6 +167,71 @@ describe("mobile platform client", () => {
     });
   });
 
+  test("wraps account, session, image history, redeem, and payment operations", async () => {
+    const client = platform.createMobilePlatformClient(baseUrl, accessToken);
+
+    await client.protocol.get();
+    await client.session.status();
+    await client.account.summary();
+    await client.sessions.list();
+    await client.sessions.switchGroup("image", {
+      group_id: 12,
+      model: "gpt-image-1",
+      client_request_id: "switch-1",
+    });
+    await client.tasks.delete("task-1");
+    await client.imageHistory.list({ status: "failed", limit: 10 });
+    await client.imageHistory.delete("history-1");
+    await client.imageHistory.retry("history-2", {
+      client_request_id: "retry-image-1",
+    });
+    await client.redeemCodes.redeem({
+      redeem_code: "JSD-2026",
+      client_request_id: "redeem-1",
+    });
+    await client.redeemCodes.history({ limit: 20 });
+    await client.payments.create({
+      provider: "wechat",
+      plan_id: "pro",
+      client_request_id: "pay-1",
+    });
+    await client.payments.detail("order-1");
+    await client.payments.sync("order-1", {
+      client_request_id: "sync-1",
+    });
+
+    expect(managedJsonRequest.mock.calls.map((call) => call[1])).toEqual([
+      "/api/v1/mobile/protocol",
+      "/api/v1/mobile/session/status",
+      "/api/v1/mobile/account-summary",
+      "/api/v1/mobile/sessions",
+      "/api/v1/mobile/sessions/image/switch-group",
+      "/api/v1/mobile/tasks/task-1",
+      "/api/v1/mobile/image-history?status=failed&limit=10",
+      "/api/v1/mobile/image-history/history-1",
+      "/api/v1/mobile/image-history/history-2/retry",
+      "/api/v1/redeem-codes/redeem",
+      "/api/v1/redeem-codes/history?limit=20",
+      "/api/v1/mobile/payments/create",
+      "/api/v1/mobile/payments/order-1",
+      "/api/v1/mobile/payments/order-1/sync",
+    ]);
+    expect(managedJsonRequest.mock.calls[4][2]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        group_id: 12,
+        model: "gpt-image-1",
+        client_request_id: "switch-1",
+      }),
+    });
+    expect(managedJsonRequest.mock.calls[5][2]).toMatchObject({
+      method: "DELETE",
+    });
+    expect(managedJsonRequest.mock.calls[9][2]).toMatchObject({
+      method: "POST",
+    });
+  });
+
   test("exposes a text helper backed by managedRequestText", async () => {
     await platform.mobilePlatformRequestText(
       baseUrl,

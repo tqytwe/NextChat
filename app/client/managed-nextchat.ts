@@ -739,11 +739,41 @@ export function switchManagedMobileSessionGroup(
   );
 }
 
+export function switchManagedMobileSessionGroupV1(
+  baseUrl: string,
+  accessToken: string,
+  purpose: "chat" | "image",
+  groupID: number,
+) {
+  return managedJsonRequest<unknown>(
+    baseUrl,
+    `/api/v1/mobile/sessions/${purpose}/switch-group`,
+    {
+      method: "POST",
+      body: JSON.stringify({ group_id: groupID }),
+    },
+    accessToken,
+  );
+}
+
 export async function switchManagedImageGroupCompatible(
   baseUrl: string,
   accessToken: string,
   groupID: number,
 ) {
+  try {
+    await switchManagedMobileSessionGroupV1(
+      baseUrl,
+      accessToken,
+      "image",
+      groupID,
+    );
+    return null;
+  } catch (error) {
+    if (!(error instanceof ManagedApiError) || error.status !== 404) {
+      throw error;
+    }
+  }
   try {
     await switchManagedMobileSessionGroup(
       baseUrl,
@@ -766,12 +796,26 @@ export async function switchManagedChatGroupCompatible(
   groupID: number,
 ) {
   try {
-    return await switchManagedMobileSessionGroup(
+    await switchManagedMobileSessionGroupV1(
       baseUrl,
       accessToken,
       "chat",
       groupID,
     );
+    return null;
+  } catch (error) {
+    if (!(error instanceof ManagedApiError) || error.status !== 404) {
+      throw error;
+    }
+  }
+  try {
+    await switchManagedMobileSessionGroup(
+      baseUrl,
+      accessToken,
+      "chat",
+      groupID,
+    );
+    return null;
   } catch (error) {
     if (!(error instanceof ManagedApiError) || error.status !== 404) {
       throw error;

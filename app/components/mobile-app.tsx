@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ChangeEvent, FormEvent, PointerEvent, ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import clsx from "clsx";
@@ -96,6 +103,24 @@ import {
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
 import { registerMobilePush } from "../client/mobile-push";
+import {
+  buildCanonicalRegistrationPayload,
+  buildInvitePosterPayload,
+  attributeInviteCampaign,
+  captureInviteReferral,
+  createInvitePosterDataUrl,
+  getInviteInstallationId,
+  getStableInviteEventId,
+  loadInviteReferral,
+  reportInviteLifecycleEvent,
+  resolveInviteReferral,
+  storeInviteReferral,
+} from "../client/invite-growth";
+import type {
+  InviteCampaignProgress,
+  InviteCampaignReward,
+  InvitePosterTheme,
+} from "../client/invite-growth";
 import type {
   MobileAsset,
   MobileSkill,
@@ -127,15 +152,203 @@ type ServerSkillSelection = {
 };
 
 const SERVER_SKILL_SELECTION_KEY = "jisudengchat-server-skills-v1";
+const COLLABORATION_AGENT_ID = "multi-agent-collaboration";
 
 function clientRequestID(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isManagedNetworkLikeError(error: unknown) {
+  const category = diagnosticCategory(error);
+  const message = error instanceof Error ? error.message : String(error || "");
+  return (
+    category === "network" ||
+    category === "offline" ||
+    category === "timeout" ||
+    /failed to fetch|network|timeout|timed out|网络请求失败|网络连接失败|超时/i.test(
+      message,
+    )
+  );
+}
+
+async function requestWithManagedAuth<T>(
+  run: (input: { accessToken: string; baseUrl: string }) => Promise<T>,
+  options: { networkRetries?: number; authRetries?: number } = {},
+) {
+  const networkRetries = options.networkRetries ?? 2;
+  const authRetries = options.authRetries ?? 1;
+  let networkAttempt = 0;
+  let authAttempt = 0;
+  let forceRefresh = false;
+  let lastError: unknown = null;
+
+  while (networkAttempt <= networkRetries) {
+    try {
+      const currentStore = useManagedNextChatStore.getState();
+      const accessToken = await currentStore.ensureFreshAuthToken(forceRefresh);
+      const latest = useManagedNextChatStore.getState();
+      return await run({ accessToken, baseUrl: latest.backendBaseUrl });
+    } catch (error) {
+      lastError = error;
+      if (isManagedAuthError(error) && authAttempt < authRetries) {
+        authAttempt += 1;
+        forceRefresh = true;
+        await useManagedNextChatStore
+          .getState()
+          .bootstrap({ silent: true })
+          .catch(() => undefined);
+        continue;
+      }
+      if (isManagedNetworkLikeError(error) && networkAttempt < networkRetries) {
+        networkAttempt += 1;
+        await sleep(350 * networkAttempt);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastError;
+}
+
 async function mobilePlatformClient() {
-  const store = useManagedNextChatStore.getState();
-  const accessToken = await store.ensureFreshAuthToken();
-  return createMobilePlatformClient(store.backendBaseUrl, accessToken);
+  type MobilePlatformClient = ReturnType<typeof createMobilePlatformClient>;
+  const makeClient = createMobilePlatformClient;
+  return {
+    assets: {
+      list: (...args: Parameters<MobilePlatformClient["assets"]["list"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.list(...args),
+        ),
+      detail: (...args: Parameters<MobilePlatformClient["assets"]["detail"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.detail(...args),
+        ),
+      delete: (...args: Parameters<MobilePlatformClient["assets"]["delete"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.delete(...args),
+        ),
+      upload: (...args: Parameters<MobilePlatformClient["assets"]["upload"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).assets.upload(...args),
+        ),
+    },
+    skills: {
+      list: (...args: Parameters<MobilePlatformClient["skills"]["list"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.list(...args),
+        ),
+      detail: (...args: Parameters<MobilePlatformClient["skills"]["detail"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.detail(...args),
+        ),
+      install: (
+        ...args: Parameters<MobilePlatformClient["skills"]["install"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.install(...args),
+        ),
+      uninstall: (
+        ...args: Parameters<MobilePlatformClient["skills"]["uninstall"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.uninstall(...args),
+        ),
+      use: (...args: Parameters<MobilePlatformClient["skills"]["use"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).skills.use(...args),
+        ),
+    },
+    tasks: {
+      create: (...args: Parameters<MobilePlatformClient["tasks"]["create"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.create(...args),
+        ),
+      list: (...args: Parameters<MobilePlatformClient["tasks"]["list"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.list(...args),
+        ),
+      detail: (...args: Parameters<MobilePlatformClient["tasks"]["detail"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.detail(...args),
+        ),
+      cancel: (...args: Parameters<MobilePlatformClient["tasks"]["cancel"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.cancel(...args),
+        ),
+      retry: (...args: Parameters<MobilePlatformClient["tasks"]["retry"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.retry(...args),
+        ),
+      status: (...args: Parameters<MobilePlatformClient["tasks"]["status"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.status(...args),
+        ),
+    },
+    support: {
+      tickets: {
+        list: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["list"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.list(...args),
+          ),
+        detail: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["detail"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.detail(...args),
+          ),
+        message: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["message"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.message(...args),
+          ),
+        close: (
+          ...args: Parameters<
+            MobilePlatformClient["support"]["tickets"]["close"]
+          >
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).support.tickets.close(...args),
+          ),
+      },
+    },
+    devices: {
+      register: (
+        ...args: Parameters<MobilePlatformClient["devices"]["register"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).devices.register(...args),
+        ),
+      delete: (
+        ...args: Parameters<MobilePlatformClient["devices"]["delete"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).devices.delete(...args),
+        ),
+    },
+    diagnostics: {
+      submit: (
+        ...args: Parameters<MobilePlatformClient["diagnostics"]["submit"]>
+      ) =>
+        requestWithManagedAuth(
+          ({ baseUrl, accessToken }) =>
+            makeClient(baseUrl, accessToken).diagnostics.submit(...args),
+          { networkRetries: 0, authRetries: 0 },
+        ),
+    },
+  };
 }
 
 async function uploadMaterial(
@@ -143,13 +356,13 @@ async function uploadMaterial(
   name: string,
   source: "camera" | "gallery" | "share" | "upload" = "upload",
 ) {
-  const store = useManagedNextChatStore.getState();
-  const accessToken = await store.ensureFreshAuthToken();
   const form = new FormData();
   form.append("file", file, name);
   form.append("name", name);
   form.append("source", source);
-  return uploadMobileAssetFormData(store.backendBaseUrl, accessToken, form);
+  return requestWithManagedAuth(({ baseUrl, accessToken }) =>
+    uploadMobileAssetFormData(baseUrl, accessToken, form),
+  );
 }
 
 function blobToDataUrl(blob: Blob) {
@@ -196,6 +409,141 @@ function serverSkillDescription(skill: MobileSkill, text: ManagedMobileText) {
     skill.description ||
     text.platform.skillDefaultDescription
   );
+}
+
+function normalizedSkillCategory(value?: string) {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return "";
+  if (/doc|文档|summary|总结|pdf/.test(raw)) return "document";
+  if (/image|图片|生图|prompt|提示词/.test(raw)) return "image";
+  if (/market|营销|social|小红书|内容|copy/.test(raw)) return "marketing";
+  if (/business|commerce|商业|电商|销售/.test(raw)) return "business";
+  if (/code|dev|代码|开发|debug/.test(raw)) return "code";
+  if (/support|客服|工单|售后/.test(raw)) return "support";
+  if (/legal|law|合同|法律/.test(raw)) return "legal";
+  if (/edu|study|学习|教育/.test(raw)) return "education";
+  if (/office|meeting|办公|会议/.test(raw)) return "office";
+  if (/translation|translate|翻译|本地化/.test(raw)) return "translation";
+  return raw;
+}
+
+function skillCategoryLabel(
+  category: string | undefined,
+  text: ManagedMobileText,
+) {
+  const zh = text.dateLocale.toLowerCase().startsWith("zh");
+  const normalized = normalizedSkillCategory(category);
+  const labels: Record<string, LocalizedString> = {
+    document: { cn: "文档处理", en: "Document" },
+    image: { cn: "图片与提示词", en: "Image" },
+    marketing: { cn: "营销内容", en: "Marketing" },
+    business: { cn: "商业经营", en: "Business" },
+    code: { cn: "代码开发", en: "Code" },
+    support: { cn: "客服售后", en: "Support" },
+    legal: { cn: "合同法务", en: "Legal" },
+    education: { cn: "学习教育", en: "Education" },
+    office: { cn: "办公协作", en: "Office" },
+    translation: { cn: "翻译本地化", en: "Translation" },
+  };
+  return localizedValue(
+    labels[normalized] || {
+      cn: category || "通用技能",
+      en: category || "General",
+    },
+    text,
+  );
+}
+
+function localSkillInputHint(
+  skill: ChatSkillTemplate,
+  text: ManagedMobileText,
+) {
+  const hints: Record<string, LocalizedString> = {
+    document: {
+      cn: "请提供文档正文、会议记录、PDF 摘录或要总结的长文本；如果有目标读者和输出长度，请一起说明。",
+      en: "Provide document text, meeting notes, PDF excerpts, or long text; add audience and length when useful.",
+    },
+    image: {
+      cn: "请提供图片、画面描述、用途、比例、风格偏好和需要避免的内容；有参考图时可一并加入素材。",
+      en: "Provide images or scene description, use case, ratio, style preference, and constraints; attach references when available.",
+    },
+    marketing: {
+      cn: "请提供产品/主题、目标用户、发布平台、语气、卖点和不能触碰的限制词。",
+      en: "Provide product/topic, audience, platform, tone, selling points, and restricted wording.",
+    },
+    business: {
+      cn: "请提供商品、服务、目标人群、平台规则、价格区间和已有素材。",
+      en: "Provide product/service, audience, platform rules, price range, and existing materials.",
+    },
+    code: {
+      cn: "请提供报错、相关代码、运行环境、复现步骤和最近改动；缺少日志时会先帮你列排查清单。",
+      en: "Provide errors, code, environment, reproduction steps, and recent changes; missing logs will be requested.",
+    },
+    support: {
+      cn: "请提供用户原话、订单/场景、已处理步骤、希望承诺的范围和不能承诺的内容。",
+      en: "Provide the user's message, order/context, handled steps, allowed promises, and forbidden promises.",
+    },
+    legal: {
+      cn: "请提供条款正文、签约场景、所在地区和你最担心的问题；输出仅供参考，不替代律师意见。",
+      en: "Provide clause text, scenario, region, and concerns; output is informational, not legal advice.",
+    },
+    education: {
+      cn: "请提供学习目标、当前基础、每天可用时间、截止日期和偏好的学习方式。",
+      en: "Provide learning goal, baseline, available time, deadline, and preferred method.",
+    },
+    office: {
+      cn: "请提供会议记录、参会角色、背景、希望产出的格式和重点事项。",
+      en: "Provide meeting notes, roles, background, desired format, and key concerns.",
+    },
+    translation: {
+      cn: "请提供原文、目标语言、使用场景、目标读者和语气要求；会保留变量、格式和专有名词。",
+      en: "Provide source text, target language, context, audience, and tone; variables and terms are preserved.",
+    },
+  };
+  return localizedValue(
+    hints[normalizedSkillCategory(skill.category)] || {
+      cn: "请提供任务目标、背景、素材和期望输出格式。",
+      en: "Provide the goal, context, materials, and desired output format.",
+    },
+    text,
+  );
+}
+
+function localSkillConsumptionHint(text: ManagedMobileText) {
+  return text.dateLocale.toLowerCase().startsWith("zh")
+    ? "技能本身不额外改变模型或分组，实际消耗按当前模型、套餐和生成内容计算。"
+    : "The skill does not change model or group; actual usage follows the current model, plan, and output.";
+}
+
+function serverSkillConsumptionHint(
+  skill: MobileSkill,
+  text: ManagedMobileText,
+) {
+  const note = skill.version?.consumption_note_zh;
+  if (text.dateLocale.toLowerCase().startsWith("zh") && note) return note;
+  return localSkillConsumptionHint(text);
+}
+
+function serverSkillInputHint(skill: MobileSkill, text: ManagedMobileText) {
+  const zh = text.dateLocale.toLowerCase().startsWith("zh");
+  const params = skill.parameters || [];
+  if (params.length > 0) {
+    const labels = params
+      .slice(0, 4)
+      .map((param) => (zh && param.label_zh ? param.label_zh : param.label))
+      .filter(Boolean)
+      .join("、");
+    if (labels) {
+      return zh
+        ? `建议提供：${labels}。缺少必要信息时，AI 会先追问补齐。`
+        : `Recommended inputs: ${labels}. The AI will ask for missing required details.`;
+    }
+  }
+  return zh
+    ? "请提供任务目标、素材、背景和期望输出格式；有文件或图片时可先加入素材。"
+    : "Provide the goal, materials, context, and desired output; attach files or images when needed.";
 }
 
 type AndroidUpdateManifest = {
@@ -435,6 +783,16 @@ type ChatAgentTemplate = {
   starter?: LocalizedString;
 };
 
+type ChatSkillTemplate = {
+  id: string;
+  category: string;
+  title: LocalizedString;
+  description: LocalizedString;
+  instruction: LocalizedString;
+  examples: LocalizedString[];
+  starter?: LocalizedString;
+};
+
 const PLACEHOLDER_BACKEND_RE =
   /^https?:\/\/api\.example\.com(?:[:/]|$)|^api\.example\.com(?:[:/]|$)/i;
 
@@ -552,6 +910,27 @@ const IMAGE_PROMPT_TEMPLATES: ImagePromptTemplate[] = [
 ];
 
 const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
+  {
+    id: COLLABORATION_AGENT_ID,
+    category: "collaboration",
+    title: { cn: "多专家协作", en: "Multi-expert collaboration" },
+    description: {
+      cn: "用产品、技术、运营、风控等多个视角共同拆解问题。",
+      en: "Break down a task through product, engineering, operations, and risk perspectives.",
+    },
+    personality: {
+      cn: "多视角、先分工、再汇总",
+      en: "Multi-perspective, structured, decisive",
+    },
+    systemPrompt: {
+      cn: "你是一个多专家协作组，但不要假装有后台多智能体编排。请在单次回答中模拟多个专业视角协同：产品专家负责用户场景和优先级，技术专家负责实现路径和风险，运营专家负责增长、留存和话术，风控/客服专家负责异常、投诉、合规和兜底。先用简短小节列出各专家判断，再汇总成可执行方案、优先级、验收标准和下一步。用户要求简单回答时保持简洁，不要为了展示协作而冗长。",
+      en: "You are a multi-expert collaboration group, but do not pretend there is backend multi-agent orchestration. In one response, simulate coordinated expert perspectives: product for user scenarios and priority, engineering for implementation and risk, operations for growth and retention, and risk/support for edge cases, complaints, compliance, and fallback. Give brief expert judgments, then summarize an actionable plan, priority, acceptance criteria, and next steps. Stay concise when the user asks for a simple answer.",
+    },
+    starter: {
+      cn: "请用多专家协作方式帮我分析：",
+      en: "Analyze this with multi-expert collaboration:",
+    },
+  },
   {
     id: "writing-editor",
     category: "writing",
@@ -782,6 +1161,241 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
   },
 ];
 
+const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
+  {
+    id: "document-summary",
+    category: "document",
+    title: { cn: "文档总结", en: "Document summary" },
+    description: {
+      cn: "提炼长文、会议纪要、资料重点和待办。",
+      en: "Extract key points, decisions, and todos from long text.",
+    },
+    instruction: {
+      cn: "你正在使用“文档总结”技能。先识别文档主题、对象和上下文，再输出核心结论、关键证据、风险/疑问、待办事项和适合转发给团队的简短摘要。不要编造文档中不存在的信息。",
+      en: "You are using the Document Summary skill. Identify topic, audience, and context, then output key conclusions, evidence, risks/questions, todos, and a concise team-ready summary. Do not invent facts absent from the document.",
+    },
+    examples: [
+      {
+        cn: "总结这份会议记录并列出待办",
+        en: "Summarize this meeting note and list todos",
+      },
+    ],
+    starter: { cn: "请总结下面这份文档：", en: "Summarize this document:" },
+  },
+  {
+    id: "webpage-summary",
+    category: "document",
+    title: { cn: "网页总结", en: "Webpage summary" },
+    description: {
+      cn: "把链接、网页摘录整理成重点和行动建议。",
+      en: "Turn links or webpage excerpts into key points and next actions.",
+    },
+    instruction: {
+      cn: "你正在使用“网页总结”技能。根据用户提供的链接说明或网页摘录进行整理；无法访问外部网页时要明确说明需要用户粘贴正文。输出页面主题、关键信息、适合谁看、可执行建议和需要核实的点。",
+      en: "You are using the Webpage Summary skill. Work from the user's link description or pasted excerpt. If you cannot access the page, ask for pasted content. Output topic, key information, target audience, actionable suggestions, and facts to verify.",
+    },
+    examples: [
+      {
+        cn: "总结这个网页适合我关注什么",
+        en: "Summarize what matters from this webpage",
+      },
+    ],
+    starter: {
+      cn: "请总结这个网页/链接内容：",
+      en: "Summarize this webpage/link:",
+    },
+  },
+  {
+    id: "image-to-prompt",
+    category: "image",
+    title: { cn: "图片转提示词", en: "Image to prompt" },
+    description: {
+      cn: "分析图片风格、主体、镜头和可复用生图 prompt。",
+      en: "Analyze an image and produce reusable generation prompts.",
+    },
+    instruction: {
+      cn: "你正在使用“图片转提示词”技能。根据用户上传或描述的图片，拆解主体、场景、构图、镜头、光线、色彩、材质、风格、负面约束，并给出中文完整 prompt 和英文完整 prompt。不要声称看到了未提供的图片细节。",
+      en: "You are using the Image to Prompt skill. From the uploaded or described image, break down subject, scene, composition, camera, lighting, color, material, style, negative constraints, then provide full Chinese and English prompts. Do not claim unseen details.",
+    },
+    examples: [
+      {
+        cn: "把这张图转成可复用生图提示词",
+        en: "Turn this image into a reusable prompt",
+      },
+    ],
+    starter: {
+      cn: "请把这张图/这个画面转成提示词：",
+      en: "Turn this image/scene into a prompt:",
+    },
+  },
+  {
+    id: "prompt-polish",
+    category: "image",
+    title: { cn: "生图提示词优化", en: "Image prompt polish" },
+    description: {
+      cn: "把简单想法扩写成完整、高质量、通用的生图提示词。",
+      en: "Expand rough ideas into complete model-agnostic image prompts.",
+    },
+    instruction: {
+      cn: "你正在使用“生图提示词优化”技能。保留用户原意，不绑定特定模型；补全主体、场景、构图、镜头、光线、色彩、材质、风格、比例、负面约束和参考图建议。输出中文 prompt、英文 prompt、推荐参数和可选变体。",
+      en: "You are using the Image Prompt Polish skill. Preserve user intent and avoid binding to one model. Add subject, scene, composition, camera, lighting, color, material, style, ratio, negative constraints, and reference-image advice. Output Chinese prompt, English prompt, suggested parameters, and optional variants.",
+    },
+    examples: [
+      { cn: "优化这个生图提示词，让它更完整", en: "Polish this image prompt" },
+    ],
+    starter: { cn: "请优化这个生图提示词：", en: "Polish this image prompt:" },
+  },
+  {
+    id: "ecommerce-copy",
+    category: "business",
+    title: { cn: "电商文案", en: "E-commerce copy" },
+    description: {
+      cn: "生成商品标题、卖点、详情页结构和投放文案。",
+      en: "Generate titles, selling points, product pages, and ad copy.",
+    },
+    instruction: {
+      cn: "你正在使用“电商文案”技能。先确认商品、目标人群、平台和核心卖点；输出搜索友好标题、3-5 个主卖点、详情页结构、短视频/信息流文案和风险词提醒。不要夸大功效，不要写无法证明的绝对化承诺。",
+      en: "You are using the E-commerce Copy skill. Clarify product, audience, platform, and key value. Output search-friendly titles, 3-5 selling points, detail-page structure, short-video/feed copy, and risky wording warnings. Avoid exaggerated claims and unverifiable absolutes.",
+    },
+    examples: [
+      {
+        cn: "帮我写这个商品的主图和详情页文案",
+        en: "Write listing copy for this product",
+      },
+    ],
+    starter: {
+      cn: "请为这个商品生成电商文案：",
+      en: "Create e-commerce copy for this product:",
+    },
+  },
+  {
+    id: "xiaohongshu-note",
+    category: "marketing",
+    title: { cn: "小红书笔记", en: "Social note" },
+    description: {
+      cn: "生成种草笔记、标题、封面文字和评论引导。",
+      en: "Create social note posts, titles, cover text, and engagement hooks.",
+    },
+    instruction: {
+      cn: "你正在使用“小红书笔记”技能。根据用户目标输出 5 个标题、正文结构、口语化正文、封面文字建议、话题标签和评论区引导。语气自然可信，避免假体验、虚假背书和过度营销。",
+      en: "You are using the Social Note skill. Output 5 titles, content structure, conversational body copy, cover-text ideas, hashtags, and comment prompts. Keep it natural and credible; avoid fake experience, false endorsement, and over-selling.",
+    },
+    examples: [
+      {
+        cn: "写一篇适合小红书的种草笔记",
+        en: "Write a social recommendation note",
+      },
+    ],
+    starter: { cn: "请写一篇小红书笔记：", en: "Write a social note:" },
+  },
+  {
+    id: "contract-review",
+    category: "legal",
+    title: { cn: "合同风险初筛", en: "Contract risk scan" },
+    description: {
+      cn: "梳理合同重点、风险条款、缺失条款和谈判建议。",
+      en: "Scan contract clauses, risks, missing terms, and negotiation points.",
+    },
+    instruction: {
+      cn: "你正在使用“合同风险初筛”技能。内容仅供参考，不替代律师意见。按条款含义、风险等级、可能后果、建议修改、需补充信息输出；对无法判断的法律事实明确标注需专业确认。",
+      en: "You are using the Contract Risk Scan skill. This is informational and not legal advice. Output clause meaning, risk level, possible consequence, suggested revision, and missing information. Mark legal uncertainties that require professional review.",
+    },
+    examples: [
+      { cn: "帮我检查这份合同有哪些风险", en: "Scan this contract for risks" },
+    ],
+    starter: { cn: "请初步检查这份合同：", en: "Scan this contract:" },
+  },
+  {
+    id: "customer-reply",
+    category: "support",
+    title: { cn: "客服回复", en: "Support reply" },
+    description: {
+      cn: "把用户投诉、问题和售后情况转成清楚负责的回复。",
+      en: "Turn complaints or issues into clear support replies.",
+    },
+    instruction: {
+      cn: "你正在使用“客服回复”技能。先共情并复述问题，再给处理步骤、预计时间、补充信息要求和后续跟进方式。语气负责，不甩锅，不承诺无法保证的结果。",
+      en: "You are using the Support Reply skill. Acknowledge and restate the issue, then provide steps, expected timing, requested details, and follow-up. Be accountable without overpromising.",
+    },
+    examples: [
+      { cn: "帮我回复这个用户投诉", en: "Help me reply to this complaint" },
+    ],
+    starter: { cn: "请帮我回复这个用户：", en: "Help me reply to this user:" },
+  },
+  {
+    id: "code-debug",
+    category: "code",
+    title: { cn: "代码排错", en: "Code debugging" },
+    description: {
+      cn: "分析报错、定位原因、给修复步骤和验证命令。",
+      en: "Analyze errors, locate causes, and provide fixes and verification.",
+    },
+    instruction: {
+      cn: "你正在使用“代码排错”技能。先复述现象和环境，按最可能原因排序，给排查命令、最小修复、回归风险和验证步骤。缺少日志时明确需要哪些信息，不编造结果。",
+      en: "You are using the Code Debugging skill. Restate symptoms and environment, rank likely causes, give diagnostic commands, minimal fix, regression risks, and verification. Ask for missing logs instead of inventing results.",
+    },
+    examples: [{ cn: "帮我排查这段报错", en: "Debug this error" }],
+    starter: { cn: "请帮我排查这个报错：", en: "Debug this error:" },
+  },
+  {
+    id: "study-plan",
+    category: "education",
+    title: { cn: "学习计划", en: "Study plan" },
+    description: {
+      cn: "根据目标、基础和时间制定学习路径。",
+      en: "Create a learning path from goals, baseline, and schedule.",
+    },
+    instruction: {
+      cn: "你正在使用“学习计划”技能。先判断用户目标、基础、可投入时间和截止日期；输出阶段目标、每日/每周安排、练习任务、检查点和调整建议。计划要可执行，不堆砌资源。",
+      en: "You are using the Study Plan skill. Identify goal, baseline, available time, and deadline. Output stages, daily/weekly schedule, practice tasks, checkpoints, and adjustment advice. Keep it executable, not resource-heavy.",
+    },
+    examples: [
+      { cn: "给我制定一个 30 天学习计划", en: "Create a 30-day study plan" },
+    ],
+    starter: { cn: "请给我制定学习计划：", en: "Create a study plan:" },
+  },
+  {
+    id: "meeting-minutes",
+    category: "office",
+    title: { cn: "会议纪要", en: "Meeting minutes" },
+    description: {
+      cn: "把会议内容整理成决策、待办、负责人和时间点。",
+      en: "Convert meeting text into decisions, todos, owners, and dates.",
+    },
+    instruction: {
+      cn: "你正在使用“会议纪要”技能。输出会议主题、参会角色、关键讨论、已确认决策、待办事项、负责人、截止时间和未决问题。未知负责人或时间要标注待确认。",
+      en: "You are using the Meeting Minutes skill. Output topic, attendees/roles, key discussion, decisions, action items, owners, deadlines, and open questions. Mark unknown owners or dates as to-be-confirmed.",
+    },
+    examples: [
+      { cn: "整理这段会议录音转写", en: "Organize this meeting transcript" },
+    ],
+    starter: {
+      cn: "请整理这段会议内容：",
+      en: "Organize these meeting notes:",
+    },
+  },
+  {
+    id: "translation-localize",
+    category: "translation",
+    title: { cn: "翻译本地化", en: "Translation localization" },
+    description: {
+      cn: "中英互译、润色、适配平台语气和目标用户。",
+      en: "Translate and localize tone for platform and audience.",
+    },
+    instruction: {
+      cn: "你正在使用“翻译本地化”技能。保留专有名词、变量、格式和事实；根据目标地区和平台调整语气。默认给自然版，如有必要再给正式版和口语版，并说明关键取舍。",
+      en: "You are using the Translation Localization skill. Preserve names, variables, formatting, and facts; adapt tone to region and platform. Provide a natural version by default, plus formal and casual variants when useful, with key tradeoffs.",
+    },
+    examples: [
+      {
+        cn: "把这段中文翻译成自然英文",
+        en: "Translate this into natural English",
+      },
+    ],
+    starter: { cn: "请翻译并本地化：", en: "Translate and localize:" },
+  },
+];
+
 const IMAGE_SIZE_OPTIONS = [
   { id: "1024x1024", tier: "1K", aspect: "1:1" },
   { id: "1536x1024", tier: "1.5K", aspect: "3:2" },
@@ -815,6 +1429,25 @@ function formatMoney(value?: number | string) {
   const numberValue =
     typeof value === "string" ? Number.parseFloat(value) : Number(value || 0);
   return `¥${Number.isFinite(numberValue) ? numberValue.toFixed(2) : "0.00"}`;
+}
+
+function isManagedAdminWorkspace(workspace?: { user?: unknown } | null) {
+  const user = workspace?.user as any;
+  const roles = [
+    user?.role,
+    user?.user_role,
+    user?.account_role,
+    ...(Array.isArray(user?.roles) ? user.roles : []),
+    ...(Array.isArray(user?.permissions) ? user.permissions : []),
+  ]
+    .filter(Boolean)
+    .map((item) => String(item).toLowerCase());
+  return Boolean(
+    user?.is_admin ||
+      user?.is_root ||
+      user?.admin ||
+      roles.some((role) => /admin|root|owner|super/.test(role)),
+  );
 }
 
 function useMobileText() {
@@ -1395,6 +2028,9 @@ function describeImageError(
       : context.text.errors.noImageModels;
   }
   const normalized = (message || "").toLowerCase();
+  if (/failed to fetch|network|timeout|timed out|网络/.test(normalized)) {
+    return context.text.errors.networkFailed;
+  }
   if (/404|not found|model.*not.*found|model_not_found/.test(normalized)) {
     return context.text.errors.imageModelUnavailable(
       context.selectedModel || "",
@@ -1794,79 +2430,105 @@ async function managedAuthenticatedJsonRequest<T>(
   path: string,
   init: RequestInit = {},
 ) {
-  const request = async (forceRefresh = false) => {
-    const store = useManagedNextChatStore.getState();
-    const accessToken = await store.ensureFreshAuthToken(forceRefresh);
-    const current = useManagedNextChatStore.getState();
-    return managedApiJsonRequest<T>(
-      current.backendBaseUrl,
-      path,
-      init,
-      accessToken,
-    );
-  };
-  try {
-    return await request();
-  } catch (error) {
-    if (!isManagedAuthError(error)) throw error;
-    return request(true);
-  }
+  return requestWithManagedAuth(({ baseUrl, accessToken }) =>
+    managedApiJsonRequest<T>(baseUrl, path, init, accessToken),
+  );
 }
 
 async function managedFormDataRequest<T>(
-  baseUrl: string,
   path: string,
   body: FormData,
-  accessToken: string,
   text: ManagedMobileText,
 ) {
-  let response: Response;
-  try {
-    response = await fetch(managedApiUrl(baseUrl, path), {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Accept-Language": text.dateLocale,
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body,
-    });
-  } catch (error) {
-    if (
-      error instanceof TypeError &&
-      /failed to fetch|network/i.test(error.message)
-    ) {
-      throw new Error(text.errors.networkFailed);
+  return requestWithManagedAuth(async ({ baseUrl, accessToken }) => {
+    let response: Response;
+    try {
+      response = await fetch(managedApiUrl(baseUrl, path), {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Accept-Language": text.dateLocale,
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body,
+      });
+    } catch (error) {
+      if (
+        error instanceof TypeError &&
+        /failed to fetch|network/i.test(error.message)
+      ) {
+        throw new Error(text.errors.networkFailed);
+      }
+      throw error;
     }
-    throw error;
-  }
-  const bodyText = await response.text().catch(() => "");
-  const payload = bodyText
-    ? (() => {
-        try {
-          return JSON.parse(bodyText) as {
-            code?: number;
-            message?: string;
-            data?: T;
-          };
-        } catch {
-          return null;
-        }
-      })()
-    : null;
-  if (!response.ok || !payload || payload.code !== 0) {
-    throw new Error(
-      localizeManagedMobileError({
-        message: payload?.message || bodyText,
-        status: response.status,
+    const bodyText = await response.text().catch(() => "");
+    const payload = bodyText
+      ? (() => {
+          try {
+            return JSON.parse(bodyText) as {
+              code?: number;
+              message?: string;
+              data?: T;
+            };
+          } catch {
+            return null;
+          }
+        })()
+      : null;
+    if (!response.ok || !payload || payload.code !== 0) {
+      throw new ManagedApiError(
+        localizeManagedMobileError({
+          message: payload?.message || bodyText,
+          status: response.status,
+          path,
+        }),
+        response.status,
         path,
-      }),
-    );
-  }
-  return payload.data as T;
+        payload?.code,
+      );
+    }
+    return payload.data as T;
+  });
 }
 
 async function managedGatewayRequestText(
+  baseUrl: string,
+  path: string,
+  init: RequestInit,
+  accessToken: string,
+  text: ManagedMobileText,
+) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= 2; attempt += 1) {
+    try {
+      const result = await managedGatewayRequestTextOnce(
+        baseUrl,
+        path,
+        init,
+        accessToken,
+        text,
+      );
+      if (attempt < 2 && [408, 425, 502, 503, 504].includes(result.status)) {
+        await sleep(300 * (attempt + 1));
+        continue;
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (
+        init.signal?.aborted ||
+        !isManagedNetworkLikeError(error) ||
+        attempt >= 2
+      ) {
+        throw error;
+      }
+      await sleep(300 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+async function managedGatewayRequestTextOnce(
   baseUrl: string,
   path: string,
   init: RequestInit,
@@ -2016,6 +2678,21 @@ async function gatewayFetchText(
   });
   const bodyText = await response.text().catch(() => "");
   return { ok: response.ok, status: response.status, text: bodyText };
+}
+
+function containsVisibleToolCallMarkup(value: string) {
+  return /<\s*tool_(?:call|name)\b|<\s*param\b|<\/\s*tool_(?:call|name)\s*>|```json\s*\{\s*"tool_/i.test(
+    value,
+  );
+}
+
+function stripVisibleToolCallMarkup(value: string) {
+  return value
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/<tool_name>[\s\S]*?<\/tool_name>/gi, "")
+    .replace(/<param\b[\s\S]*?<\/param>/gi, "")
+    .replace(/```json\s*\{[\s\S]*?"tool_[\s\S]*?```\s*/gi, "")
+    .trim();
 }
 
 async function readImageFiles(files: FileList | File[], limit = 6) {
@@ -2229,7 +2906,7 @@ function AndroidLogin() {
     [clientConfig],
   );
   const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">(
-    "login",
+    () => (resolveInviteReferral() ? "register" : "login"),
   );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -2238,6 +2915,15 @@ function AndroidLogin() {
   const [resetToken, setResetToken] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [invitationCode, setInvitationCode] = useState("");
+  const [affiliateCode, setAffiliateCode] = useState(
+    () => resolveInviteReferral()?.aff_code || "",
+  );
+  const [affiliateCampaign, setAffiliateCampaign] = useState(
+    () => resolveInviteReferral()?.campaign_id || "",
+  );
+  const [affiliateToken, setAffiliateToken] = useState(
+    () => resolveInviteReferral()?.token || "",
+  );
   const [totpCode, setTotpCode] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -2252,6 +2938,25 @@ function AndroidLogin() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendBaseUrl, managed.backendBaseUrl]);
+
+  useEffect(() => {
+    const syncInviteReferral = () => {
+      const referral = resolveInviteReferral();
+      setAffiliateCode(referral?.aff_code || "");
+      setAffiliateCampaign(referral?.campaign_id || "");
+      setAffiliateToken(referral?.token || "");
+      if (referral?.aff_code || referral?.token) setMode("register");
+    };
+    window.addEventListener(
+      "jisudeng-invite-referral-updated",
+      syncInviteReferral,
+    );
+    return () =>
+      window.removeEventListener(
+        "jisudeng-invite-referral-updated",
+        syncInviteReferral,
+      );
+  }, []);
 
   async function sendCode() {
     if (!backendBaseUrl || !email.trim()) return;
@@ -2300,6 +3005,31 @@ function AndroidLogin() {
     }
   }
 
+  async function submitTotpCode() {
+    if (!backendBaseUrl || busy || totpCode.trim().length < 6) return;
+    setError("");
+    setMessage("");
+    try {
+      managed.setBackendBaseUrl(backendBaseUrl);
+      await managed.login2FA(totpCode.trim());
+      setTotpCode("");
+      navigate(Path.Home);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? localizeManagedMobileError({ message: err.message })
+          : text.errors.verifyFailed,
+      );
+    }
+  }
+
+  useEffect(() => {
+    if (!managed.pendingTotpToken) return;
+    if (!/^\d{6}$/.test(totpCode.trim())) return;
+    void submitTotpCode();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managed.pendingTotpToken, totpCode]);
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!backendBaseUrl) return;
@@ -2308,13 +3038,33 @@ function AndroidLogin() {
     try {
       managed.setBackendBaseUrl(backendBaseUrl);
       if (managed.pendingTotpToken) {
-        await managed.login2FA(totpCode);
-        navigate(Path.Home);
+        await submitTotpCode();
         return;
       }
       if (mode === "login") {
         const result = await managed.login(email, password, backendBaseUrl);
         if (!result.requires2FA) {
+          const accessToken = useManagedNextChatStore.getState().accessToken;
+          if (affiliateToken) {
+            await attributeInviteCampaign(
+              backendBaseUrl,
+              accessToken,
+              affiliateToken,
+            ).catch(() => undefined);
+          }
+          await reportInviteLifecycleEvent(
+            backendBaseUrl,
+            accessToken,
+            "login",
+            clientConfig?.androidVersion || clientConfig?.version || "",
+            getInviteInstallationId(),
+            {
+              eventId: getStableInviteEventId(
+                `login:${new Date().toISOString().slice(0, 10)}`,
+              ),
+              attributionToken: affiliateToken,
+            },
+          ).catch(() => undefined);
           navigate(Path.Home);
         }
         return;
@@ -2339,11 +3089,45 @@ function AndroidLogin() {
               invitation_code: invitationCode.trim(),
               invite_code: invitationCode.trim(),
               referral_code: invitationCode.trim(),
+              ...buildCanonicalRegistrationPayload(
+                affiliateCode || affiliateToken
+                  ? {
+                      ...(affiliateCode ? { aff_code: affiliateCode } : {}),
+                      ...(affiliateCampaign
+                        ? { campaign_id: affiliateCampaign }
+                        : {}),
+                      ...(affiliateToken ? { token: affiliateToken } : {}),
+                      expires_at: Date.now() + 60_000,
+                    }
+                  : null,
+              ),
             }),
             headers: { "Accept-Language": text.dateLocale },
           },
         );
         managed.applyAuth(auth);
+        let referralAttributed = !affiliateToken;
+        if (affiliateToken) {
+          referralAttributed = await attributeInviteCampaign(
+            backendBaseUrl,
+            auth.access_token,
+            affiliateToken,
+          )
+            .then(() => true)
+            .catch(() => false);
+        }
+        await reportInviteLifecycleEvent(
+          backendBaseUrl,
+          auth.access_token,
+          "registered",
+          clientConfig?.androidVersion || clientConfig?.version || "",
+          getInviteInstallationId(),
+          {
+            eventId: getStableInviteEventId("registered"),
+            attributionToken: affiliateToken,
+          },
+        ).catch(() => undefined);
+        if (referralAttributed) storeInviteReferral(null);
         await managed.bootstrap();
         navigate(Path.Home);
         return;
@@ -2499,6 +3283,13 @@ function AndroidLogin() {
                   </button>
                 </div>
               )}
+              {mode === "register" &&
+                (affiliateCode || affiliateToken ? (
+                  <div className={styles["form-success"]}>
+                    <strong>{text.login.affiliateInviteDetected}</strong>
+                    <small>{text.login.affiliateInviteDetectedHint}</small>
+                  </div>
+                ) : null)}
               {mode === "register" && (
                 <div className={styles["two-col"]}>
                   <label>
@@ -2543,16 +3334,36 @@ function AndroidLogin() {
               )}
             </>
           ) : (
-            <label>
-              <span>{managed.pendingTotpEmail || text.login.totpFallback}</span>
-              <input
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.currentTarget.value)}
-                placeholder={text.login.totpPlaceholder}
-                inputMode="numeric"
-                maxLength={6}
-              />
-            </label>
+            <div className={styles["totp-panel"]}>
+              <label>
+                <span>
+                  {managed.pendingTotpEmail || text.login.totpFallback}
+                </span>
+                <input
+                  autoFocus
+                  value={totpCode}
+                  onChange={(e) =>
+                    setTotpCode(
+                      e.currentTarget.value.replace(/\D/g, "").slice(0, 6),
+                    )
+                  }
+                  placeholder={text.login.totpPlaceholder}
+                  inputMode="numeric"
+                  maxLength={6}
+                />
+              </label>
+              <button
+                type="button"
+                className={styles["ghost-action"]}
+                onClick={() => {
+                  managed.cancel2FA();
+                  setTotpCode("");
+                  setError("");
+                }}
+              >
+                {text.common.back}
+              </button>
+            </div>
           )}
 
           {(configError || managed.lastError || error) && (
@@ -2619,6 +3430,11 @@ function AndroidDashboard() {
   );
   const showingImages = dashboardFilter === "image";
   const showingTasks = dashboardFilter === "tasks";
+  const isAdmin = isManagedAdminWorkspace(workspace);
+  const [sessionActionTarget, setSessionActionTarget] =
+    useState<ManagedMobileChatSession | null>(null);
+  const [renameTarget, setRenameTarget] =
+    useState<ManagedMobileChatSession | null>(null);
 
   async function refreshCloudTasks() {
     if (!managed.accessToken) return;
@@ -2659,9 +3475,64 @@ function AndroidDashboard() {
     }
   }
 
+  async function deleteDashboardImageTask(item: any) {
+    if (!window.confirm(text.image.deleteTaskConfirm)) return;
+    try {
+      const localFileNames = imageLocalFileNames(item);
+      if (localFileNames.length) {
+        await deleteAppImages(localFileNames);
+      }
+      await Promise.allSettled(
+        imageResults(item)
+          .filter((url: string) => url.startsWith("/api/cache"))
+          .map((url: string) => removeImage(url)),
+      );
+      sdStore.update((state) => {
+        state.draw = state.draw.filter(
+          (row: any) => String(row.id) !== String(item.id),
+        );
+        state.currentId += 1;
+      });
+      setTaskError("");
+    } catch {
+      setTaskError(text.errors.saveFailed);
+    }
+  }
+
   function openChat() {
-    mobileStore.createChatSession(fallbackModel, dashboardChatGroupId);
+    mobileStore.setCurrentChatId("");
     navigate(Path.Chat);
+  }
+
+  function openSkillCenter() {
+    mobileStore.setCurrentChatId("");
+    navigate(Path.Chat, { state: { openSkillSheet: true } });
+  }
+
+  function openCollaborationChat() {
+    mobileStore.setCurrentChatId("");
+    navigate(Path.Chat, { state: { selectAgentId: COLLABORATION_AGENT_ID } });
+  }
+
+  function openSession(session: ManagedMobileChatSession) {
+    mobileStore.setCurrentChatId(session.id);
+    setSessionActionTarget(null);
+    navigate(Path.Chat);
+  }
+
+  function deleteSession(session: ManagedMobileChatSession) {
+    if (!window.confirm(text.account.deleteSessionConfirm)) return;
+    mobileStore.removeChatSession(session.id);
+    setSessionActionTarget(null);
+  }
+
+  function renameSessionFromDashboard(
+    session: ManagedMobileChatSession,
+    title: string,
+  ) {
+    mobileStore.renameChatSession(session.id, title);
+    setRenameTarget(null);
+    setSessionActionTarget(null);
   }
 
   return (
@@ -2708,6 +3579,26 @@ function AndroidDashboard() {
             {text.chat.tapToSwitchGroup(text.modelCount(models.length))}
           </small>
         </button>
+      </section>
+
+      <section className={styles["quick-grid"]}>
+        <button type="button" onClick={openSkillCenter}>
+          <BotIcon />
+          <strong>{text.dashboard.skillCenter}</strong>
+          <span>{text.dashboard.skillCenterHint}</span>
+        </button>
+        <button type="button" onClick={openCollaborationChat}>
+          <ChatIcon />
+          <strong>{text.dashboard.agentCollaboration}</strong>
+          <span>{text.dashboard.agentCollaborationHint}</span>
+        </button>
+        {isAdmin && (
+          <button type="button" onClick={() => navigate(Path.AccountAdmin)}>
+            <SettingsIcon />
+            <strong>{text.account.adminCenter}</strong>
+            <span>{text.account.adminRecognized}</span>
+          </button>
+        )}
       </section>
 
       <div className={styles["conversation-filters"]}>
@@ -2839,7 +3730,7 @@ function AndroidDashboard() {
                   item?.prompt ||
                   imageTaskStatusText(item, text);
                 return (
-                  <button
+                  <article
                     key={item.id || `${item.status}-${preview}`}
                     className={styles["conversation-item"]}
                     onClick={() =>
@@ -2857,8 +3748,23 @@ function AndroidDashboard() {
                       <strong>{item.model || text.image.generate}</strong>
                       <small>{preview}</small>
                     </span>
-                    <em>{imageTaskStatusText(item, text)}</em>
-                  </button>
+                    <div className={styles["conversation-actions"]}>
+                      <em>{imageTaskStatusText(item, text)}</em>
+                      {item.status !== "running" &&
+                        item.status !== "queued" && (
+                          <button
+                            type="button"
+                            aria-label={text.image.deleteTask}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void deleteDashboardImageTask(item);
+                            }}
+                          >
+                            <DeleteIcon />
+                          </button>
+                        )}
+                    </div>
+                  </article>
                 );
               })
             : visibleSessions.slice(0, 12).map((session) => {
@@ -2872,9 +3778,31 @@ function AndroidDashboard() {
                   <button
                     key={session.id}
                     className={styles["conversation-item"]}
-                    onClick={() => {
-                      mobileStore.setCurrentChatId(session.id);
-                      navigate(Path.Chat);
+                    onClick={() => openSession(session)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setSessionActionTarget(session);
+                    }}
+                    onTouchStart={(event) => {
+                      const target = event.currentTarget;
+                      const timer = window.setTimeout(() => {
+                        setSessionActionTarget(session);
+                      }, 520);
+                      target.dataset.longPressTimer = String(timer);
+                    }}
+                    onTouchMove={(event) => {
+                      const timer = Number(
+                        event.currentTarget.dataset.longPressTimer || 0,
+                      );
+                      if (timer) window.clearTimeout(timer);
+                      delete event.currentTarget.dataset.longPressTimer;
+                    }}
+                    onTouchEnd={(event) => {
+                      const timer = Number(
+                        event.currentTarget.dataset.longPressTimer || 0,
+                      );
+                      if (timer) window.clearTimeout(timer);
+                      delete event.currentTarget.dataset.longPressTimer;
                     }}
                   >
                     <i>{chatSessionDisplayTitle(session, text).slice(0, 1)}</i>
@@ -2893,6 +3821,35 @@ function AndroidDashboard() {
       {managed.lastError && !workspace && (
         <div className={styles["form-error"]}>{managed.lastError}</div>
       )}
+      <SessionActionSheet
+        session={sessionActionTarget}
+        text={text}
+        onClose={() => setSessionActionTarget(null)}
+        onOpen={() => sessionActionTarget && openSession(sessionActionTarget)}
+        onRename={() => {
+          if (sessionActionTarget) setRenameTarget(sessionActionTarget);
+        }}
+        onTogglePin={() => {
+          if (!sessionActionTarget) return;
+          mobileStore.togglePinChatSession(sessionActionTarget.id);
+          setSessionActionTarget(null);
+        }}
+        onDelete={() => {
+          if (sessionActionTarget) deleteSession(sessionActionTarget);
+        }}
+      />
+      <RenameSessionDialog
+        open={Boolean(renameTarget)}
+        title={text.chat.renameSession}
+        initialValue={
+          renameTarget ? chatSessionDisplayTitle(renameTarget, text) : ""
+        }
+        text={text}
+        onClose={() => setRenameTarget(null)}
+        onSubmit={(value) => {
+          if (renameTarget) renameSessionFromDashboard(renameTarget, value);
+        }}
+      />
     </AndroidAppShell>
   );
 }
@@ -3378,18 +4335,14 @@ function ChatAgentLibrarySheet(props: {
   open: boolean;
   text: ManagedMobileText;
   activeId?: string;
-  serverSkills: MobileSkill[];
-  serverLoading: boolean;
-  serverUnavailable: boolean;
-  usingSkillId: string;
   onClose: () => void;
   onSelect: (template: ChatAgentTemplate | null) => void;
-  onSelectServer: (skill: MobileSkill) => void;
 }) {
   const [category, setCategory] = useState("all");
   const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
   const categories = [
     { id: "all", label: props.text.common.all },
+    { id: "collaboration", label: zh ? "协作" : "Collab" },
     { id: "writing", label: zh ? "写作" : "Writing" },
     { id: "code", label: zh ? "代码" : "Code" },
     { id: "operation", label: zh ? "运营" : "Ops" },
@@ -3417,16 +4370,6 @@ function ChatAgentLibrarySheet(props: {
       onClose={props.onClose}
     >
       <div className={styles["library-list"]}>
-        {props.serverLoading && (
-          <p className={styles["empty-copy"]}>
-            {props.text.platform.skillLoading}
-          </p>
-        )}
-        {props.serverUnavailable && (
-          <p className={styles["sync-notice"]}>
-            {props.text.platform.skillFallback}
-          </p>
-        )}
         <article
           className={clsx(
             styles["library-item"],
@@ -3445,40 +4388,6 @@ function ChatAgentLibrarySheet(props: {
             </button>
           </div>
         </article>
-        {props.serverSkills.map((skill) => (
-          <article
-            key={`server-${skill.id}`}
-            className={clsx(
-              styles["library-item"],
-              styles["agent-library-item"],
-              { [styles["active"]]: props.activeId === `server:${skill.slug}` },
-            )}
-          >
-            <div className={styles["library-item-main"]}>
-              <strong>{serverSkillTitle(skill, props.text)}</strong>
-              <small>{serverSkillDescription(skill, props.text)}</small>
-              <em>
-                {[skill.category, skill.version?.version, skill.author]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </em>
-              {skill.examples?.[0] && <small>{skill.examples[0]}</small>}
-            </div>
-            <div className={styles["inline-actions"]}>
-              <button
-                disabled={props.usingSkillId === String(skill.id)}
-                onClick={() => props.onSelectServer(skill)}
-              >
-                <BotIcon />
-                <span>
-                  {props.usingSkillId === String(skill.id)
-                    ? props.text.platform.skillUsing
-                    : props.text.common.select}
-                </span>
-              </button>
-            </div>
-          </article>
-        ))}
         {items.map((item) => (
           <article
             key={item.id}
@@ -3504,6 +4413,318 @@ function ChatAgentLibrarySheet(props: {
           </article>
         ))}
       </div>
+    </LibrarySheet>
+  );
+}
+
+function ChatSkillLibrarySheet(props: {
+  open: boolean;
+  text: ManagedMobileText;
+  activeId?: string;
+  serverSkills: MobileSkill[];
+  serverLoading: boolean;
+  serverUnavailable: boolean;
+  usingSkillId: string;
+  onClose: () => void;
+  onSelectLocal: (skill: ChatSkillTemplate | null) => void;
+  onSelectServer: (skill: MobileSkill) => void;
+}) {
+  const [category, setCategory] = useState("all");
+  const [localDetail, setLocalDetail] = useState<ChatSkillTemplate | null>(
+    null,
+  );
+  const [serverDetail, setServerDetail] = useState<MobileSkill | null>(null);
+  const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
+  const categories = [
+    { id: "all", label: props.text.common.all },
+    { id: "document", label: zh ? "文档" : "Docs" },
+    { id: "image", label: zh ? "图片" : "Image" },
+    { id: "business", label: zh ? "商业" : "Business" },
+    { id: "marketing", label: zh ? "营销" : "Marketing" },
+    { id: "code", label: zh ? "代码" : "Code" },
+    { id: "support", label: zh ? "客服" : "Support" },
+    { id: "legal", label: zh ? "合同" : "Legal" },
+    { id: "education", label: zh ? "学习" : "Study" },
+    { id: "office", label: zh ? "办公" : "Office" },
+    { id: "translation", label: zh ? "翻译" : "Translation" },
+  ];
+  const items = CHAT_SKILL_TEMPLATES.filter(
+    (item) =>
+      category === "all" || normalizedSkillCategory(item.category) === category,
+  );
+  const serverItems = props.serverSkills.filter(
+    (skill) =>
+      category === "all" ||
+      normalizedSkillCategory(skill.category || skill.slug) === category,
+  );
+  const detailTitle = localDetail
+    ? localizedValue(localDetail.title, props.text)
+    : serverDetail
+    ? serverSkillTitle(serverDetail, props.text)
+    : "";
+  const detailDescription = localDetail
+    ? localizedValue(localDetail.description, props.text)
+    : serverDetail
+    ? serverSkillDescription(serverDetail, props.text)
+    : "";
+  const detailCategory = localDetail
+    ? skillCategoryLabel(localDetail.category, props.text)
+    : serverDetail
+    ? skillCategoryLabel(serverDetail.category || serverDetail.slug, props.text)
+    : "";
+  const detailExamples = localDetail
+    ? localDetail.examples.map((example) => localizedValue(example, props.text))
+    : serverDetail?.examples || [];
+  const detailInputHint = localDetail
+    ? localSkillInputHint(localDetail, props.text)
+    : serverDetail
+    ? serverSkillInputHint(serverDetail, props.text)
+    : "";
+  const detailConsumption = localDetail
+    ? localSkillConsumptionHint(props.text)
+    : serverDetail
+    ? serverSkillConsumptionHint(serverDetail, props.text)
+    : "";
+  const closeDetail = () => {
+    setLocalDetail(null);
+    setServerDetail(null);
+  };
+  return (
+    <LibrarySheet
+      open={props.open}
+      title={props.text.platform.skills}
+      subtitle={props.text.platform.skillHint}
+      text={props.text}
+      compact
+      categories={categories}
+      activeCategory={category}
+      onCategory={setCategory}
+      onClose={props.onClose}
+    >
+      <div className={styles["library-list"]}>
+        {props.serverLoading && (
+          <p className={styles["empty-copy"]}>
+            {props.text.platform.skillLoading}
+          </p>
+        )}
+        {props.serverUnavailable && (
+          <p className={styles["sync-notice"]}>
+            {props.text.platform.skillFallback}
+          </p>
+        )}
+        <article
+          className={clsx(
+            styles["library-item"],
+            styles["skill-library-item"],
+            { [styles["active"]]: !props.activeId },
+          )}
+        >
+          <div className={styles["library-item-main"]}>
+            <strong>{props.text.platform.noSkill}</strong>
+            <small>{props.text.platform.noSkillHint}</small>
+            <em>{zh ? "普通对话" : "Normal chat"}</em>
+          </div>
+          <div className={styles["inline-actions"]}>
+            <button onClick={() => props.onSelectLocal(null)}>
+              <PromptIcon />
+              <span>{props.text.common.select}</span>
+            </button>
+          </div>
+        </article>
+        {serverItems.map((skill) => (
+          <article
+            key={`server-${skill.id}`}
+            className={clsx(
+              styles["library-item"],
+              styles["skill-library-item"],
+              { [styles["active"]]: props.activeId === `server:${skill.slug}` },
+            )}
+          >
+            <div className={styles["library-item-main"]}>
+              <strong>{serverSkillTitle(skill, props.text)}</strong>
+              <small>{serverSkillDescription(skill, props.text)}</small>
+              <div className={styles["skill-badge-row"]}>
+                <span>{props.text.platform.skillServerSource}</span>
+                <span>
+                  {skillCategoryLabel(skill.category || skill.slug, props.text)}
+                </span>
+                {skill.version?.version && (
+                  <span>v{skill.version.version}</span>
+                )}
+              </div>
+              <em>{serverSkillInputHint(skill, props.text)}</em>
+            </div>
+            <div className={styles["inline-actions"]}>
+              <button
+                type="button"
+                onClick={() => {
+                  setLocalDetail(null);
+                  setServerDetail(skill);
+                }}
+              >
+                <PromptIcon />
+                <span>{props.text.platform.skillDetail}</span>
+              </button>
+              <button
+                disabled={props.usingSkillId === String(skill.id)}
+                onClick={() => props.onSelectServer(skill)}
+              >
+                <AddIcon />
+                <span>
+                  {props.usingSkillId === String(skill.id)
+                    ? props.text.platform.skillUsing
+                    : props.text.platform.skillUse}
+                </span>
+              </button>
+            </div>
+          </article>
+        ))}
+        {items.map((item) => (
+          <article
+            key={item.id}
+            className={clsx(
+              styles["library-item"],
+              styles["skill-library-item"],
+              { [styles["active"]]: props.activeId === `local:${item.id}` },
+            )}
+          >
+            <div className={styles["library-item-main"]}>
+              <strong>{localizedValue(item.title, props.text)}</strong>
+              <small>{localizedValue(item.description, props.text)}</small>
+              <div className={styles["skill-badge-row"]}>
+                <span>{props.text.platform.skillLocalSource}</span>
+                <span>{skillCategoryLabel(item.category, props.text)}</span>
+              </div>
+              <em>{localSkillInputHint(item, props.text)}</em>
+            </div>
+            <div className={styles["inline-actions"]}>
+              <button
+                type="button"
+                onClick={() => {
+                  setServerDetail(null);
+                  setLocalDetail(item);
+                }}
+              >
+                <PromptIcon />
+                <span>{props.text.platform.skillDetail}</span>
+              </button>
+              <button onClick={() => props.onSelectLocal(item)}>
+                <AddIcon />
+                <span>{props.text.platform.skillUse}</span>
+              </button>
+            </div>
+          </article>
+        ))}
+        {!props.serverLoading && serverItems.length + items.length === 0 && (
+          <p className={styles["empty-copy"]}>{props.text.common.empty}</p>
+        )}
+      </div>
+      {(localDetail || serverDetail) && (
+        <div className={styles["skill-detail-overlay"]} role="dialog">
+          <section className={styles["skill-detail-card"]}>
+            <div className={styles["sheet-head"]}>
+              <div>
+                <span>{props.text.platform.skillDetail}</span>
+                <h2>{detailTitle}</h2>
+              </div>
+              <button className={styles["icon-button"]} onClick={closeDetail}>
+                <CloseIcon />
+              </button>
+            </div>
+            <p>{detailDescription}</p>
+            <div className={styles["skill-badge-row"]}>
+              <span>
+                {localDetail
+                  ? props.text.platform.skillLocalSource
+                  : props.text.platform.skillServerSource}
+              </span>
+              <span>{detailCategory}</span>
+              {serverDetail?.author && <span>{serverDetail.author}</span>}
+              {serverDetail?.version?.version && (
+                <span>v{serverDetail.version.version}</span>
+              )}
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillInputRequirements}</strong>
+              <p>{detailInputHint}</p>
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillOutput}</strong>
+              <p>
+                {localDetail
+                  ? localizedValue(localDetail.instruction, props.text)
+                  : detailDescription}
+              </p>
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillExamples}</strong>
+              {detailExamples.length > 0 ? (
+                <ul>
+                  {detailExamples.slice(0, 4).map((example, index) => (
+                    <li key={`${detailTitle}-example-${index}`}>{example}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>{props.text.platform.skillNoExamples}</p>
+              )}
+            </div>
+            {serverDetail && serverDetail.parameters?.length ? (
+              <div className={styles["skill-detail-section"]}>
+                <strong>{props.text.platform.skillParameters}</strong>
+                <ul>
+                  {serverDetail.parameters.slice(0, 6).map((param) => (
+                    <li key={param.key}>
+                      {zh && param.label_zh ? param.label_zh : param.label}
+                      {param.required ? ` · ${zh ? "必填" : "Required"}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillPermissions}</strong>
+              {serverDetail?.permissions?.length ? (
+                <ul>
+                  {serverDetail.permissions.slice(0, 6).map((permission) => (
+                    <li key={permission}>{permission}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>{props.text.platform.skillNoPermissions}</p>
+              )}
+            </div>
+            <div className={styles["skill-detail-section"]}>
+              <strong>{props.text.platform.skillConsumption}</strong>
+              <p>{detailConsumption}</p>
+            </div>
+            <div className={styles["inline-actions"]}>
+              <button type="button" onClick={closeDetail}>
+                <CloseIcon />
+                <span>{props.text.common.close}</span>
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !!serverDetail &&
+                  props.usingSkillId === String(serverDetail.id)
+                }
+                onClick={() => {
+                  if (localDetail) props.onSelectLocal(localDetail);
+                  if (serverDetail) props.onSelectServer(serverDetail);
+                }}
+              >
+                <AddIcon />
+                <span>
+                  {serverDetail &&
+                  props.usingSkillId === String(serverDetail.id)
+                    ? props.text.platform.skillUsing
+                    : props.text.platform.skillUse}
+                </span>
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </LibrarySheet>
   );
 }
@@ -3566,6 +4787,157 @@ function MessageActionSheet(props: {
           <button onClick={props.onRetry} disabled={!canRetry}>
             <ReloadIcon />
             <span>{props.text.chat.retryMessage}</span>
+          </button>
+          <button className={styles["danger-inline"]} onClick={props.onDelete}>
+            <DeleteIcon />
+            <span>{props.text.common.delete}</span>
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function SessionActionSheet(props: {
+  session: ManagedMobileChatSession | null;
+  text: ManagedMobileText;
+  onClose: () => void;
+  onOpen: () => void;
+  onRename: () => void;
+  onTogglePin: () => void;
+  onDelete: () => void;
+}) {
+  if (!props.session) return null;
+  return (
+    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+      <aside
+        className={styles["session-sheet"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className={styles["sheet-head"]}>
+          <div>
+            <h2>{props.text.chat.sessions}</h2>
+            <small>{chatSessionDisplayTitle(props.session, props.text)}</small>
+          </div>
+          <IconButton label={props.text.common.close} onClick={props.onClose}>
+            <CloseIcon />
+          </IconButton>
+        </div>
+        <div className={styles["message-actions"]}>
+          <button onClick={props.onOpen}>
+            <ChatIcon />
+            <span>{props.text.common.open}</span>
+          </button>
+          <button onClick={props.onRename}>
+            <CopyIcon />
+            <span>{props.text.common.rename}</span>
+          </button>
+          <button onClick={props.onTogglePin}>
+            <HistoryIcon />
+            <span>
+              {props.session.pinned
+                ? props.text.common.unpin
+                : props.text.common.pin}
+            </span>
+          </button>
+          <button className={styles["danger-inline"]} onClick={props.onDelete}>
+            <DeleteIcon />
+            <span>{props.text.common.delete}</span>
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function RenameSessionDialog(props: {
+  open: boolean;
+  title: string;
+  initialValue: string;
+  text: ManagedMobileText;
+  onClose: () => void;
+  onSubmit: (value: string) => void;
+}) {
+  const [value, setValue] = useState(props.initialValue);
+  useEffect(() => {
+    if (props.open) setValue(props.initialValue);
+  }, [props.initialValue, props.open]);
+  if (!props.open) return null;
+  return (
+    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+      <aside
+        className={styles["confirm-dialog"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2>{props.title}</h2>
+        <label className={styles["session-search"]}>
+          <input
+            autoFocus
+            value={value}
+            maxLength={60}
+            onChange={(event) => setValue(event.currentTarget.value)}
+            placeholder={props.text.chat.renamePrompt}
+          />
+        </label>
+        <div className={styles["dialog-actions"]}>
+          <button type="button" onClick={props.onClose}>
+            {props.text.common.cancel}
+          </button>
+          <button
+            type="button"
+            disabled={!value.trim()}
+            onClick={() => props.onSubmit(value.trim())}
+          >
+            {props.text.common.save}
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function ImageTaskActionSheet(props: {
+  item: any | null;
+  text: ManagedMobileText;
+  onClose: () => void;
+  onOpen: () => void;
+  onReuse: () => void;
+  onRetry: () => void;
+  onDelete: () => void;
+}) {
+  if (!props.item) return null;
+  const canRetry = !["running", "queued"].includes(String(props.item.status));
+  return (
+    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+      <aside
+        className={styles["session-sheet"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className={styles["sheet-head"]}>
+          <div>
+            <h2>{props.text.image.details}</h2>
+            <small>
+              {props.item.params?.prompt ||
+                props.item.prompt ||
+                props.text.image.generate}
+            </small>
+          </div>
+          <IconButton label={props.text.common.close} onClick={props.onClose}>
+            <CloseIcon />
+          </IconButton>
+        </div>
+        <div className={styles["message-actions"]}>
+          <button onClick={props.onOpen}>
+            <ImageIcon />
+            <span>{props.text.image.viewOriginal}</span>
+          </button>
+          <button onClick={props.onReuse}>
+            <CopyIcon />
+            <span>{props.text.image.applyPrompt}</span>
+          </button>
+          <button onClick={props.onRetry} disabled={!canRetry}>
+            <ReloadIcon />
+            <span>{props.text.image.retryTask}</span>
           </button>
           <button className={styles["danger-inline"]} onClick={props.onDelete}>
             <DeleteIcon />
@@ -3797,20 +5169,28 @@ function AndroidChat() {
   const currentSession =
     mobileStore.chatSessions.find(
       (session) => session.id === mobileStore.currentChatId,
-    ) || mobileStore.chatSessions[0];
+    ) || null;
   const defaultChatGroupId = preferredChatGroupID(
     workspace,
     preferredChatGroupId,
+  );
+  const [draftGroupId, setDraftGroupId] = useState<number | undefined>(
+    () =>
+      Number(readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId) ||
+      undefined,
   );
   const currentSessionChatGroupId = preferredChatGroupID(
     workspace,
     currentSession?.groupId,
   );
+  const draftChatGroupId = preferredChatGroupID(workspace, draftGroupId);
   const effectiveChatGroupId =
-    currentSessionChatGroupId || defaultChatGroupId || chatGroup?.id;
+    currentSessionChatGroupId ||
+    draftChatGroupId ||
+    defaultChatGroupId ||
+    chatGroup?.id;
   const models = chatModelsForGroup(workspace, effectiveChatGroupId);
   const fallbackModel = modelValue(models[0]);
-  const selectedModel = currentSession?.model || fallbackModel;
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
   const [sharedMaterials, setSharedMaterials] = useState<MaterialDraft[]>([]);
@@ -3821,14 +5201,24 @@ function AndroidChat() {
   const [serverSkillSelections, setServerSkillSelections] = useState<
     Record<string, ServerSkillSelection>
   >(() => readStoredJSON(SERVER_SKILL_SELECTION_KEY, {}));
+  const [draftModel, setDraftModel] = useState("");
+  const [draftAgentId, setDraftAgentId] = useState("");
+  const [draftSkillSelection, setDraftSkillSelection] =
+    useState<ServerSkillSelection | null>(null);
+  const selectedModel = currentSession?.model || draftModel || fallbackModel;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
+  const [skillSheetOpen, setSkillSheetOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
   const activeAgent =
-    CHAT_AGENT_TEMPLATES.find((item) => item.id === currentSession?.agentId) ||
-    null;
+    CHAT_AGENT_TEMPLATES.find(
+      (item) => item.id === (currentSession?.agentId || draftAgentId),
+    ) || null;
+  const activeSkill = currentSession?.id
+    ? serverSkillSelections[currentSession.id]
+    : draftSkillSelection;
   const [running, setRunning] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [listening, setListening] = useState(false);
@@ -3843,6 +5233,8 @@ function AndroidChat() {
     useState<ChatMessageActionTarget | null>(null);
   const [messageViewerTarget, setMessageViewerTarget] =
     useState<ChatMessageActionTarget | null>(null);
+  const [chatRenameTarget, setChatRenameTarget] =
+    useState<ManagedMobileChatSession | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const platformTaskRef = useRef<MobileTask | null>(null);
@@ -3973,10 +5365,10 @@ function AndroidChat() {
   }, []);
 
   useEffect(() => {
-    if (!agentSheetOpen || serverSkills.length || serverSkillsLoading) return;
+    if (!skillSheetOpen || serverSkills.length || serverSkillsLoading) return;
     void loadServerSkills();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentSheetOpen]);
+  }, [skillSheetOpen]);
 
   useEffect(() => {
     const state = location.state as any;
@@ -4005,17 +5397,16 @@ function AndroidChat() {
   }, [currentSession?.id, location.state, navigate, text]);
 
   useEffect(() => {
-    if (!currentSession && fallbackModel) {
-      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fallbackModel, currentSession?.id, effectiveChatGroupId]);
-
-  useEffect(() => {
     if (!preferredChatGroupId && chatGroup?.id) {
       setPreferredChatGroupId(chatGroup.id);
     }
   }, [chatGroup?.id, preferredChatGroupId]);
+
+  useEffect(() => {
+    if (!currentSession && !draftGroupId && defaultChatGroupId) {
+      setDraftGroupId(defaultChatGroupId);
+    }
+  }, [currentSession, defaultChatGroupId, draftGroupId]);
 
   useEffect(() => {
     writeStoredJSON(CHAT_PREF_STORAGE_KEY, {
@@ -4069,6 +5460,42 @@ function AndroidChat() {
       navigate(Path.Chat, { replace: true, state: null });
     }
   }, [location.state, navigate]);
+
+  useEffect(() => {
+    const state = location.state as any;
+    if (
+      !state?.openAgentSheet &&
+      !state?.openSkillSheet &&
+      !state?.selectAgentId
+    )
+      return;
+    if (state.openAgentSheet) setAgentSheetOpen(true);
+    if (state.openSkillSheet) setSkillSheetOpen(true);
+    if (state.selectAgentId) {
+      const agent = CHAT_AGENT_TEMPLATES.find(
+        (item) => item.id === state.selectAgentId,
+      );
+      if (agent) {
+        if (currentSession?.id) {
+          mobileStore.updateChatSession(currentSession.id, {
+            agentId: agent.id,
+          });
+          setDraftAgentId("");
+        } else {
+          setDraftAgentId(agent.id);
+        }
+        if (agent.starter) {
+          setInput((value) =>
+            value.trim()
+              ? value
+              : localizedValue(agent.starter as LocalizedString, text),
+          );
+        }
+      }
+    }
+    navigate(Path.Chat, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession?.id, location.state, navigate, text]);
 
   useLayoutEffect(() => {
     if (!currentSession?.id) return;
@@ -4260,19 +5687,27 @@ function AndroidChat() {
     stopHoldSpeechRecognition().catch(() => {});
   }
 
-  function makeGatewayMessages(sessionId: string, excludeMessageId?: string) {
+  function makeGatewayMessages(
+    sessionId: string,
+    excludeMessageId?: string,
+    skillOverride?: ServerSkillSelection | null,
+  ) {
     const session = useManagedMobileAppStore
       .getState()
       .chatSessions.find((item) => item.id === sessionId);
     const sessionAgent =
       CHAT_AGENT_TEMPLATES.find((item) => item.id === session?.agentId) ||
       activeAgent;
-    const selectedServerSkill = serverSkillSelections[sessionId];
-    const systemPrompt = selectedServerSkill?.systemPrompt
-      ? `${text.chat.mobileSystemPrompt}\n\n${selectedServerSkill.systemPrompt}`
-      : sessionAgent
-      ? localizedValue(sessionAgent.systemPrompt, text)
-      : text.chat.mobileSystemPrompt;
+    const selectedSkill = skillOverride ?? serverSkillSelections[sessionId];
+    const systemPrompt = [
+      text.chat.mobileSystemPrompt,
+      sessionAgent ? localizedValue(sessionAgent.systemPrompt, text) : "",
+      selectedSkill?.systemPrompt
+        ? `当前启用技能：${selectedSkill.title}\n${selectedSkill.systemPrompt}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const messages = (session?.messages || [])
       .filter((message) => message.id !== excludeMessageId)
       .filter(
@@ -4398,32 +5833,30 @@ function AndroidChat() {
       setChatError(text.errors.noModel);
       return;
     }
-    const sessionId = mobileStore.ensureChatSession(
-      model,
-      effectiveChatGroupId,
-    );
+    const requestGroupId =
+      currentSession?.groupId || draftChatGroupId || effectiveChatGroupId;
+    const existingSessionId = currentSession?.id || "";
+    const sessionId = mobileStore.ensureChatSession(model, requestGroupId);
+    const skillForRequest = existingSessionId
+      ? serverSkillSelections[sessionId]
+      : draftSkillSelection;
+    if (!existingSessionId) {
+      mobileStore.updateChatSession(sessionId, {
+        model,
+        groupId: requestGroupId,
+        agentId: draftAgentId,
+      });
+      if (draftSkillSelection) {
+        setServerSkillSelections((current) => {
+          const next = { ...current, [sessionId]: draftSkillSelection };
+          writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+          return next;
+        });
+      }
+    }
     const readyAssetIds = sharedMaterials
       .filter((item) => item.state === "ready" && item.asset?.id)
       .map((item) => String(item.asset?.id));
-    let projectedTask: MobileTask | null = null;
-    try {
-      const client = await mobilePlatformClient();
-      projectedTask = await client.tasks.create({
-        kind: "chat",
-        operation: "chat.completions",
-        client_request_id: clientRequestID("chat"),
-        title_zh: prompt.slice(0, 80) || text.chat.imageMessage,
-        model,
-        group_id: effectiveChatGroupId,
-        asset_ids: readyAssetIds,
-        skill_id: serverSkillSelections[sessionId]?.id,
-        locale: text.dateLocale,
-      });
-      platformTaskRef.current = projectedTask;
-      await client.tasks.status(projectedTask.id, { status: "running" });
-    } catch {
-      projectedTask = null;
-    }
     if (appendUser) {
       mobileStore.addChatMessage(sessionId, {
         role: "user",
@@ -4438,6 +5871,9 @@ function AndroidChat() {
       status: "streaming",
     });
     mobileStore.updateChatSession(sessionId, { model });
+    setDraftModel("");
+    setDraftAgentId("");
+    setDraftSkillSelection(null);
     setInput("");
     setAttachments([]);
     setSharedMaterials([]);
@@ -4449,16 +5885,41 @@ function AndroidChat() {
 
     const controller = new AbortController();
     abortRef.current = controller;
-    const cancellationTimer = projectedTask
-      ? window.setInterval(() => {
+    let projectedTask: MobileTask | null = null;
+    let projectedTaskId = "";
+    let cancellationTimer: number | undefined;
+    const projectedTaskPromise = (async () => {
+      try {
+        const client = await mobilePlatformClient();
+        const task = await client.tasks.create({
+          kind: "chat",
+          operation: "chat.completions",
+          client_request_id: clientRequestID("chat"),
+          title_zh: prompt.slice(0, 80) || text.chat.imageMessage,
+          model,
+          group_id: requestGroupId,
+          asset_ids: readyAssetIds,
+          skill_id: skillForRequest?.id,
+          locale: text.dateLocale,
+        });
+        projectedTask = task;
+        projectedTaskId = task.id;
+        platformTaskRef.current = task;
+        await client.tasks.status(task.id, { status: "running" });
+        if (abortRef.current !== controller) return task;
+        cancellationTimer = window.setInterval(() => {
           void mobilePlatformClient()
-            .then((client) => client.tasks.detail(projectedTask!.id))
+            .then((client) => client.tasks.detail(task.id))
             .then((task) => {
               if (task.status === "cancelled") controller.abort();
             })
             .catch(() => undefined);
-        }, 2500)
-      : undefined;
+        }, 2500);
+        return task;
+      } catch {
+        return null;
+      }
+    })();
     let contentBuffer = "";
     const path = "/v1/chat/completions";
     try {
@@ -4471,10 +5932,10 @@ function AndroidChat() {
         activeManaged = useManagedNextChatStore.getState();
       }
       if (
-        effectiveChatGroupId &&
-        currentGroupID(activeManaged.workspace) !== effectiveChatGroupId
+        requestGroupId &&
+        currentGroupID(activeManaged.workspace) !== requestGroupId
       ) {
-        await managed.switchGroup(effectiveChatGroupId);
+        await managed.switchGroup(requestGroupId);
         activeManaged = useManagedNextChatStore.getState();
       }
       if (controller.signal.aborted) {
@@ -4483,12 +5944,12 @@ function AndroidChat() {
       const payload = JSON.stringify({
         model,
         stream: true,
-        messages: makeGatewayMessages(sessionId, assistantId),
+        messages: makeGatewayMessages(sessionId, assistantId, skillForRequest),
       });
       const nonStreamingPayload = JSON.stringify({
         model,
         stream: false,
-        messages: makeGatewayMessages(sessionId, assistantId),
+        messages: makeGatewayMessages(sessionId, assistantId, skillForRequest),
       });
       const runNonStreamingChatFallback = async (reason: unknown) => {
         const fallbackTransport = isDirectNativeStreamAvailable()
@@ -4499,21 +5960,31 @@ function AndroidChat() {
           transport: fallbackTransport,
           error: reason,
         });
-        const fallback = await managedGatewayRequestText(
-          activeManaged.backendBaseUrl,
-          "/v1/chat/completions",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
+        const requestFallback = () =>
+          managedGatewayRequestText(
+            activeManaged.backendBaseUrl,
+            "/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+              },
+              body: nonStreamingPayload,
+              signal: controller.signal,
             },
-            body: nonStreamingPayload,
-            signal: controller.signal,
-          },
-          activeManaged.session?.api_key || "",
-          text,
-        );
+            activeManaged.session?.api_key || "",
+            text,
+          );
+        let fallback = await requestFallback();
+        if (
+          (fallback.status === 401 || fallback.status === 403) &&
+          !contentBuffer
+        ) {
+          await managed.bootstrap({ silent: true }).catch(() => {});
+          activeManaged = useManagedNextChatStore.getState();
+          fallback = await requestFallback();
+        }
         recordGatewayDiagnostic("/v1/chat/completions", {
           method: "POST",
           transport: fallbackTransport,
@@ -4663,6 +6134,10 @@ function AndroidChat() {
               status: response.status,
             });
             if (!contentBuffer) {
+              if (response.status === 401 || response.status === 403) {
+                await managed.bootstrap({ silent: true }).catch(() => {});
+                activeManaged = useManagedNextChatStore.getState();
+              }
               await runNonStreamingChatFallback(
                 new Error(`HTTP ${response.status}`),
               );
@@ -4688,16 +6163,21 @@ function AndroidChat() {
           await runNonStreamingChatFallback(streamError);
         }
       }
+      if (containsVisibleToolCallMarkup(contentBuffer)) {
+        const cleaned = stripVisibleToolCallMarkup(contentBuffer);
+        contentBuffer = cleaned || text.chat.assistantThinking;
+      }
       mobileStore.updateChatMessage(sessionId, assistantId, {
         content: contentBuffer || text.chat.assistantThinking,
         status: "done",
       });
-      if (projectedTask) {
+      void projectedTaskPromise.then(async (completedTask) => {
+        if (!completedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
         await client?.tasks
-          .status(projectedTask.id, { status: "completed", progress: 100 })
+          .status(completedTask.id, { status: "completed", progress: 100 })
           .catch(() => {});
-      }
+      });
       await managed.bootstrap({ silent: true }).catch(() => {});
     } catch (err) {
       const aborted = controller.signal.aborted;
@@ -4713,17 +6193,18 @@ function AndroidChat() {
       });
       mobileStore.updateChatSession(sessionId, { error: message });
       setChatError(message);
-      if (projectedTask) {
+      void projectedTaskPromise.then(async (failedTask) => {
+        if (!failedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
         await client?.tasks
-          .status(projectedTask.id, {
+          .status(failedTask.id, {
             status: aborted ? "cancelled" : "failed",
             error: aborted
               ? undefined
               : { code: "chat_failed", message, retryable: true },
           })
           .catch(() => {});
-      }
+      });
     } finally {
       if (cancellationTimer) window.clearInterval(cancellationTimer);
       if (abortRef.current === controller) {
@@ -4731,7 +6212,7 @@ function AndroidChat() {
         nativeStreamCancelRef.current = null;
         setRunning(false);
       }
-      if (platformTaskRef.current?.id === projectedTask?.id) {
+      if (projectedTaskId && platformTaskRef.current?.id === projectedTaskId) {
         platformTaskRef.current = null;
       }
     }
@@ -4830,25 +6311,23 @@ function AndroidChat() {
   }
 
   function changeModel(model: string) {
-    const sessionId =
-      currentSession?.id ||
-      mobileStore.createChatSession(model, effectiveChatGroupId);
-    mobileStore.updateChatSession(sessionId, { model });
+    if (currentSession?.id) {
+      mobileStore.updateChatSession(currentSession.id, { model });
+      setDraftModel("");
+    } else {
+      setDraftModel(model);
+    }
     setChatError("");
   }
 
   function selectAgent(agent: ChatAgentTemplate | null) {
-    const sessionId =
-      currentSession?.id ||
-      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
-    mobileStore.updateChatSession(sessionId, { agentId: agent?.id || "" });
-    if (serverSkillSelections[sessionId]) {
-      setServerSkillSelections((current) => {
-        const next = { ...current };
-        delete next[sessionId];
-        writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
-        return next;
+    if (currentSession?.id) {
+      mobileStore.updateChatSession(currentSession.id, {
+        agentId: agent?.id || "",
       });
+      setDraftAgentId("");
+    } else {
+      setDraftAgentId(agent?.id || "");
     }
     setAgentSheetOpen(false);
     setChatError("");
@@ -4861,10 +6340,42 @@ function AndroidChat() {
     }
   }
 
+  function selectLocalSkill(skill: ChatSkillTemplate | null) {
+    const selection = skill
+      ? {
+          id: `local:${skill.id}`,
+          slug: skill.id,
+          title: localizedValue(skill.title, text),
+          systemPrompt: localizedValue(skill.instruction, text),
+        }
+      : null;
+    if (currentSession?.id) {
+      setServerSkillSelections((current) => {
+        const next = { ...current };
+        if (selection) {
+          next[currentSession.id] = selection;
+        } else {
+          delete next[currentSession.id];
+        }
+        writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+        return next;
+      });
+      setDraftSkillSelection(null);
+    } else {
+      setDraftSkillSelection(selection);
+    }
+    setSkillSheetOpen(false);
+    setChatError("");
+    if (skill?.starter) {
+      setInput((value) =>
+        value.trim()
+          ? value
+          : localizedValue(skill.starter as LocalizedString, text),
+      );
+    }
+  }
+
   async function selectServerSkill(skill: MobileSkill) {
-    const sessionId =
-      currentSession?.id ||
-      mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
     setUsingSkillId(String(skill.id));
     setChatError("");
     try {
@@ -4884,15 +6395,17 @@ function AndroidChat() {
         title: serverSkillTitle(used, text),
         systemPrompt,
       };
-      setServerSkillSelections((current) => {
-        const next = { ...current, [sessionId]: selection };
-        writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
-        return next;
-      });
-      mobileStore.updateChatSession(sessionId, {
-        agentId: `server:${skill.slug}`,
-      });
-      setAgentSheetOpen(false);
+      if (currentSession?.id) {
+        setServerSkillSelections((current) => {
+          const next = { ...current, [currentSession.id]: selection };
+          writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+          return next;
+        });
+        setDraftSkillSelection(null);
+      } else {
+        setDraftSkillSelection(selection);
+      }
+      setSkillSheetOpen(false);
     } catch (error) {
       setServerSkillsUnavailable(true);
       setChatError(
@@ -4905,58 +6418,95 @@ function AndroidChat() {
     }
   }
 
-  function switchGroup(groupID: number) {
+  async function switchGroup(groupID: number) {
     if (!Number.isFinite(groupID) || groupSwitching) return;
+    const previousGroupId = effectiveChatGroupId;
     setGroupSheetOpen(false);
     setGroupSwitching(true);
     setChatError("");
     try {
       const nextModels = chatModelsForGroup(workspace, groupID);
       const nextModel = modelValue(nextModels[0]);
-      setPreferredChatGroupId(groupID);
-      const sessionId =
-        currentSession?.id ||
-        (nextModel ? mobileStore.createChatSession(nextModel, groupID) : "");
-      if (sessionId) {
-        mobileStore.updateChatSession(sessionId, {
-          groupId: groupID,
-          model: nextModel,
-          error: nextModel ? "" : text.errors.noModel,
-        });
-      }
       if (!nextModel) {
+        await showNativeNotification(
+          text.chat.group,
+          text.errors.noModel,
+        ).catch(() => {});
         setChatError(text.errors.noModel);
+        return;
+      }
+      await managed.switchGroup(groupID);
+      const latestWorkspace =
+        useManagedNextChatStore.getState().workspace || workspace;
+      const latestModels = chatModelsForGroup(latestWorkspace, groupID);
+      const sessionModelStillAvailable = latestModels.some(
+        (model) => modelValue(model) === selectedModel,
+      );
+      const confirmedModel =
+        (sessionModelStillAvailable
+          ? selectedModel
+          : modelValue(latestModels[0])) || nextModel;
+      setPreferredChatGroupId(groupID);
+      if (currentSession?.id) {
+        mobileStore.updateChatSession(currentSession.id, {
+          groupId: groupID,
+          model: confirmedModel,
+          error: "",
+        });
+      } else {
+        setDraftGroupId(groupID);
+        setDraftModel(confirmedModel);
       }
     } catch (err) {
-      setChatError(
+      const message =
         err instanceof Error && err.message
           ? localizeManagedMobileError({ message: err.message })
-          : text.errors.switchGroupFailed,
-      );
+          : text.errors.switchGroupFailed;
+      setChatError(message);
+      await showNativeNotification(text.chat.group, message).catch(() => {});
+      await managed.bootstrap({ silent: true }).catch(() => {});
+      setPreferredChatGroupId(previousGroupId);
+      if (!currentSession?.id) {
+        setDraftGroupId(previousGroupId);
+      }
+      if (currentSession?.id) {
+        mobileStore.updateChatSession(currentSession.id, {
+          error: message,
+        });
+      }
     } finally {
       setGroupSwitching(false);
     }
   }
 
-  function switchToChatGroup() {
+  async function switchToChatGroup() {
     if (!chatGroup?.id) return;
-    switchGroup(chatGroup.id);
+    await switchGroup(chatGroup.id);
   }
 
   function newSession() {
-    mobileStore.createChatSession(fallbackModel, effectiveChatGroupId);
+    const nextGroupId =
+      preferredChatGroupId || defaultChatGroupId || chatGroup?.id;
+    const nextModel =
+      modelValue(chatModelsForGroup(workspace, nextGroupId)[0]) ||
+      fallbackModel;
+    mobileStore.setCurrentChatId("");
+    setDraftGroupId(nextGroupId);
+    setDraftModel(nextModel);
+    setDraftAgentId("");
+    setDraftSkillSelection(null);
+    setInput("");
+    setAttachments([]);
+    setSharedMaterials([]);
+    setQuotedMessage(null);
     setDrawerOpen(false);
     setChatError("");
   }
 
   function renameSession(id: string) {
     const session = mobileStore.chatSessions.find((item) => item.id === id);
-    const nextTitle = window.prompt(
-      text.chat.renamePrompt,
-      session?.title || text.chat.unnamedSession,
-    );
-    if (!nextTitle?.trim()) return;
-    mobileStore.renameChatSession(id, nextTitle);
+    if (!session) return;
+    setChatRenameTarget(session);
   }
 
   function clearSession(id: string) {
@@ -4984,6 +6534,10 @@ function AndroidChat() {
   const currentGroupValue = String(effectiveChatGroupId || "");
 
   useNativeBackHandler(true, () => {
+    if (chatRenameTarget) {
+      setChatRenameTarget(null);
+      return;
+    }
     if (messageViewerTarget) {
       setMessageViewerTarget(null);
       return;
@@ -5006,6 +6560,10 @@ function AndroidChat() {
     }
     if (agentSheetOpen) {
       setAgentSheetOpen(false);
+      return;
+    }
+    if (skillSheetOpen) {
+      setSkillSheetOpen(false);
       return;
     }
     if (moreToolsOpen) {
@@ -5073,6 +6631,11 @@ function AndroidChat() {
                 ? localizedValue(activeAgent.title, text)
                 : text.chat.defaultAgent}
             </strong>
+          </button>
+          <button type="button" onClick={() => setSkillSheetOpen(true)}>
+            <PromptIcon />
+            <span>{text.platform.skills}</span>
+            <strong>{activeSkill?.title || text.platform.noSkill}</strong>
           </button>
         </div>
 
@@ -5391,7 +6954,10 @@ function AndroidChat() {
             setDrawerOpen(false);
           }}
           onNew={newSession}
-          onDelete={(id) => mobileStore.removeChatSession(id)}
+          onDelete={(id) => {
+            if (!window.confirm(text.account.deleteSessionConfirm)) return;
+            mobileStore.removeChatSession(id);
+          }}
           onRename={renameSession}
           onTogglePin={(id) => mobileStore.togglePinChatSession(id)}
           onClear={clearSession}
@@ -5434,13 +7000,40 @@ function AndroidChat() {
           open={agentSheetOpen}
           text={text}
           activeId={currentSession?.agentId || activeAgent?.id}
+          onClose={() => setAgentSheetOpen(false)}
+          onSelect={selectAgent}
+        />
+        <ChatSkillLibrarySheet
+          open={skillSheetOpen}
+          text={text}
+          activeId={
+            currentSession?.id
+              ? serverSkillSelections[currentSession.id]?.id
+              : draftSkillSelection?.id || ""
+          }
           serverSkills={serverSkills}
           serverLoading={serverSkillsLoading}
           serverUnavailable={serverSkillsUnavailable}
           usingSkillId={usingSkillId}
-          onClose={() => setAgentSheetOpen(false)}
-          onSelect={selectAgent}
+          onClose={() => setSkillSheetOpen(false)}
+          onSelectLocal={selectLocalSkill}
           onSelectServer={selectServerSkill}
+        />
+        <RenameSessionDialog
+          open={Boolean(chatRenameTarget)}
+          title={text.chat.renameSession}
+          initialValue={
+            chatRenameTarget
+              ? chatSessionDisplayTitle(chatRenameTarget, text)
+              : ""
+          }
+          text={text}
+          onClose={() => setChatRenameTarget(null)}
+          onSubmit={(value) => {
+            if (!chatRenameTarget) return;
+            mobileStore.renameChatSession(chatRenameTarget.id, value);
+            setChatRenameTarget(null);
+          }}
         />
         {messageActionTarget && (
           <MessageActionSheet
@@ -5527,6 +7120,7 @@ function AndroidImageStudio() {
   const [qualitySheetOpen, setQualitySheetOpen] = useState(false);
   const [styleSheetOpen, setStyleSheetOpen] = useState(false);
   const [groupSwitching, setGroupSwitching] = useState(false);
+  const [imageActionTarget, setImageActionTarget] = useState<any>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const platformTaskRef = useRef<MobileTask | null>(null);
@@ -5536,6 +7130,24 @@ function AndroidImageStudio() {
   );
   const activeTask = sdStore.draw.find(
     (item: any) => item.status === "running",
+  );
+  const failedImageTaskIds = useMemo(
+    () =>
+      sdStore.draw
+        .filter((item: any) => {
+          if (item.status === "running" || item.status === "queued") {
+            return false;
+          }
+          const hasResult = imageResults(item).length > 0;
+          return (
+            item.status === "error" ||
+            item.status === "cancelled" ||
+            item.status === "failed" ||
+            (item.status === "partial" && !hasResult)
+          );
+        })
+        .map((item: any) => String(item.id)),
+    [sdStore.draw],
   );
 
   useEffect(() => {
@@ -5915,11 +7527,13 @@ function AndroidImageStudio() {
     }
     if (taskReferences.length) basePayload.input_fidelity = "high";
 
-    function buildImageRequest() {
+    function buildImageRequest(
+      imageApiKey = managed.imageSession?.api_key || "",
+    ) {
       const payload: Record<string, any> = { ...basePayload, n: 1 };
       const headers: Record<string, string> = {
         Accept: "application/json",
-        Authorization: `Bearer ${managed.imageSession?.api_key || ""}`,
+        Authorization: `Bearer ${imageApiKey}`,
       };
       let body: BodyInit;
       if (taskReferences.length) {
@@ -5941,6 +7555,91 @@ function AndroidImageStudio() {
       }
       return { headers, body };
     }
+
+    const requestImageText = async () => {
+      let authAttempt = 0;
+      let networkAttempt = 0;
+      let lastError: unknown = null;
+      while (authAttempt <= 1 && networkAttempt <= 2) {
+        const latestManaged = useManagedNextChatStore.getState();
+        const request = buildImageRequest(
+          latestManaged.imageSession?.api_key || "",
+        );
+        try {
+          const response =
+            request.body instanceof FormData
+              ? await fetch(
+                  `${managedGatewayBaseUrl(
+                    latestManaged.backendBaseUrl,
+                  )}${endpoint}`,
+                  {
+                    method: "POST",
+                    headers: request.headers,
+                    body: request.body,
+                    signal: controller.signal,
+                  },
+                )
+                  .then(async (res) => {
+                    if (controller.signal.aborted) {
+                      throw new DOMException("Aborted", "AbortError");
+                    }
+                    if (!res.ok) {
+                      recordGatewayDiagnostic(`/v1${endpoint}`, {
+                        method: "POST",
+                        transport: "web",
+                        status: res.status,
+                      });
+                    }
+                    return {
+                      ok: res.ok,
+                      status: res.status,
+                      text: await res.text().catch(() => ""),
+                    };
+                  })
+                  .catch((error) => {
+                    recordGatewayDiagnostic(`/v1${endpoint}`, {
+                      method: "POST",
+                      transport: "web",
+                      error,
+                    });
+                    throw error;
+                  })
+              : await managedGatewayRequestText(
+                  latestManaged.backendBaseUrl,
+                  `/v1${endpoint}`,
+                  {
+                    method: "POST",
+                    headers: request.headers,
+                    body: request.body,
+                    signal: controller.signal,
+                  },
+                  latestManaged.imageSession?.api_key || "",
+                  text,
+                );
+          if (
+            (response.status === 401 || response.status === 403) &&
+            authAttempt < 1
+          ) {
+            authAttempt += 1;
+            await managed.bootstrap({ silent: true }).catch(() => undefined);
+            continue;
+          }
+          return response;
+        } catch (error) {
+          lastError = error;
+          if (
+            controller.signal.aborted ||
+            !isManagedNetworkLikeError(error) ||
+            networkAttempt >= 2
+          ) {
+            throw error;
+          }
+          networkAttempt += 1;
+          await sleep(350 * networkAttempt);
+        }
+      }
+      throw lastError;
+    };
 
     const savedResults: string[] = [];
     const localFiles: string[] = [];
@@ -5977,62 +7676,7 @@ function AndroidImageStudio() {
           result_items: [...resultItems],
         });
         try {
-          const request = buildImageRequest();
-          const response =
-            request.body instanceof FormData
-              ? await fetch(
-                  `${managedGatewayBaseUrl(
-                    activeManaged.backendBaseUrl,
-                  )}${endpoint}`,
-                  {
-                    method: "POST",
-                    headers: {
-                      ...request.headers,
-                      Authorization: `Bearer ${
-                        activeManaged.imageSession?.api_key || ""
-                      }`,
-                    },
-                    body: request.body,
-                    signal: controller.signal,
-                  },
-                )
-                  .then(async (res) => {
-                    if (controller.signal.aborted) {
-                      throw new DOMException("Aborted", "AbortError");
-                    }
-                    if (!res.ok) {
-                      recordGatewayDiagnostic(`/v1${endpoint}`, {
-                        method: "POST",
-                        transport: "web",
-                        status: res.status,
-                      });
-                    }
-                    return {
-                      ok: res.ok,
-                      status: res.status,
-                      text: await res.text().catch(() => ""),
-                    };
-                  })
-                  .catch((error) => {
-                    recordGatewayDiagnostic(`/v1${endpoint}`, {
-                      method: "POST",
-                      transport: "web",
-                      error,
-                    });
-                    throw error;
-                  })
-              : await managedGatewayRequestText(
-                  activeManaged.backendBaseUrl,
-                  `/v1${endpoint}`,
-                  {
-                    method: "POST",
-                    headers: request.headers,
-                    body: request.body,
-                    signal: controller.signal,
-                  },
-                  activeManaged.imageSession?.api_key || "",
-                  text,
-                );
+          const response = await requestImageText();
           if (controller.signal.aborted) {
             throw new DOMException("Aborted", "AbortError");
           }
@@ -6199,7 +7843,12 @@ function AndroidImageStudio() {
       const message = aborted
         ? text.errors.requestCancelled
         : err instanceof Error
-        ? err.message
+        ? describeImageError(err.message, {
+            text,
+            selectedModel: model,
+            imageModelCount: imageModelOptions.length,
+            hasImageGroup,
+          })
         : text.image.generateFailed;
       updateTask(id, {
         status: aborted ? "cancelled" : "error",
@@ -6261,6 +7910,18 @@ function AndroidImageStudio() {
     });
   }
 
+  function reuseImageTaskPrompt(item: any) {
+    setPrompt(item?.params?.prompt || item?.prompt || "");
+    if (item?.params?.size) setSize(item.params.size);
+    if (item?.params?.quality) setQuality(item.params.quality);
+    if (item?.params?.style) setStyle(item.params.style);
+    if (item?.params?.n) {
+      setCount(Math.max(1, Math.min(4, Number(item.params.n || 1))));
+    }
+    setImageActionTarget(null);
+    setError("");
+  }
+
   function retrySingleImage(item: any, index: number) {
     runImageTask({
       prompt: item?.params?.prompt,
@@ -6271,6 +7932,56 @@ function AndroidImageStudio() {
       n: 1,
       referenceImages: item?.params?.referenceImages || [],
       retryIndex: index,
+    });
+  }
+
+  async function deleteImageTasks(ids: string[], confirmMessage?: string) {
+    const targetIds = ids.filter(Boolean);
+    if (!targetIds.length) return false;
+    if (!window.confirm(confirmMessage || text.image.deleteTaskConfirm))
+      return false;
+    setError("");
+    try {
+      const items = sdStore.draw.filter((item: any) =>
+        targetIds.includes(String(item.id)),
+      );
+      const removedUrls = items.flatMap(imageResults);
+      const localFileNames = items.flatMap(imageLocalFileNames);
+      if (localFileNames.length) {
+        await deleteAppImages(localFileNames);
+      }
+      await Promise.allSettled(
+        removedUrls
+          .filter((url: string) => url.startsWith("/api/cache"))
+          .map((url: string) => removeImage(url)),
+      );
+      sdStore.update((state) => {
+        state.draw = state.draw.filter(
+          (item: any) => !targetIds.includes(String(item.id)),
+        );
+        state.currentId += 1;
+      });
+      if (preview && targetIds.includes(String(preview.id))) {
+        setPreview(null);
+      }
+      setError(text.common.done);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : text.errors.saveFailed);
+      return false;
+    }
+  }
+
+  function clearFailedImageTasks() {
+    if (!failedImageTaskIds.length) {
+      setError(text.image.failedCleared);
+      return;
+    }
+    void deleteImageTasks(
+      failedImageTaskIds,
+      text.image.clearFailedConfirm,
+    ).then((deleted) => {
+      if (deleted) setError(text.image.failedCleared);
     });
   }
 
@@ -6362,6 +8073,10 @@ function AndroidImageStudio() {
   ];
 
   useNativeBackHandler(true, () => {
+    if (imageActionTarget) {
+      setImageActionTarget(null);
+      return;
+    }
     if (preview) {
       setPreview(null);
       return;
@@ -6600,7 +8315,11 @@ function AndroidImageStudio() {
       <section className={styles["section"]}>
         <div className={styles["section-head"]}>
           <h2>{text.image.details}</h2>
-          <span>{text.shortCount(sdStore.draw.length)}</span>
+          {failedImageTaskIds.length > 0 && (
+            <button type="button" onClick={clearFailedImageTasks}>
+              {text.image.clearFailed}
+            </button>
+          )}
         </div>
         <div className={styles["task-list"]}>
           {sdStore.draw.length === 0 && (
@@ -6619,6 +8338,31 @@ function AndroidImageStudio() {
                 key={item.id}
                 className={styles["image-task-card"]}
                 onClick={() => setPreview(item)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setImageActionTarget(item);
+                }}
+                onTouchStart={(event) => {
+                  const target = event.currentTarget;
+                  const timer = window.setTimeout(() => {
+                    setImageActionTarget(item);
+                  }, 520);
+                  target.dataset.longPressTimer = String(timer);
+                }}
+                onTouchMove={(event) => {
+                  const timer = Number(
+                    event.currentTarget.dataset.longPressTimer || 0,
+                  );
+                  if (timer) window.clearTimeout(timer);
+                  delete event.currentTarget.dataset.longPressTimer;
+                }}
+                onTouchEnd={(event) => {
+                  const timer = Number(
+                    event.currentTarget.dataset.longPressTimer || 0,
+                  );
+                  if (timer) window.clearTimeout(timer);
+                  delete event.currentTarget.dataset.longPressTimer;
+                }}
               >
                 <i>
                   {urls[0] ? (
@@ -6634,18 +8378,20 @@ function AndroidImageStudio() {
                   <strong>{item.params?.prompt || item.model_name}</strong>
                   <small>{status}</small>
                 </span>
-                {(item.status === "error" ||
-                  item.status === "cancelled" ||
-                  item.status === "partial") && (
-                  <em
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      retryTask(item);
-                    }}
-                  >
-                    {text.image.retryTask}
-                  </em>
-                )}
+                <div className={styles["image-task-actions"]}>
+                  {(item.status === "error" ||
+                    item.status === "cancelled" ||
+                    item.status === "partial") && (
+                    <em
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        retryTask(item);
+                      }}
+                    >
+                      {text.image.retryTask}
+                    </em>
+                  )}
+                </div>
               </button>
             );
           })}
@@ -6727,6 +8473,32 @@ function AndroidImageStudio() {
           </div>
         </div>
       )}
+      <ImageTaskActionSheet
+        item={imageActionTarget}
+        text={text}
+        onClose={() => setImageActionTarget(null)}
+        onOpen={() => {
+          if (!imageActionTarget) return;
+          setPreview(imageActionTarget);
+          setImageActionTarget(null);
+        }}
+        onReuse={() => {
+          if (imageActionTarget) reuseImageTaskPrompt(imageActionTarget);
+        }}
+        onRetry={() => {
+          if (!imageActionTarget) return;
+          retryTask(imageActionTarget);
+          setImageActionTarget(null);
+        }}
+        onDelete={() => {
+          if (!imageActionTarget) return;
+          void deleteImageTasks([String(imageActionTarget.id)]).then(
+            (deleted) => {
+              if (deleted) setImageActionTarget(null);
+            },
+          );
+        }}
+      />
       <ChoiceSheet
         open={groupSheetOpen}
         title={text.chat.group}
@@ -6927,15 +8699,25 @@ function AndroidGallery() {
   }
 
   async function cloudAssetDataUrl(asset: MobileAsset) {
-    const store = useManagedNextChatStore.getState();
-    const token = await store.ensureFreshAuthToken();
     const path =
       asset.content_url ||
       `/api/v1/mobile/assets/${encodeURIComponent(asset.id)}/content`;
-    const response = await fetch(managedApiUrl(store.backendBaseUrl, path), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error(text.platform.materialRefreshFailed);
+    const response = await requestWithManagedAuth(
+      async ({ baseUrl, accessToken }) => {
+        const res = await fetch(managedApiUrl(baseUrl, path), {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          throw new ManagedApiError(
+            text.platform.materialRefreshFailed,
+            res.status,
+            path,
+          );
+        }
+        return res;
+      },
+    );
     const blob = await response.blob();
     return asset.kind === "image"
       ? compressImage(blob, 2 * 1024 * 1024)
@@ -7967,6 +9749,21 @@ function AndroidAccountSettings() {
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [feedbackError, setFeedbackError] = useState("");
+  const [inviteSummary, setInviteSummary] = useState<{
+    aff_code: string;
+    campaign_id?: string;
+    attribution_token?: string;
+    app_download_url?: string;
+  } | null>(null);
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteShareBusy, setInviteShareBusy] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState("");
+  const [inviteCampaign, setInviteCampaign] =
+    useState<InviteCampaignProgress | null>(null);
+  const [invitePosterTheme, setInvitePosterTheme] =
+    useState<InvitePosterTheme>("midnight");
+  const [inviteRewardBusy, setInviteRewardBusy] = useState<number | null>(null);
+  const [inviteError, setInviteError] = useState("");
   const [supportTickets, setSupportTickets] = useState<MobileSupportTicket[]>(
     [],
   );
@@ -8012,6 +9809,238 @@ function AndroidAccountSettings() {
   const accountGroupID = storedChatGroupID(workspace);
   const accountGroupName = stableChatGroupName(workspace, text);
   const route = location.pathname;
+  const isAdmin = isManagedAdminWorkspace(workspace);
+
+  const inviteRegisterUrl = useMemo(() => {
+    if (!inviteSummary?.aff_code && !inviteSummary?.attribution_token)
+      return "";
+    const url = new URL(resolveWebUrl("/register", clientConfig));
+    if (inviteSummary.aff_code) {
+      url.searchParams.set("aff_code", inviteSummary.aff_code);
+    }
+    if (inviteSummary.campaign_id)
+      url.searchParams.set("campaign_id", inviteSummary.campaign_id);
+    if (inviteSummary.attribution_token)
+      url.searchParams.set("invite_token", inviteSummary.attribution_token);
+    return url.toString();
+  }, [clientConfig, inviteSummary]);
+
+  const inviteAppUrl = useMemo(() => {
+    if (!inviteSummary?.aff_code && !inviteSummary?.attribution_token)
+      return "";
+    const url = new URL(
+      inviteSummary.app_download_url ||
+        resolveWebUrl("/download/android", clientConfig),
+    );
+    if (inviteSummary.aff_code) {
+      url.searchParams.set("aff_code", inviteSummary.aff_code);
+    }
+    url.searchParams.set("source", "invite_poster_app_qr");
+    if (inviteSummary.campaign_id)
+      url.searchParams.set("campaign_id", inviteSummary.campaign_id);
+    if (inviteSummary.attribution_token)
+      url.searchParams.set("invite_token", inviteSummary.attribution_token);
+    return url.toString();
+  }, [clientConfig, inviteSummary]);
+
+  const refreshInviteGrowth = useCallback(async () => {
+    if (!managed.accessToken) return;
+    setInviteLoading(true);
+    setInviteError("");
+    try {
+      const affiliate = await managedAuthenticatedJsonRequest<{
+        aff_code?: string;
+      }>("/api/v1/user/aff");
+      const campaigns = await managedAuthenticatedJsonRequest<
+        InviteCampaignProgress[]
+      >("/api/v1/user/aff/campaigns");
+      const campaign =
+        (campaigns || []).find(
+          (item) => item?.campaign?.status === "running",
+        ) ||
+        campaigns?.[0] ||
+        null;
+      setInviteCampaign(campaign);
+      let attributionToken = "";
+      if (campaign?.enrollment?.campaign_id) {
+        const tokenResult = await managedAuthenticatedJsonRequest<{
+          token?: string;
+        }>(`/api/v1/user/aff/campaigns/${campaign.campaign.id}/invite-token`);
+        attributionToken = tokenResult?.token || "";
+      }
+      setInviteSummary(
+        affiliate?.aff_code
+          ? {
+              aff_code: affiliate.aff_code,
+              ...(campaign?.campaign?.id
+                ? { campaign_id: String(campaign.campaign.id) }
+                : {}),
+              ...(attributionToken
+                ? { attribution_token: attributionToken }
+                : {}),
+            }
+          : null,
+      );
+    } catch {
+      setInviteSummary(null);
+      setInviteCampaign(null);
+      setInviteError(text.account.inviteGrowthUnavailable);
+    } finally {
+      setInviteLoading(false);
+    }
+  }, [managed.accessToken, text.account.inviteGrowthUnavailable]);
+
+  useEffect(() => {
+    let disposed = false;
+    if (!disposed) void refreshInviteGrowth();
+    return () => {
+      disposed = true;
+    };
+  }, [refreshInviteGrowth]);
+
+  async function enrollInviteCampaign() {
+    if (!inviteCampaign?.campaign?.id || inviteLoading) return;
+    setInviteLoading(true);
+    setInviteMessage("");
+    setInviteError("");
+    try {
+      await managedAuthenticatedJsonRequest(
+        `/api/v1/user/aff/campaigns/${inviteCampaign.campaign.id}/enroll`,
+        { method: "POST" },
+      );
+      await refreshInviteGrowth();
+      setInviteMessage(text.account.inviteGrowthEnrolled);
+    } catch {
+      setInviteError(text.account.inviteGrowthUnavailable);
+    } finally {
+      setInviteLoading(false);
+    }
+  }
+
+  async function claimInviteReward(reward: InviteCampaignReward) {
+    if (!inviteCampaign?.campaign?.id || inviteRewardBusy !== null) return;
+    setInviteRewardBusy(reward.id);
+    setInviteMessage("");
+    setInviteError("");
+    try {
+      await managedAuthenticatedJsonRequest(
+        `/api/v1/user/aff/campaigns/${inviteCampaign.campaign.id}/rewards/${reward.id}/claim`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            campaign_version: inviteCampaign.campaign.version,
+          }),
+        },
+      );
+      await refreshInviteGrowth();
+      setInviteMessage(text.account.inviteGrowthClaimed);
+    } catch {
+      setInviteError(text.account.inviteGrowthClaimFailed);
+    } finally {
+      setInviteRewardBusy(null);
+    }
+  }
+
+  async function shareInviteGrowth() {
+    if (!inviteRegisterUrl || !inviteAppUrl || inviteShareBusy) return;
+    setInviteShareBusy(true);
+    setInviteMessage("");
+    setInviteError("");
+    const shareScope = `${Date.now()}`;
+    const poster = buildInvitePosterPayload({
+      registerUrl: inviteRegisterUrl,
+      appUrl: inviteAppUrl,
+      headline: text.account.inviteGrowthPosterTitle,
+      body: text.account.inviteGrowthPosterBody,
+      locale: text.dateLocale,
+      theme: invitePosterTheme,
+    });
+    try {
+      const dataUrl = await createInvitePosterDataUrl(poster);
+      await reportInviteLifecycleEvent(
+        managed.backendBaseUrl,
+        managed.accessToken,
+        "share_opened",
+        currentVersion,
+        getInviteInstallationId(),
+        {
+          eventId: getStableInviteEventId(`share-opened:${shareScope}`),
+          attributionToken: inviteSummary?.attribution_token,
+          metadata: {
+            surface: "account_invite",
+            poster_theme: invitePosterTheme,
+          },
+        },
+      ).catch(() => undefined);
+      await shareImage(
+        dataUrl,
+        `jisudeng-invite-${Date.now()}.png`,
+        `${text.account.inviteGrowthShareText}\n${inviteRegisterUrl}`,
+      );
+      await reportInviteLifecycleEvent(
+        managed.backendBaseUrl,
+        managed.accessToken,
+        "share_completed",
+        currentVersion,
+        getInviteInstallationId(),
+        {
+          eventId: getStableInviteEventId(`share-completed:${shareScope}`),
+          attributionToken: inviteSummary?.attribution_token,
+          metadata: {
+            surface: "account_invite",
+            poster_theme: invitePosterTheme,
+          },
+        },
+      ).catch(() => undefined);
+      setInviteMessage(text.account.inviteGrowthShared);
+    } catch {
+      try {
+        await reportInviteLifecycleEvent(
+          managed.backendBaseUrl,
+          managed.accessToken,
+          "share_opened",
+          currentVersion,
+          getInviteInstallationId(),
+          {
+            eventId: getStableInviteEventId(`share-opened:${shareScope}`),
+            attributionToken: inviteSummary?.attribution_token,
+            metadata: { surface: "account_invite_text_fallback" },
+          },
+        ).catch(() => undefined);
+        await shareText(poster.shareText, text.account.inviteGrowth);
+        await reportInviteLifecycleEvent(
+          managed.backendBaseUrl,
+          managed.accessToken,
+          "share_completed",
+          currentVersion,
+          getInviteInstallationId(),
+          {
+            eventId: getStableInviteEventId(`share-completed:${shareScope}`),
+            attributionToken: inviteSummary?.attribution_token,
+            metadata: {
+              surface: "account_invite_text_fallback",
+              poster_theme: invitePosterTheme,
+            },
+          },
+        ).catch(() => undefined);
+        setInviteMessage(text.account.inviteGrowthShared);
+      } catch {
+        setInviteError(text.account.inviteGrowthUnavailable);
+      }
+    } finally {
+      setInviteShareBusy(false);
+    }
+  }
+
+  async function copyInviteGrowthLink() {
+    if (!inviteRegisterUrl) return;
+    try {
+      await navigator.clipboard.writeText(inviteRegisterUrl);
+      setInviteMessage(text.account.inviteGrowthCopy);
+    } catch {
+      setInviteMessage(text.account.inviteGrowthUnavailable);
+    }
+  }
 
   async function refreshSupportTickets() {
     if (!managed.accessToken) return;
@@ -8115,10 +10144,28 @@ function AndroidAccountSettings() {
     }
     setAccountData((state) => ({ ...state, loading: true, error: "" }));
     try {
-      const summary =
-        await managedAuthenticatedJsonRequest<MobileAccountSummary>(
-          "/api/v1/nextchat/mobile/account-summary",
+      let summary: MobileAccountSummary | null = null;
+      for (const path of [
+        "/api/v1/mobile/account-summary",
+        "/api/v1/nextchat/mobile/account-summary",
+      ]) {
+        try {
+          summary =
+            await managedAuthenticatedJsonRequest<MobileAccountSummary>(path);
+          break;
+        } catch (error) {
+          if (!(error instanceof ManagedApiError) || error.status !== 404) {
+            throw error;
+          }
+        }
+      }
+      if (!summary) {
+        throw new ManagedApiError(
+          "account summary unavailable",
+          404,
+          "/api/v1/mobile/account-summary",
         );
+      }
       const labels: Record<string, string> = {
         orders: text.account.orders,
         transactions: text.account.balanceDetails,
@@ -8506,6 +10553,14 @@ function AndroidAccountSettings() {
       form.append("content", feedbackContent.trim());
       form.append("app_version", currentVersion);
       form.append("platform", "android");
+      form.append("installation_id", getInviteInstallationId());
+      form.append("channel", "official_android");
+      const referral = loadInviteReferral();
+      if (referral?.campaign_id) {
+        form.append("referrer", `campaign:${referral.campaign_id}`);
+      } else if (referral?.aff_code) {
+        form.append("referrer", `affiliate:${referral.aff_code}`);
+      }
       form.append(
         "device_model",
         [deviceInfo.manufacturer, deviceInfo.model].filter(Boolean).join(" "),
@@ -8544,15 +10599,27 @@ function AndroidAccountSettings() {
           shot.fileName || `feedback-${index + 1}.png`,
         );
       });
-      const accessToken = await managed.ensureFreshAuthToken();
-      const activeManaged = useManagedNextChatStore.getState();
-      const result = await managedFormDataRequest<any>(
-        activeManaged.backendBaseUrl,
-        "/api/v1/play/mobile-feedback",
-        form,
-        accessToken,
-        text,
-      );
+      let result: any;
+      try {
+        result = await managedFormDataRequest<any>(
+          "/api/v1/mobile/support/tickets",
+          form,
+          text,
+        );
+      } catch (error) {
+        if (
+          error instanceof ManagedApiError &&
+          [404, 405, 501].includes(error.status || 0)
+        ) {
+          result = await managedFormDataRequest<any>(
+            "/api/v1/play/mobile-feedback",
+            form,
+            text,
+          );
+        } else {
+          throw error;
+        }
+      }
       setFeedbackMessage(
         result?.ticket_id || result?.id
           ? `${text.account.feedbackSubmitted} · #${
@@ -9010,6 +11077,78 @@ function AndroidAccountSettings() {
     }
     navigate(Path.Home);
   });
+
+  if (route === Path.AccountAdmin) {
+    return (
+      <AndroidDetailShell
+        title={text.account.adminCenter}
+        subtitle={
+          isAdmin ? text.account.adminRecognized : text.account.adminUnavailable
+        }
+        text={text}
+        onRefresh={() => managed.bootstrap({ silent: true })}
+      >
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.adminOverview}</h2>
+            <span>
+              {isAdmin ? text.account.synced : text.account.waitingSync}
+            </span>
+          </div>
+          <div className={styles["meta-list"]}>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.adminIdentity}</span>
+              <strong>
+                {workspace?.user?.username || workspace?.user?.email || "-"}
+              </strong>
+            </div>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.currentGroup}</span>
+              <strong>{accountGroupName}</strong>
+            </div>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.balance}</span>
+              <strong>{formatMoney(workspace?.user?.balance)}</strong>
+            </div>
+          </div>
+        </section>
+        <section className={styles["account-menu-group"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.adminAvailable}</h2>
+            <span>{text.account.adminReadonly}</span>
+          </div>
+          <div className={styles["account-menu-list"]}>
+            <AccountMenuItem
+              icon={<HistoryIcon />}
+              title={text.account.orders}
+              detail={text.account.adminCurrentAccountOnly}
+              onClick={() => navigate(Path.AccountOrders)}
+            />
+            <AccountMenuItem
+              icon={<ShareIcon />}
+              title={text.account.support}
+              detail={text.account.adminCurrentAccountOnly}
+              onClick={() => navigate(Path.AccountSupport)}
+            />
+            <AccountMenuItem
+              icon={<CopyIcon />}
+              title={text.account.balanceDetails}
+              detail={text.account.adminCurrentAccountOnly}
+              onClick={() => navigate(Path.AccountWallet)}
+            />
+          </div>
+        </section>
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.adminNeedsBackend}</h2>
+          </div>
+          <p className={styles["empty-copy"]}>
+            {text.account.adminBackendHint}
+          </p>
+        </section>
+      </AndroidDetailShell>
+    );
+  }
 
   if (route === Path.AccountRedeem) {
     return (
@@ -10144,6 +12283,238 @@ function AndroidAccountSettings() {
     );
   }
 
+  if (route === Path.AccountInvite) {
+    const tiers = [...(inviteCampaign?.tiers || [])].sort(
+      (left, right) => left.required_invites - right.required_invites,
+    );
+    const required = tiers.at(-1)?.required_invites || 0;
+    const qualified = inviteCampaign?.qualified_count || 0;
+    const rewardByTier = new Map(
+      (inviteCampaign?.rewards || []).map((reward) => [reward.tier, reward]),
+    );
+    const rewardStatuses = text.account.inviteGrowthRewardStatuses;
+    const campaignStatuses = text.account.inviteGrowthCampaignStatuses;
+    const rewardStatusLabel = (status: string) =>
+      rewardStatuses[status as keyof typeof rewardStatuses] || status;
+    const campaignStatusLabel = (status?: string) =>
+      status
+        ? campaignStatuses[status as keyof typeof campaignStatuses] || status
+        : "";
+
+    return (
+      <AndroidDetailShell
+        title={text.account.inviteGrowth}
+        text={text}
+        onRefresh={refreshInviteGrowth}
+      >
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>
+              {inviteCampaign?.campaign?.name || text.account.inviteGrowth}
+            </h2>
+            <span>{campaignStatusLabel(inviteCampaign?.campaign?.status)}</span>
+          </div>
+          <p className={styles["empty-copy"]}>
+            {text.account.inviteGrowthHint}
+          </p>
+          {inviteError && (
+            <div className={styles["form-error"]}>{inviteError}</div>
+          )}
+          {inviteMessage && (
+            <div className={styles["form-success"]}>{inviteMessage}</div>
+          )}
+          {inviteLoading ? (
+            <div className={styles["sync-notice"]}>{text.loading}</div>
+          ) : !inviteCampaign ? (
+            <p className={styles["empty-copy"]}>
+              {text.account.inviteGrowthNoCampaign}
+            </p>
+          ) : (
+            <>
+              <div className={styles["invite-growth-stats"]}>
+                <div>
+                  <span>{text.account.inviteGrowthInvited}</span>
+                  <strong>{inviteCampaign.invited_count}</strong>
+                </div>
+                <div>
+                  <span>{text.account.inviteGrowthQualified}</span>
+                  <strong>{qualified}</strong>
+                </div>
+                <div>
+                  <span>{text.account.inviteGrowthMyRank}</span>
+                  <strong>
+                    {inviteCampaign.ranking?.rank
+                      ? `#${inviteCampaign.ranking.rank}`
+                      : text.account.inviteGrowthNotRanked}
+                  </strong>
+                </div>
+              </div>
+              <div className={styles["invite-growth-progress"]}>
+                <div className={styles["meta-row"]}>
+                  <span>{text.account.inviteGrowthProgress}</span>
+                  <strong>
+                    {qualified} / {required}
+                  </strong>
+                </div>
+                <progress value={qualified} max={Math.max(required, 1)} />
+              </div>
+              <div className={styles["invite-growth-conditions"]}>
+                <h3>{text.account.inviteGrowthConditions}</h3>
+                <div>
+                  <span>{text.account.inviteGrowthPayThreshold}</span>
+                  <strong>
+                    {formatMoney(inviteCampaign.campaign.pay_threshold)}
+                  </strong>
+                </div>
+                <div>
+                  <span>{text.account.inviteGrowthUsageThreshold}</span>
+                  <strong>
+                    {formatMoney(inviteCampaign.campaign.usage_threshold)}
+                  </strong>
+                </div>
+                <div>
+                  <span>{text.account.inviteGrowthClaimDeadline}</span>
+                  <strong>
+                    {formatDateTime(
+                      inviteCampaign.campaign.claim_deadline,
+                      text,
+                    )}
+                  </strong>
+                </div>
+              </div>
+              {!inviteCampaign.enrollment ? (
+                <button
+                  className={styles["primary-action"]}
+                  onClick={enrollInviteCampaign}
+                >
+                  {text.account.inviteGrowthEnroll}
+                </button>
+              ) : (
+                <>
+                  <div className={styles["invite-growth-block-head"]}>
+                    <h3>{text.account.inviteGrowthMilestones}</h3>
+                  </div>
+                  <div className={styles["invite-tier-list"]}>
+                    {tiers.map((tier) => {
+                      const reward = rewardByTier.get(tier.tier);
+                      const unlocked = qualified >= tier.required_invites;
+                      return (
+                        <article key={tier.tier}>
+                          <div>
+                            <strong>
+                              {text.account.inviteGrowthMilestone(
+                                tier.required_invites,
+                              )}
+                            </strong>
+                            <span>{formatMoney(tier.reward_amount)}</span>
+                          </div>
+                          {reward?.status === "claimable" ? (
+                            <button
+                              type="button"
+                              onClick={() => claimInviteReward(reward)}
+                              disabled={inviteRewardBusy !== null}
+                            >
+                              {inviteRewardBusy === reward.id
+                                ? text.account.inviteGrowthClaiming
+                                : text.account.inviteGrowthClaim}
+                            </button>
+                          ) : (
+                            <small>
+                              {reward
+                                ? rewardStatusLabel(reward.status)
+                                : unlocked
+                                ? text.account.inviteGrowthUnlocked
+                                : text.account.inviteGrowthLocked}
+                            </small>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <div className={styles["invite-growth-block-head"]}>
+                    <h3>{text.account.inviteGrowthShare}</h3>
+                  </div>
+                  <div className={styles["invite-poster-themes"]}>
+                    {(["midnight", "light", "celebration"] as const).map(
+                      (theme) => (
+                        <button
+                          key={theme}
+                          type="button"
+                          className={clsx({
+                            [styles["active"]]: invitePosterTheme === theme,
+                          })}
+                          onClick={() => setInvitePosterTheme(theme)}
+                        >
+                          {text.account.invitePosterThemes[theme]}
+                        </button>
+                      ),
+                    )}
+                  </div>
+                  <div className={styles["inline-actions"]}>
+                    <button
+                      onClick={shareInviteGrowth}
+                      disabled={
+                        inviteShareBusy || !inviteSummary?.attribution_token
+                      }
+                    >
+                      <ShareIcon />
+                      <span>
+                        {inviteShareBusy
+                          ? text.account.inviteGrowthSharing
+                          : text.account.inviteGrowthShare}
+                      </span>
+                    </button>
+                    <button
+                      onClick={copyInviteGrowthLink}
+                      disabled={!inviteSummary?.attribution_token}
+                    >
+                      <CopyIcon />
+                      <span>{text.account.inviteGrowthCopy}</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </section>
+        {inviteCampaign?.enrollment && (
+          <section className={styles["section"]}>
+            <div className={styles["section-head"]}>
+              <h2>{text.account.inviteGrowthLeaderboard}</h2>
+            </div>
+            {inviteCampaign.leaderboard?.length ? (
+              <div className={styles["invite-leaderboard"]}>
+                {inviteCampaign.leaderboard.map((row) => (
+                  <div
+                    key={`${row.rank}-${row.email_masked}`}
+                    className={clsx({ [styles["is-me"]]: row.is_me })}
+                  >
+                    <strong>#{row.rank}</strong>
+                    <span>
+                      {row.email_masked}
+                      {row.is_me ? ` (${text.account.inviteGrowthMe})` : ""}
+                    </span>
+                    <small>
+                      {text.account.inviteGrowthQualifiedLabel}:{" "}
+                      {row.qualified_count}
+                      {" / "}
+                      {text.account.inviteGrowthRewardLabel}:{" "}
+                      {formatMoney(row.reward_amount)}
+                    </small>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className={styles["empty-copy"]}>
+                {text.account.inviteGrowthLeaderboardEmpty}
+              </p>
+            )}
+          </section>
+        )}
+      </AndroidDetailShell>
+    );
+  }
+
   return (
     <AndroidAppShell active="account" text={text}>
       <header className={styles["app-header"]}>
@@ -10231,6 +12602,12 @@ function AndroidAccountSettings() {
         </div>
         <div className={styles["account-menu-list"]}>
           <AccountMenuItem
+            icon={<ShareIcon />}
+            title={text.account.inviteGrowth}
+            detail={text.account.inviteGrowthHint}
+            onClick={() => navigate(Path.AccountInvite)}
+          />
+          <AccountMenuItem
             icon={<HistoryIcon />}
             title={text.account.orders}
             detail={text.shortCount(accountData.orders?.length || 0)}
@@ -10285,6 +12662,14 @@ function AndroidAccountSettings() {
             }
             onClick={() => navigate(Path.AccountSupport)}
           />
+          {isAdmin && (
+            <AccountMenuItem
+              icon={<SettingsIcon />}
+              title={text.account.adminCenter}
+              detail={text.account.adminRecognized}
+              onClick={() => navigate(Path.AccountAdmin)}
+            />
+          )}
         </div>
       </section>
 
@@ -10367,6 +12752,95 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
   useMobileCrashLog();
 
   useEffect(() => {
+    if (!backendBaseUrl) return;
+    const version = clientConfig?.androidVersion || clientConfig?.version || "";
+    const referral = loadInviteReferral();
+    if (referral?.token && managed.accessToken) {
+      void attributeInviteCampaign(
+        backendBaseUrl,
+        managed.accessToken,
+        referral.token,
+      )
+        .then(() => storeInviteReferral(null))
+        .catch(() => undefined);
+    }
+    void reportInviteLifecycleEvent(
+      backendBaseUrl,
+      managed.accessToken,
+      "first_launch",
+      version,
+      getInviteInstallationId(),
+      {
+        eventId: getStableInviteEventId("first_launch"),
+        attributionToken: referral?.token,
+      },
+    ).catch(() => undefined);
+
+    const reportActive = () => {
+      if (document.visibilityState !== "visible") return;
+      const day = new Date().toISOString().slice(0, 10);
+      const currentReferral = loadInviteReferral();
+      void reportInviteLifecycleEvent(
+        backendBaseUrl,
+        useManagedNextChatStore.getState().accessToken,
+        "active",
+        version,
+        getInviteInstallationId(),
+        {
+          eventId: getStableInviteEventId(`active:${day}`),
+          attributionToken: currentReferral?.token,
+        },
+      ).catch(() => undefined);
+    };
+    reportActive();
+    document.addEventListener("visibilitychange", reportActive);
+    window.addEventListener("jisudeng-native-resume", reportActive);
+    return () => {
+      document.removeEventListener("visibilitychange", reportActive);
+      window.removeEventListener("jisudeng-native-resume", reportActive);
+    };
+  }, [backendBaseUrl, clientConfig, managed.accessToken]);
+
+  useEffect(() => {
+    const consumeInviteDeepLink = (detail: any) => {
+      const url = String(detail?.url || "");
+      const referral = captureInviteReferral(url);
+      if (!referral) return;
+      storeInviteReferral(referral);
+      localStorage.removeItem("jisudeng-native-pending-invite");
+      window.dispatchEvent(new Event("jisudeng-invite-referral-updated"));
+      if (backendBaseUrl) {
+        void reportInviteLifecycleEvent(
+          backendBaseUrl,
+          useManagedNextChatStore.getState().accessToken,
+          "poster_scanned",
+          clientConfig?.androidVersion || clientConfig?.version || "",
+          getInviteInstallationId(),
+          {
+            eventId: getStableInviteEventId(
+              `poster-scan:${referral.token || referral.aff_code}`,
+            ),
+            attributionToken: referral.token,
+            metadata: { source: "app_link" },
+          },
+        ).catch(() => undefined);
+      }
+    };
+    const onInviteDeepLink = (event: Event) =>
+      consumeInviteDeepLink((event as CustomEvent).detail);
+    try {
+      const pending = localStorage.getItem("jisudeng-native-pending-invite");
+      if (pending) consumeInviteDeepLink(JSON.parse(pending));
+    } catch {
+      // Keep malformed native state isolated from the application shell.
+      localStorage.removeItem("jisudeng-native-pending-invite");
+    }
+    window.addEventListener("jisudeng-invite-deeplink", onInviteDeepLink);
+    return () =>
+      window.removeEventListener("jisudeng-invite-deeplink", onInviteDeepLink);
+  }, [backendBaseUrl, clientConfig]);
+
+  useEffect(() => {
     function onNativeShare(event: Event) {
       const detail = (event as CustomEvent).detail || {};
       const files = Array.isArray(detail.files) ? detail.files : [];
@@ -10414,6 +12888,60 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managed._hasHydrated, managed.accessToken, managed.session]);
+
+  useEffect(() => {
+    if (
+      !managed._hasHydrated ||
+      !managed.accessToken ||
+      !managed.backendBaseUrl
+    )
+      return;
+    let disposed = false;
+    let recovering = false;
+    let lastRecoveredAt = 0;
+    const recoverSession = async (force = false) => {
+      if (disposed || recovering) return;
+      const now = Date.now();
+      if (!force && now - lastRecoveredAt < 60_000) return;
+      recovering = true;
+      lastRecoveredAt = now;
+      try {
+        const store = useManagedNextChatStore.getState();
+        await store.ensureFreshAuthToken(force).catch(() => undefined);
+        const latest = useManagedNextChatStore.getState();
+        if (
+          shouldRefreshManagedSession(latest.session) ||
+          shouldRefreshManagedSession(latest.imageSession)
+        ) {
+          await latest.bootstrap({ silent: true }).catch(() => undefined);
+        }
+      } finally {
+        recovering = false;
+      }
+    };
+    const recoverAfterResume = () => {
+      if (document.visibilityState === "visible") {
+        void recoverSession(false);
+      }
+    };
+    const recoverAfterOnline = () => {
+      void recoverSession(true);
+    };
+    document.addEventListener("visibilitychange", recoverAfterResume);
+    window.addEventListener("jisudeng-native-resume", recoverAfterOnline);
+    window.addEventListener("online", recoverAfterOnline);
+    const timer = window.setInterval(() => {
+      void recoverSession(false);
+    }, 5 * 60_000);
+    void recoverSession(false);
+    return () => {
+      disposed = true;
+      document.removeEventListener("visibilitychange", recoverAfterResume);
+      window.removeEventListener("jisudeng-native-resume", recoverAfterOnline);
+      window.removeEventListener("online", recoverAfterOnline);
+      window.clearInterval(timer);
+    };
+  }, [managed._hasHydrated, managed.accessToken, managed.backendBaseUrl]);
 
   useEffect(() => {
     if (!managed.accessToken || !managed.backendBaseUrl) return;
