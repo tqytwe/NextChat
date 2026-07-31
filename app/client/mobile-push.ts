@@ -5,23 +5,7 @@ import {
   type Token,
 } from "@capacitor/push-notifications";
 import { registerMobileDevice } from "./mobile-platform";
-
-const INSTALLATION_KEY = "jisudeng-mobile-installation-id";
-
-function installationId() {
-  const stored = localStorage.getItem(INSTALLATION_KEY);
-  if (stored) return stored;
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"));
-  const id = `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
-    .slice(6, 8)
-    .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
-  localStorage.setItem(INSTALLATION_KEY, id);
-  return id;
-}
+import { getInviteInstallationId } from "./invite-growth";
 
 function emitPushOpen(action: ActionPerformed) {
   const data = action.notification.data ?? {};
@@ -58,12 +42,17 @@ export async function registerMobilePush(
       await PushNotifications.addListener(
         "registration",
         async (token: Token) => {
-          await registerMobileDevice(baseUrl, accessToken, installationId(), {
-            fcm_token: token.value,
-            platform: "android",
-            app_version: appVersion,
-            locale: navigator.language || "zh-CN",
-          }).catch(() => undefined);
+          await registerMobileDevice(
+            baseUrl,
+            accessToken,
+            getInviteInstallationId(),
+            {
+              fcm_token: token.value,
+              platform: "android",
+              app_version: appVersion,
+              locale: navigator.language || "zh-CN",
+            },
+          ).catch(() => undefined);
         },
       ),
       await PushNotifications.addListener("registrationError", () => undefined),
@@ -88,5 +77,5 @@ export async function registerMobilePush(
 }
 
 export function mobileInstallationId() {
-  return typeof window === "undefined" ? "" : installationId();
+  return getInviteInstallationId();
 }

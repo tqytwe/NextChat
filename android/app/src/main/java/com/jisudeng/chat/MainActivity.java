@@ -92,7 +92,8 @@ public class MainActivity extends Activity {
     private final Map<String, HttpURLConnection> streamConnections = new ConcurrentHashMap<>();
     private final Map<String, Boolean> cancelledStreamRequests = new ConcurrentHashMap<>();
     private JSONObject lastSharePayload;
-	private boolean hasResumedOnce = false;
+    private boolean hasResumedOnce = false;
+    private boolean initialIntentsDispatched = false;
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
@@ -119,7 +120,6 @@ public class MainActivity extends Activity {
 
         setContentView(webView);
         webView.loadUrl(LOCAL_ORIGIN + "/");
-        webView.postDelayed(() -> dispatchIncomingShare(getIntent()), 700);
     }
 
     @Override
@@ -127,36 +127,55 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         dispatchIncomingShare(intent);
-		dispatchPaymentReturn(intent);
+        dispatchPaymentReturn(intent);
+        dispatchIncomingDeepLink(intent);
     }
 
-	@Override
-	protected void onResume() {
-		super.onResume();
-		if (hasResumedOnce && webView != null) {
-			webView.post(() -> webView.evaluateJavascript(
-				"window.dispatchEvent(new Event('jisudeng-native-resume'));",
-				null
-			));
-		}
-		hasResumedOnce = true;
-	}
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (hasResumedOnce && webView != null) {
+            webView.post(() -> webView.evaluateJavascript(
+                "window.dispatchEvent(new Event('jisudeng-native-resume'));",
+                null
+            ));
+        }
+        hasResumedOnce = true;
+    }
 
-	private void dispatchPaymentReturn(Intent intent) {
-		if (intent == null || webView == null || !Intent.ACTION_VIEW.equals(intent.getAction())) return;
-		Uri uri = intent.getData();
-		if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return;
-		String host = uri.getHost() == null ? "" : uri.getHost();
-		if (!("jisudeng.com".equalsIgnoreCase(host) || "www.jisudeng.com".equalsIgnoreCase(host))) return;
-		if (!"/payment/result".equals(uri.getPath())) return;
-		try {
-			JSONObject detail = new JSONObject();
-			detail.put("url", uri.toString());
-			String script = "window.dispatchEvent(new CustomEvent('jisudeng-payment-return',{detail:" + detail.toString() + "}));";
-			webView.post(() -> webView.evaluateJavascript(script, null));
-		} catch (JSONException ignored) {
-		}
-	}
+    private void dispatchPaymentReturn(Intent intent) {
+        if (intent == null || webView == null || !Intent.ACTION_VIEW.equals(intent.getAction())) return;
+        Uri uri = intent.getData();
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return;
+        String host = uri.getHost() == null ? "" : uri.getHost();
+        if (!("jisudeng.com".equalsIgnoreCase(host) || "www.jisudeng.com".equalsIgnoreCase(host))) return;
+        if (!"/payment/result".equals(uri.getPath())) return;
+        try {
+            JSONObject detail = new JSONObject();
+            detail.put("url", uri.toString());
+            String script = "window.dispatchEvent(new CustomEvent('jisudeng-payment-return',{detail:" + detail.toString() + "}));";
+            webView.post(() -> webView.evaluateJavascript(script, null));
+        } catch (JSONException ignored) {
+        }
+    }
+
+    private void dispatchIncomingDeepLink(Intent intent) {
+        if (intent == null || webView == null || !Intent.ACTION_VIEW.equals(intent.getAction())) return;
+        Uri uri = intent.getData();
+        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return;
+        String host = uri.getHost() == null ? "" : uri.getHost();
+        if (!("jisudeng.com".equalsIgnoreCase(host) || "www.jisudeng.com".equalsIgnoreCase(host))) return;
+        String path = uri.getPath() == null ? "" : uri.getPath();
+        if (!(path.equals("/register") || path.equals("/affiliate") || path.startsWith("/invite") || path.startsWith("/r/"))) return;
+        try {
+            JSONObject detail = new JSONObject();
+            detail.put("url", uri.toString());
+            detail.put("path", path);
+            String script = "localStorage.setItem('jisudeng-native-pending-invite',JSON.stringify(" + detail.toString() + "));window.dispatchEvent(new CustomEvent('jisudeng-invite-deeplink',{detail:" + detail.toString() + "}));";
+            webView.post(() -> webView.evaluateJavascript(script, null));
+        } catch (JSONException ignored) {
+        }
+    }
 
     @Override
     public void onBackPressed() {
@@ -2021,13 +2040,25 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static class LocalAssetWebViewClient extends WebViewClient {
+    private class LocalAssetWebViewClient extends WebViewClient {
         private final AssetManager assets;
         private final File appImageDir;
 
         LocalAssetWebViewClient(AssetManager assets, File appImageDir) {
             this.assets = assets;
             this.appImageDir = appImageDir;
+        }
+
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            super.onPageFinished(view, url);
+            if (initialIntentsDispatched || url == null || !url.startsWith(LOCAL_ORIGIN)) {
+                return;
+            }
+            initialIntentsDispatched = true;
+            dispatchIncomingDeepLink(getIntent());
+            dispatchPaymentReturn(getIntent());
+            dispatchIncomingShare(getIntent());
         }
 
         @Override

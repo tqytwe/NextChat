@@ -23,15 +23,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-			<intent-filter android:autoVerify="true">
-				<action android:name="android.intent.action.VIEW" />
-				<category android:name="android.intent.category.DEFAULT" />
-				<category android:name="android.intent.category.BROWSABLE" />
-				<data
-					android:scheme="https"
-					android:host="www.jisudeng.com"
-					android:pathPrefix="/payment/result" />
-			</intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="www.jisudeng.com" />
+                <data android:host="jisudeng.com" />
+                <data android:pathPrefix="/payment/result" />
+                <data android:pathPrefix="/register" />
+                <data android:pathPrefix="/affiliate" />
+                <data android:pathPrefix="/invite" />
+                <data android:pathPrefix="/r/" />
+            </intent-filter>
 
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

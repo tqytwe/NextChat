@@ -53,6 +53,7 @@ export const useManagedNextChatStore = createPersistStore<
   {
     setBackendBaseUrl: (url: string) => void;
     clearLastError: () => void;
+    cancel2FA: () => void;
     isAuthenticated: () => boolean;
     login: (
       email: string,
@@ -86,6 +87,10 @@ export const useManagedNextChatStore = createPersistStore<
       return error instanceof Error && error.message ? error.message : fallback;
     }
 
+    function sleep(ms: number) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
     function workspaceHasModel(
       workspaceModels: ManagedWorkspaceBootstrap["models"] | undefined,
       modelName: string | undefined,
@@ -105,6 +110,15 @@ export const useManagedNextChatStore = createPersistStore<
 
       clearLastError() {
         set({ lastError: "" });
+      },
+
+      cancel2FA() {
+        set({
+          pendingTotpToken: "",
+          pendingTotpEmail: "",
+          loading: false,
+          lastError: "",
+        });
       },
 
       isAuthenticated() {
@@ -190,23 +204,38 @@ export const useManagedNextChatStore = createPersistStore<
         if (refreshInFlight) return refreshInFlight;
         refreshInFlight = (async () => {
           try {
-            const auth = await refreshManagedToken(
-              get().backendBaseUrl,
-              get().refreshToken,
-            );
+            let auth: ManagedAuthResponse | null = null;
+            let lastError: unknown = null;
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              try {
+                auth = await refreshManagedToken(
+                  get().backendBaseUrl,
+                  get().refreshToken,
+                );
+                break;
+              } catch (error) {
+                lastError = error;
+                if (isManagedAuthError(error)) break;
+                await sleep(350 * (attempt + 1));
+              }
+            }
+            if (!auth) {
+              throw (
+                lastError || new Error(getManagedMobileText().errors.syncFailed)
+              );
+            }
             get().applyAuth(auth);
             return get().accessToken;
           } catch (error) {
             if (isManagedAuthError(error)) {
               set({
-                accessToken: "",
-                refreshToken: "",
-                accessTokenExpiresAt: "",
-                session: null,
-                imageSession: null,
-                workspace: null,
+                lastError: get().accessToken
+                  ? ""
+                  : getManagedMobileText().errors.authRecovering,
+                loading: false,
               });
             }
+            if (get().accessToken) return get().accessToken;
             throw error;
           } finally {
             refreshInFlight = null;
@@ -276,14 +305,18 @@ export const useManagedNextChatStore = createPersistStore<
               groupID,
             );
           };
-          let bootstrap: ManagedMobileBootstrap;
+          let bootstrap: ManagedMobileBootstrap | null;
           try {
             bootstrap = await requestSwitch();
           } catch (error) {
             if (!isManagedAuthError(error) || !get().refreshToken) throw error;
             bootstrap = await requestSwitch(true);
           }
-          get().applyBootstrap(bootstrap);
+          if (bootstrap) {
+            get().applyBootstrap(bootstrap);
+          } else {
+            await get().bootstrap({ silent: true });
+          }
         } catch (error) {
           set({
             loading: false,

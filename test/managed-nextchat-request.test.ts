@@ -24,6 +24,7 @@ const {
   managedJsonRequest,
   shouldRefreshManagedSession,
   shouldRefreshManagedToken,
+  switchManagedChatGroupCompatible,
   switchManagedImageGroupCompatible,
 } = await import("../app/client/managed-nextchat");
 
@@ -79,6 +80,11 @@ describe("managed NextChat API requests", () => {
         text: () => Promise.resolve("404 page not found"),
       } as Response)
       .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve("404 page not found"),
+      } as Response)
+      .mockResolvedValueOnce({
         ok: true,
         status: 200,
         text: () =>
@@ -100,11 +106,90 @@ describe("managed NextChat API requests", () => {
 
     expect(window.fetch).toHaveBeenNthCalledWith(
       1,
-      "https://api.jisudeng.com/api/v1/nextchat/mobile/sessions/image/group",
+      "https://api.jisudeng.com/api/v1/mobile/sessions/image/switch-group",
       expect.anything(),
     );
     expect(window.fetch).toHaveBeenNthCalledWith(
       2,
+      "https://api.jisudeng.com/api/v1/nextchat/mobile/sessions/image/group",
+      expect.anything(),
+    );
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      3,
+      "https://api.jisudeng.com/api/v1/nextchat/mobile/group",
+      expect.anything(),
+    );
+  });
+
+  test("uses canonical chat session group switching before legacy routes", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ code: 0, data: {} })),
+    } as Response);
+
+    await expect(
+      switchManagedChatGroupCompatible(
+        "https://api.jisudeng.com",
+        "access-token",
+        8,
+      ),
+    ).resolves.toBeNull();
+
+    expect(window.fetch).toHaveBeenCalledWith(
+      "https://api.jisudeng.com/api/v1/mobile/sessions/chat/switch-group",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ group_id: 8 }),
+      }),
+    );
+  });
+
+  test("falls back to old chat session then shared group route", async () => {
+    jest
+      .mocked(window.fetch)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve("404 page not found"),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve("404 page not found"),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              code: 0,
+              data: { session: { api_key: "legacy-chat" } },
+            }),
+          ),
+      } as Response);
+
+    await expect(
+      switchManagedChatGroupCompatible(
+        "https://api.jisudeng.com",
+        "access-token",
+        9,
+      ),
+    ).resolves.toMatchObject({ session: { api_key: "legacy-chat" } });
+
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://api.jisudeng.com/api/v1/mobile/sessions/chat/switch-group",
+      expect.anything(),
+    );
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://api.jisudeng.com/api/v1/nextchat/mobile/sessions/chat/group",
+      expect.anything(),
+    );
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      3,
       "https://api.jisudeng.com/api/v1/nextchat/mobile/group",
       expect.anything(),
     );
