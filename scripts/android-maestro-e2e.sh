@@ -4,7 +4,8 @@ set -euo pipefail
 SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/dell/Android/Sdk}}"
 ADB="${ADB:-$SDK_ROOT/platform-tools/adb}"
 MAESTRO="${MAESTRO:-/home/codex/.maestro/bin/maestro}"
-APK_PATH="${ANDROID_E2E_APK_PATH:-android/app/build/outputs/apk/release/app-release.apk}"
+# The checked-in public artifact is the only installable release handoff.
+APK_PATH="${ANDROID_E2E_APK_PATH:-public/downloads/jisudengchat-android.apk}"
 PACKAGE_NAME="${ANDROID_PACKAGE_NAME:-com.jisudeng.chat}"
 MAIN_ACTIVITY="${ANDROID_MAIN_ACTIVITY:-.MainActivity}"
 REFERENCE_IMAGE="${ANDROID_E2E_REFERENCE_IMAGE:-public/android-chrome-192x192.png}"
