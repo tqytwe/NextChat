@@ -229,6 +229,18 @@ describe("mobile app backend alignment", () => {
     expect(refreshAccountData).toContain("mergeSubscriptionProgress(");
   });
 
+  test("keeps logout available while the account bootstrap is still loading", () => {
+    const account = source.slice(
+      source.indexOf("function AndroidAccountSettings()"),
+      source.indexOf("function useMobileCrashLog()"),
+    );
+    const logoutButton = account.slice(
+      account.indexOf('aria-label="account-logout"'),
+      account.indexOf("{showLogoutConfirm &&"),
+    );
+    expect(logoutButton).not.toContain("disabled={managed.loading}");
+  });
+
   test("does not erase the saved default group before workspace models load", () => {
     const dashboard = source.slice(
       source.indexOf("function AndroidDashboard()"),

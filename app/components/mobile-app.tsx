@@ -16652,7 +16652,6 @@ function AndroidAccountSettings() {
         className={styles["danger-action"]}
         aria-label="account-logout"
         onClick={() => setShowLogoutConfirm(true)}
-        disabled={managed.loading}
       >
         {text.account.logout}
       </button>
