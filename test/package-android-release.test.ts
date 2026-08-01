@@ -142,6 +142,21 @@ describe("Android release package version gate", () => {
     );
   });
 
+  test("allows staged and unstaged release artifacts without masking source changes", () => {
+    const fixture = createFixture();
+    const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf-8"));
+    writeJson(fixture.manifestPath, { ...manifest, notes: ["staged"] });
+    git(fixture.root, ["add", "public/downloads/android-version.json"]);
+    writeFileSync(fixture.publishedApk, "locally rebuilt APK bytes");
+
+    const result = packageRelease(fixture, {
+      ANDROID_VERSION_NAME: "2.0.66",
+      ANDROID_VERSION_CODE: "266",
+    });
+
+    expect(result.status).toBe(0);
+  });
+
   test("rejects an environment version mismatch before replacing public files", () => {
     const fixture = createFixture();
     const originalManifest = readFileSync(fixture.manifestPath, "utf-8");

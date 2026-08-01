@@ -42,7 +42,13 @@ function gitOutput(args) {
 }
 
 function assertReleaseSourceIsClean() {
-  const dirtyPaths = gitOutput(["status", "--porcelain=v1"])
+  // Do not trim the complete porcelain output: a leading space is meaningful
+  // for an unstaged first entry and trimming it corrupts that file's path.
+  const statusOutput = execFileSync("git", ["status", "--porcelain=v1"], {
+    cwd: root,
+    encoding: "utf-8",
+  });
+  const dirtyPaths = statusOutput
     .split("\n")
     .filter(Boolean)
     .map((line) => line.slice(3).trim())
