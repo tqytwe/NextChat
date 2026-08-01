@@ -3948,6 +3948,411 @@
   }
 }
 
+.welfare-perk-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+
+  > span,
+  small {
+    color: var(--ios-gray);
+    font-size: 12px;
+    font-weight: 850;
+  }
+
+  > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  small {
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: rgba(0, 122, 255, 0.1);
+    color: var(--ios-blue);
+  }
+}
+
+.welfare-vip-tier-list {
+  display: grid;
+  gap: 0;
+  margin-top: 14px;
+
+  h3 {
+    margin: 0 0 5px;
+    color: var(--black);
+    font-size: 14px;
+    font-weight: 950;
+  }
+
+  > div {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 42px;
+    border-bottom: var(--border-in-light);
+  }
+
+  .active {
+    color: var(--ios-blue);
+  }
+
+  strong {
+    font-size: 13px;
+    font-weight: 950;
+  }
+
+  span,
+  small {
+    overflow-wrap: anywhere;
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  small {
+    text-align: right;
+  }
+}
+
+.welfare-activity-list {
+  display: grid;
+  gap: 0;
+
+  > div {
+    display: grid;
+    gap: 4px;
+    min-height: 50px;
+    padding: 9px 0;
+    border-bottom: var(--border-in-light);
+  }
+
+  strong {
+    overflow-wrap: anywhere;
+    color: var(--black);
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  small {
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.35;
+  }
+}
+
+.welfare-rank-list {
+  display: grid;
+  gap: 0;
+  margin-top: 10px;
+
+  > div {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 50px;
+    border-bottom: var(--border-in-light);
+  }
+
+  .is-me {
+    color: var(--ios-blue);
+  }
+
+  strong {
+    font-size: 13px;
+    font-weight: 950;
+  }
+
+  span {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  b {
+    overflow-wrap: anywhere;
+    color: var(--black);
+    font-size: 13px;
+    font-weight: 900;
+  }
+
+  small,
+  em {
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 800;
+  }
+
+  em {
+    max-width: 92px;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+}
+
+.welfare-team-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+
+  h3 {
+    margin: 0;
+    color: var(--black);
+    font-size: 14px;
+    font-weight: 950;
+  }
+
+  span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-weight: 850;
+    text-align: right;
+  }
+}
+
+.welfare-team-status,
+.welfare-team-application,
+.welfare-team-captain-controls {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: var(--border-in-light);
+}
+
+.welfare-team-status {
+  strong {
+    color: var(--black);
+    font-size: 13px;
+    font-weight: 950;
+  }
+
+  span,
+  small {
+    color: var(--ios-gray);
+    font-size: 12px;
+    font-weight: 850;
+    line-height: 1.4;
+  }
+}
+
+.welfare-team-application {
+  > strong {
+    color: var(--black);
+    font-size: 14px;
+    font-weight: 950;
+  }
+
+  textarea {
+    min-height: 72px;
+  }
+}
+
+.welfare-team-action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  button {
+    min-width: 0;
+    min-height: 42px;
+    padding: 8px;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+}
+
+.welfare-team-directory {
+  display: grid;
+  gap: 0;
+  margin-top: 10px;
+
+  article {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 68px;
+    padding: 10px 0;
+    border-bottom: var(--border-in-light);
+  }
+
+  article > div {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  strong {
+    overflow-wrap: anywhere;
+    color: var(--black);
+    font-size: 13px;
+    font-weight: 950;
+  }
+
+  span,
+  small {
+    overflow-wrap: anywhere;
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-weight: 850;
+    line-height: 1.35;
+  }
+
+  button {
+    width: 76px;
+    min-height: 36px;
+    border: 0;
+    border-radius: 8px;
+    padding: 7px 8px;
+    background: var(--ios-blue);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 950;
+    overflow-wrap: anywhere;
+
+    &:disabled {
+      background: var(--gray);
+      color: var(--ios-gray);
+    }
+  }
+}
+
+.welfare-team-invite {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--gray);
+
+  > span {
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-weight: 850;
+  }
+
+  code {
+    overflow-wrap: anywhere;
+    color: var(--black);
+    font-size: 12px;
+    font-weight: 900;
+  }
+
+  button {
+    min-height: 38px;
+    font-size: 12px;
+  }
+}
+
+.welfare-team-captain-queue {
+  display: grid;
+  gap: 0;
+
+  article {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 62px;
+    padding: 10px 0;
+    border-bottom: var(--border-in-light);
+  }
+
+  article > div:first-child {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  article > div:last-child {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  strong {
+    overflow-wrap: anywhere;
+    color: var(--black);
+    font-size: 13px;
+    font-weight: 950;
+  }
+
+  span,
+  small {
+    overflow-wrap: anywhere;
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-weight: 850;
+    line-height: 1.35;
+  }
+
+  button {
+    min-width: 42px;
+    min-height: 34px;
+    border: 0;
+    border-radius: 8px;
+    padding: 6px;
+    background: rgba(0, 122, 255, 0.12);
+    color: var(--ios-blue);
+    font-size: 11px;
+    font-weight: 950;
+
+    &:last-child {
+      background: rgba(255, 59, 48, 0.1);
+      color: var(--ios-red);
+    }
+  }
+}
+
+.welfare-team-season-picker {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+
+  button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    border: var(--border-in-light);
+    border-radius: 8px;
+    padding: 6px 10px;
+    background: var(--gray);
+    color: var(--black);
+    font-size: 12px;
+    font-weight: 900;
+
+    &.active {
+      border-color: var(--ios-blue);
+      background: rgba(0, 122, 255, 0.12);
+      color: var(--ios-blue);
+    }
+  }
+}
+
+.welfare-team-season-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-top: 12px;
+
+  span {
+    color: var(--ios-gray);
+    font-size: 11px;
+    font-weight: 850;
+  }
+}
+
 @media (max-height: 680px) {
   .login-screen {
     padding-top: calc(env(safe-area-inset-top) + 34px);

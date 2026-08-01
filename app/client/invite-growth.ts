@@ -125,6 +125,35 @@ export function buildCanonicalRegistrationPayload(
   };
 }
 
+export interface MobileRegistrationPayloadInput {
+  email: string;
+  password: string;
+  verifyCode: string;
+  promoCode: string;
+  invitationCode: string;
+  referral?: InviteReferral | null;
+}
+
+// Keep the legacy invite aliases while always sending the backend-owned fields
+// that establish affiliate and campaign attribution.
+export function buildMobileRegistrationPayload(
+  input: MobileRegistrationPayloadInput,
+) {
+  const promoCode = input.promoCode.trim();
+  const invitationCode = input.invitationCode.trim();
+  return {
+    email: input.email.trim(),
+    password: input.password,
+    verify_code: input.verifyCode.trim(),
+    promo_code: promoCode,
+    coupon_code: promoCode,
+    invitation_code: invitationCode,
+    invite_code: invitationCode,
+    referral_code: invitationCode,
+    ...buildCanonicalRegistrationPayload(input.referral || null),
+  };
+}
+
 function randomUuid() {
   const bytes = new Uint8Array(16);
   if (typeof crypto !== "undefined" && crypto.getRandomValues) {

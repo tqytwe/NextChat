@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, jest, test } from "@jest/globals";
+import { readFileSync } from "node:fs";
 
 const managedJsonRequest = jest.fn<(...args: unknown[]) => Promise<unknown>>();
 
@@ -59,6 +60,50 @@ describe("invite growth client", () => {
     expect(growth.buildCanonicalRegistrationPayload(referral)).toEqual({
       invite_token: signedToken,
     });
+  });
+
+  test("passes stored APP QR referral data to mobile registration with legacy aliases", () => {
+    const referral = growth.captureInviteReferral(
+      "https://www.jisudeng.com/download/android?aff_code=AFF-APP&campaign_id=august-invite&invite_token=signed-token",
+      5_000,
+    );
+    growth.storeInviteReferral(referral);
+
+    expect(
+      growth.buildMobileRegistrationPayload({
+        email: " invited@example.com ",
+        password: "secret-123",
+        verifyCode: " 123456 ",
+        promoCode: " AUGUST ",
+        invitationCode: " LEGACY-INVITE ",
+        referral: growth.loadInviteReferral(6_000),
+      }),
+    ).toEqual({
+      email: "invited@example.com",
+      password: "secret-123",
+      verify_code: "123456",
+      promo_code: "AUGUST",
+      coupon_code: "AUGUST",
+      invitation_code: "LEGACY-INVITE",
+      invite_code: "LEGACY-INVITE",
+      referral_code: "LEGACY-INVITE",
+      aff_code: "AFF-APP",
+      campaign_id: "august-invite",
+      invite_token: "signed-token",
+    });
+  });
+
+  test("allows a token-only referral in the mobile registration payload", () => {
+    expect(
+      growth.buildMobileRegistrationPayload({
+        email: "new@example.com",
+        password: "secret-123",
+        verifyCode: "123456",
+        promoCode: "",
+        invitationCode: "",
+        referral: growth.captureInviteReferral("?invite_token=signed-token"),
+      }),
+    ).toMatchObject({ invite_token: "signed-token" });
   });
 
   test("stores a stable installation id and creates attribution event payloads", () => {
@@ -143,4 +188,44 @@ describe("invite growth client", () => {
       expect(payload.appQrValue).toContain("/download/android");
     },
   );
+
+  test("keeps the signed campaign attribution in both poster QR destinations", () => {
+    const payload = growth.buildInvitePosterPayload({
+      registerUrl:
+        "https://www.jisudeng.com/register?aff_code=AFF&campaign_id=8&invite_token=signed-token",
+      appUrl:
+        "https://www.jisudeng.com/download/android?aff_code=AFF&campaign_id=8&invite_token=signed-token",
+      headline: "邀请好友，解锁活动奖励",
+      body: "好友完成充值与消费后计为有效邀请。",
+      locale: "zh-CN",
+    });
+
+    const register = new URL(payload.registerQrValue);
+    const app = new URL(payload.appQrValue);
+    expect(register.pathname).toBe("/register");
+    expect(app.pathname).toBe("/download/android");
+    for (const url of [register, app]) {
+      expect(url.searchParams.get("aff_code")).toBe("AFF");
+      expect(url.searchParams.get("campaign_id")).toBe("8");
+      expect(url.searchParams.get("invite_token")).toBe("signed-token");
+    }
+  });
+
+  test("Android accepts the APP download QR as an invite deep link", () => {
+    const manifest = readFileSync(
+      new URL("../android/app/src/main/AndroidManifest.xml", import.meta.url),
+      "utf8",
+    );
+    const activity = readFileSync(
+      new URL(
+        "../android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    expect(manifest).toContain('android:pathPrefix="/download/android"');
+    expect(activity).toContain('path.equals("/download/android")');
+    expect(activity).toContain("jisudeng-native-pending-invite");
+  });
 });

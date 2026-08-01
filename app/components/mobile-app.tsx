@@ -104,7 +104,7 @@ import {
 } from "../client/mobile-platform";
 import { registerMobilePush } from "../client/mobile-push";
 import {
-  buildCanonicalRegistrationPayload,
+  buildMobileRegistrationPayload,
   buildInvitePosterPayload,
   attributeInviteCampaign,
   captureInviteReferral,
@@ -121,6 +121,17 @@ import type {
   InviteCampaignReward,
   InvitePosterTheme,
 } from "../client/invite-growth";
+import {
+  loadPlayWelfareData,
+  loadPlayWelfareTeamSeason,
+  PLAY_WELFARE_TEAM_ENDPOINTS,
+} from "../client/play-welfare";
+import type {
+  PlayWelfareData,
+  PlayWelfareTeamDirectoryEntry,
+  PlayWelfareTeamInvite,
+  PlayWelfareTeamSeasonDetail,
+} from "../client/play-welfare";
 import type {
   MobileAsset,
   MobileSkill,
@@ -3080,28 +3091,26 @@ function AndroidLogin() {
           "/api/v1/auth/mobile/register",
           {
             method: "POST",
-            body: JSON.stringify({
-              email: email.trim(),
-              password,
-              verify_code: verifyCode.trim(),
-              promo_code: promoCode.trim(),
-              coupon_code: promoCode.trim(),
-              invitation_code: invitationCode.trim(),
-              invite_code: invitationCode.trim(),
-              referral_code: invitationCode.trim(),
-              ...buildCanonicalRegistrationPayload(
-                affiliateCode || affiliateToken
-                  ? {
-                      ...(affiliateCode ? { aff_code: affiliateCode } : {}),
-                      ...(affiliateCampaign
-                        ? { campaign_id: affiliateCampaign }
-                        : {}),
-                      ...(affiliateToken ? { token: affiliateToken } : {}),
-                      expires_at: Date.now() + 60_000,
-                    }
-                  : null,
-              ),
-            }),
+            body: JSON.stringify(
+              buildMobileRegistrationPayload({
+                email,
+                password,
+                verifyCode,
+                promoCode,
+                invitationCode,
+                referral:
+                  affiliateCode || affiliateToken
+                    ? {
+                        ...(affiliateCode ? { aff_code: affiliateCode } : {}),
+                        ...(affiliateCampaign
+                          ? { campaign_id: affiliateCampaign }
+                          : {}),
+                        ...(affiliateToken ? { token: affiliateToken } : {}),
+                        expires_at: Date.now() + 60_000,
+                      }
+                    : null,
+              }),
+            ),
             headers: { "Accept-Language": text.dateLocale },
           },
         );
@@ -9764,6 +9773,20 @@ function AndroidAccountSettings() {
     useState<InvitePosterTheme>("midnight");
   const [inviteRewardBusy, setInviteRewardBusy] = useState<number | null>(null);
   const [inviteError, setInviteError] = useState("");
+  const [welfareData, setWelfareData] = useState<PlayWelfareData | null>(null);
+  const [welfareLoading, setWelfareLoading] = useState(false);
+  const [welfareError, setWelfareError] = useState("");
+  const [teamActionBusy, setTeamActionBusy] = useState<string | null>(null);
+  const [teamActionMessage, setTeamActionMessage] = useState("");
+  const [teamActionError, setTeamActionError] = useState("");
+  const [teamApplicationTarget, setTeamApplicationTarget] =
+    useState<PlayWelfareTeamDirectoryEntry | null>(null);
+  const [teamApplicationMessage, setTeamApplicationMessage] = useState("");
+  const [teamHistoryMonth, setTeamHistoryMonth] = useState("");
+  const [teamSeasonDetail, setTeamSeasonDetail] =
+    useState<PlayWelfareTeamSeasonDetail | null>(null);
+  const [teamSeasonLoading, setTeamSeasonLoading] = useState(false);
+  const [teamSeasonError, setTeamSeasonError] = useState("");
   const [supportTickets, setSupportTickets] = useState<MobileSupportTicket[]>(
     [],
   );
@@ -9775,6 +9798,7 @@ function AndroidAccountSettings() {
   const downloadPollRef = useRef<number | null>(null);
   const paymentFeedbackRef = useRef<HTMLDivElement | null>(null);
   const feedbackFileInputRef = useRef<HTMLInputElement | null>(null);
+  const teamSeasonRequestRef = useRef(0);
   const selectedOrderID = useMemo(
     () => new URLSearchParams(location.search).get("id") || "",
     [location.search],
@@ -9843,60 +9867,302 @@ function AndroidAccountSettings() {
     return url.toString();
   }, [clientConfig, inviteSummary]);
 
-  const refreshInviteGrowth = useCallback(async () => {
-    if (!managed.accessToken) return;
-    setInviteLoading(true);
-    setInviteError("");
-    try {
-      const affiliate = await managedAuthenticatedJsonRequest<{
-        aff_code?: string;
-      }>("/api/v1/user/aff");
-      const campaigns = await managedAuthenticatedJsonRequest<
-        InviteCampaignProgress[]
-      >("/api/v1/user/aff/campaigns");
-      const campaign =
-        (campaigns || []).find(
-          (item) => item?.campaign?.status === "running",
-        ) ||
-        campaigns?.[0] ||
-        null;
-      setInviteCampaign(campaign);
-      let attributionToken = "";
-      if (campaign?.enrollment?.campaign_id) {
-        const tokenResult = await managedAuthenticatedJsonRequest<{
-          token?: string;
-        }>(`/api/v1/user/aff/campaigns/${campaign.campaign.id}/invite-token`);
-        attributionToken = tokenResult?.token || "";
+  const refreshInviteGrowth = useCallback(
+    async (includeShareToken = false) => {
+      if (!managed.accessToken) return;
+      setInviteLoading(true);
+      setInviteError("");
+      try {
+        const [affiliate, campaigns] = await Promise.all([
+          managedAuthenticatedJsonRequest<{ aff_code?: string }>(
+            "/api/v1/user/aff",
+          ),
+          managedAuthenticatedJsonRequest<InviteCampaignProgress[]>(
+            "/api/v1/user/aff/campaigns",
+          ),
+        ]);
+        const campaign =
+          (campaigns || []).find(
+            (item) => item?.campaign?.status === "running",
+          ) ||
+          campaigns?.[0] ||
+          null;
+        setInviteCampaign(campaign);
+        let attributionToken = "";
+        if (includeShareToken && campaign?.enrollment?.campaign_id) {
+          const tokenResult = await managedAuthenticatedJsonRequest<{
+            token?: string;
+          }>(`/api/v1/user/aff/campaigns/${campaign.campaign.id}/invite-token`);
+          attributionToken = tokenResult?.token || "";
+        }
+        setInviteSummary(
+          affiliate?.aff_code
+            ? {
+                aff_code: affiliate.aff_code,
+                ...(campaign?.campaign?.id
+                  ? { campaign_id: String(campaign.campaign.id) }
+                  : {}),
+                ...(attributionToken
+                  ? { attribution_token: attributionToken }
+                  : {}),
+              }
+            : null,
+        );
+      } catch {
+        setInviteSummary(null);
+        setInviteCampaign(null);
+        setInviteError(text.account.inviteGrowthUnavailable);
+      } finally {
+        setInviteLoading(false);
       }
-      setInviteSummary(
-        affiliate?.aff_code
-          ? {
-              aff_code: affiliate.aff_code,
-              ...(campaign?.campaign?.id
-                ? { campaign_id: String(campaign.campaign.id) }
-                : {}),
-              ...(attributionToken
-                ? { attribution_token: attributionToken }
-                : {}),
-            }
-          : null,
-      );
-    } catch {
-      setInviteSummary(null);
-      setInviteCampaign(null);
-      setInviteError(text.account.inviteGrowthUnavailable);
-    } finally {
-      setInviteLoading(false);
-    }
-  }, [managed.accessToken, text.account.inviteGrowthUnavailable]);
+    },
+    [managed.accessToken, text.account.inviteGrowthUnavailable],
+  );
 
   useEffect(() => {
-    let disposed = false;
-    if (!disposed) void refreshInviteGrowth();
-    return () => {
-      disposed = true;
-    };
-  }, [refreshInviteGrowth]);
+    if (route !== Path.AccountInvite && route !== Path.AccountWelfare) return;
+    void refreshInviteGrowth(route === Path.AccountInvite);
+  }, [route, refreshInviteGrowth]);
+
+  const refreshWelfare = useCallback(async () => {
+    if (!managed.accessToken) {
+      setWelfareData(null);
+      setWelfareError(text.errors.loginRequired);
+      return;
+    }
+    setWelfareLoading(true);
+    setWelfareError("");
+    try {
+      const data = await loadPlayWelfareData(
+        managedAuthenticatedJsonRequest,
+        workspace?.user?.id || managed.user?.id,
+      );
+      setWelfareData(data);
+      if (data.unavailable.length >= 6) {
+        setWelfareError(text.account.welfareUnavailable);
+      } else if (data.unavailable.length) {
+        setWelfareError(
+          text.account.welfarePartialUnavailable(data.unavailable.length),
+        );
+      }
+    } catch {
+      setWelfareData(null);
+      setWelfareError(text.account.welfareUnavailable);
+    } finally {
+      setWelfareLoading(false);
+    }
+  }, [
+    managed.accessToken,
+    managed.user?.id,
+    text.account.welfarePartialUnavailable,
+    text.account.welfareUnavailable,
+    text.errors.loginRequired,
+    workspace?.user?.id,
+  ]);
+
+  useEffect(() => {
+    if (route !== Path.AccountWelfare) return;
+    void refreshWelfare();
+  }, [route, refreshWelfare]);
+
+  const refreshTeamSeason = useCallback(
+    async (month: string) => {
+      if (!month || !managed.accessToken) return;
+      const requestID = ++teamSeasonRequestRef.current;
+      setTeamSeasonLoading(true);
+      setTeamSeasonError("");
+      setTeamSeasonDetail(null);
+      try {
+        const detail = await loadPlayWelfareTeamSeason(
+          managedAuthenticatedJsonRequest,
+          month,
+        );
+        if (requestID === teamSeasonRequestRef.current) {
+          setTeamSeasonDetail(detail);
+        }
+      } catch {
+        if (requestID === teamSeasonRequestRef.current) {
+          setTeamSeasonError(text.account.welfareTeamSeasonUnavailable);
+        }
+      } finally {
+        if (requestID === teamSeasonRequestRef.current) {
+          setTeamSeasonLoading(false);
+        }
+      }
+    },
+    [managed.accessToken, text.account.welfareTeamSeasonUnavailable],
+  );
+
+  useEffect(() => {
+    if (route !== Path.AccountWelfare) return;
+    const seasons = welfareData?.teamSeasons || [];
+    if (!seasons.length) {
+      setTeamHistoryMonth("");
+      setTeamSeasonDetail(null);
+      return;
+    }
+    setTeamHistoryMonth((current) =>
+      seasons.some((season) => season.month === current)
+        ? current
+        : seasons[0].month,
+    );
+  }, [route, welfareData?.teamSeasons]);
+
+  useEffect(() => {
+    if (route !== Path.AccountWelfare || !teamHistoryMonth) return;
+    void refreshTeamSeason(teamHistoryMonth);
+  }, [route, refreshTeamSeason, teamHistoryMonth]);
+
+  function welfareTeamError(error: unknown, fallback: string) {
+    if (!(error instanceof Error) || !error.message) return fallback;
+    const apiError = error instanceof ManagedApiError ? error : undefined;
+    const raw = `${apiError?.code || ""} ${error.message}`.trim();
+    const localized = localizeManagedMobileError({
+      message: raw,
+      status: apiError?.status,
+      path: apiError?.path,
+    });
+    return localized === raw || localized === error.message
+      ? fallback
+      : localized;
+  }
+
+  async function submitTeamApplication() {
+    if (!teamApplicationTarget || teamActionBusy) return;
+    setTeamActionBusy("application");
+    setTeamActionMessage("");
+    setTeamActionError("");
+    try {
+      await managedAuthenticatedJsonRequest(
+        PLAY_WELFARE_TEAM_ENDPOINTS.application,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            team_id: teamApplicationTarget.team_id,
+            message: teamApplicationMessage.trim(),
+          }),
+        },
+      );
+      setTeamApplicationTarget(null);
+      setTeamApplicationMessage("");
+      setTeamActionMessage(text.account.welfareTeamApplicationSubmitted);
+      await refreshWelfare();
+    } catch (error) {
+      setTeamActionError(
+        welfareTeamError(error, text.account.welfareTeamApplicationFailed),
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  }
+
+  async function decideTeamApplication(
+    applicationID: number,
+    decision: "approve" | "reject",
+  ) {
+    if (teamActionBusy) return;
+    setTeamActionBusy(`decision-${applicationID}`);
+    setTeamActionMessage("");
+    setTeamActionError("");
+    try {
+      await managedAuthenticatedJsonRequest(
+        `${PLAY_WELFARE_TEAM_ENDPOINTS.application}/${applicationID}/decision`,
+        {
+          method: "POST",
+          body: JSON.stringify({ decision }),
+        },
+      );
+      setTeamActionMessage(
+        decision === "approve"
+          ? text.account.welfareTeamApplicationApproved
+          : text.account.welfareTeamApplicationRejected,
+      );
+      await refreshWelfare();
+    } catch (error) {
+      setTeamActionError(
+        welfareTeamError(error, text.account.welfareTeamDecisionFailed),
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  }
+
+  async function updateTeamRecruiting(recruiting: boolean) {
+    if (teamActionBusy) return;
+    setTeamActionBusy("recruiting");
+    setTeamActionMessage("");
+    setTeamActionError("");
+    try {
+      await managedAuthenticatedJsonRequest(
+        PLAY_WELFARE_TEAM_ENDPOINTS.recruiting,
+        {
+          method: "PUT",
+          body: JSON.stringify({ recruiting }),
+        },
+      );
+      setTeamActionMessage(text.account.welfareTeamRecruitingUpdated);
+      await refreshWelfare();
+    } catch (error) {
+      setTeamActionError(
+        welfareTeamError(error, text.account.welfareTeamRecruitingFailed),
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  }
+
+  async function rotateTeamInvite() {
+    if (teamActionBusy) return;
+    setTeamActionBusy("invite");
+    setTeamActionMessage("");
+    setTeamActionError("");
+    try {
+      const invite =
+        await managedAuthenticatedJsonRequest<PlayWelfareTeamInvite>(
+          PLAY_WELFARE_TEAM_ENDPOINTS.inviteRotate,
+          { method: "POST" },
+        );
+      setWelfareData((current) => {
+        if (!current?.teamMe?.team) return current;
+        return {
+          ...current,
+          teamMe: {
+            ...current.teamMe,
+            team: { ...current.teamMe.team, invite_code: invite.invite_code },
+          },
+        };
+      });
+      setTeamActionMessage(text.account.welfareTeamInviteRotated);
+      await refreshWelfare();
+    } catch (error) {
+      setTeamActionError(
+        welfareTeamError(error, text.account.welfareTeamInviteRotateFailed),
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  }
+
+  async function shareTeamInvite() {
+    const team = welfareData?.teamMe?.team;
+    if (!team?.invite_code || teamActionBusy) return;
+    setTeamActionBusy("share-invite");
+    setTeamActionMessage("");
+    setTeamActionError("");
+    try {
+      await shareText(
+        text.account.welfareTeamInviteShareText(team.name, team.invite_code),
+        text.account.welfareTeamInviteCode,
+      );
+      setTeamActionMessage(text.account.welfareTeamInviteShared);
+    } catch (error) {
+      setTeamActionError(
+        welfareTeamError(error, text.account.welfareTeamInviteShareFailed),
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  }
 
   async function enrollInviteCampaign() {
     if (!inviteCampaign?.campaign?.id || inviteLoading) return;
@@ -9908,7 +10174,7 @@ function AndroidAccountSettings() {
         `/api/v1/user/aff/campaigns/${inviteCampaign.campaign.id}/enroll`,
         { method: "POST" },
       );
-      await refreshInviteGrowth();
+      await refreshInviteGrowth(true);
       setInviteMessage(text.account.inviteGrowthEnrolled);
     } catch {
       setInviteError(text.account.inviteGrowthUnavailable);
@@ -9932,7 +10198,7 @@ function AndroidAccountSettings() {
           }),
         },
       );
-      await refreshInviteGrowth();
+      await refreshInviteGrowth(true);
       setInviteMessage(text.account.inviteGrowthClaimed);
     } catch {
       setInviteError(text.account.inviteGrowthClaimFailed);
@@ -12283,6 +12549,665 @@ function AndroidAccountSettings() {
     );
   }
 
+  if (route === Path.AccountWelfare) {
+    const growth = welfareData?.hub?.growth;
+    const vip = growth?.vip;
+    const vipTiers = [...(growth?.vip_tiers || [])].sort((left, right) =>
+      left.min_recharge === right.min_recharge
+        ? left.tier - right.tier
+        : left.min_recharge - right.min_recharge,
+    );
+    const vipPerkLabels = text.account.vipPerkLabels as Record<string, string>;
+    const publicTeamRows = welfareData?.teamPublicLeaderboard?.rows || [];
+    const privateTeamRows = welfareData?.teamLeaderboard?.rows || [];
+    const team = welfareData?.teamMe?.team;
+    const myTeam = privateTeamRows.find((row) => row.is_mine);
+    const teamAdmission = welfareData?.teamAdmission;
+    const pendingTeamApplication = (welfareData?.teamMyApplications || []).find(
+      (application) => application.status === "pending",
+    );
+    const pendingCaptainApplications = (
+      welfareData?.teamCaptainApplications || []
+    ).filter((application) => application.status === "pending");
+    const isTeamCaptain = !!team?.is_captain && !!team.can_manage;
+    const teamApplicationStatuses = text.account
+      .welfareTeamApplicationStatuses as Record<string, string>;
+    const arenaRows = welfareData?.arenaLeaderboard?.rows || [];
+    const inviteQualified = inviteCampaign?.qualified_count || 0;
+    const inviteRank = inviteCampaign?.ranking?.rank;
+
+    return (
+      <AndroidDetailShell
+        title={text.account.welfare}
+        subtitle={text.account.welfareHint}
+        text={text}
+        onRefresh={() => {
+          void refreshWelfare();
+          void refreshInviteGrowth(false);
+        }}
+      >
+        {welfareError && (
+          <div className={styles["form-error"]}>{welfareError}</div>
+        )}
+        {welfareLoading && !welfareData ? (
+          <div className={styles["sync-notice"]}>
+            {text.account.welfareLoading}
+          </div>
+        ) : (
+          <>
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareMemberBenefits}</h2>
+                <span>{vip?.label || text.account.welfareNotMember}</span>
+              </div>
+              {growth ? (
+                <>
+                  <div className={styles["meta-list"]}>
+                    <div className={styles["meta-row"]}>
+                      <span>{text.account.welfareCurrentVIP}</span>
+                      <strong>
+                        {vip?.label || text.account.welfareNotMember}
+                      </strong>
+                    </div>
+                    <div className={styles["meta-row"]}>
+                      <span>{text.account.welfareMemberPaid}</span>
+                      <strong>
+                        {formatMoney(growth.membership_paid_amount)}
+                      </strong>
+                    </div>
+                    <div className={styles["meta-row"]}>
+                      <span>{text.account.welfareNextVIP}</span>
+                      <strong>
+                        {vip?.next_label
+                          ? `${vip.next_label} ${formatMoney(
+                              vip.amount_to_next,
+                            )}`
+                          : text.account.welfareTopVIP}
+                      </strong>
+                    </div>
+                  </div>
+                  {vip?.perks?.length ? (
+                    <div className={styles["welfare-perk-list"]}>
+                      <span>{text.account.welfarePerks}</span>
+                      <div>
+                        {vip.perks.map((perk) => (
+                          <small key={perk}>
+                            {vipPerkLabels[perk] ||
+                              text.account.welfarePerkGeneric}
+                          </small>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {vipTiers.length ? (
+                    <div className={styles["welfare-vip-tier-list"]}>
+                      <h3>{text.account.welfareVIPLevels}</h3>
+                      {vipTiers.map((tier) => (
+                        <div
+                          key={tier.tier}
+                          className={clsx({
+                            [styles["active"]]: tier.tier === vip?.tier,
+                          })}
+                        >
+                          <strong>{tier.label}</strong>
+                          <span>
+                            {text.account.welfareTierThreshold}{" "}
+                            {formatMoney(tier.min_recharge)}
+                          </span>
+                          <small>
+                            {text.account.welfareRechargeBonus(
+                              tier.recharge_bonus_pct,
+                            )}
+                          </small>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareUnavailable}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareCampaigns}</h2>
+                <span>
+                  {welfareData?.hub
+                    ? welfareData.hub.campaigns?.length || 0
+                    : text.notSynced}
+                </span>
+              </div>
+              {welfareData?.hub?.campaigns?.length ? (
+                <div className={styles["welfare-activity-list"]}>
+                  {welfareData.hub.campaigns.map((campaign) => (
+                    <div key={campaign.id}>
+                      <strong>{campaign.name}</strong>
+                      <small>
+                        {text.account.welfareCampaignWindow}:{" "}
+                        {formatDateTime(campaign.start_at, text)}
+                        {" - "}
+                        {formatDateTime(campaign.end_at, text)}
+                      </small>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoCampaigns}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareInviteSnapshot}</h2>
+                <span>
+                  {inviteRank
+                    ? `#${inviteRank}`
+                    : text.account.inviteGrowthNotRanked}
+                </span>
+              </div>
+              {inviteLoading ? (
+                <div className={styles["sync-notice"]}>{text.loading}</div>
+              ) : inviteCampaign ? (
+                <>
+                  <div className={styles["meta-list"]}>
+                    <div className={styles["meta-row"]}>
+                      <span>{text.account.inviteGrowthInvited}</span>
+                      <strong>{inviteCampaign.invited_count}</strong>
+                    </div>
+                    <div className={styles["meta-row"]}>
+                      <span>{text.account.inviteGrowthQualified}</span>
+                      <strong>{inviteQualified}</strong>
+                    </div>
+                    <div className={styles["meta-row"]}>
+                      <span>{text.account.inviteGrowthMyRank}</span>
+                      <strong>
+                        {inviteRank
+                          ? `#${inviteRank}`
+                          : text.account.inviteGrowthNotRanked}
+                      </strong>
+                    </div>
+                  </div>
+                  <button
+                    className={styles["wide-soft-action"]}
+                    onClick={() => navigate(Path.AccountInvite)}
+                  >
+                    {text.account.welfareViewInvite}
+                  </button>
+                </>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.inviteGrowthNoCampaign}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareTeamCompetition}</h2>
+                <span>
+                  {welfareData?.teamPublicLeaderboard
+                    ? `${text.account.welfareTeamCount}: ${welfareData.teamPublicLeaderboard.total_teams}`
+                    : text.notSynced}
+                </span>
+              </div>
+              {team ? (
+                <div className={styles["meta-list"]}>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareMyTeam}</span>
+                    <strong>
+                      {myTeam ? `#${myTeam.rank} ${team.name}` : team.name}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareEstimatedPool}</span>
+                    <strong>
+                      {formatMoney(
+                        myTeam?.estimated_pool || team.estimated_pool,
+                      )}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareGapToPrevious}</span>
+                    <strong>
+                      {myTeam && myTeam.rank > 1
+                        ? formatMoney(myTeam.gap_to_previous)
+                        : myTeam
+                        ? text.account.welfareLeading
+                        : text.account.inviteGrowthNotRanked}
+                    </strong>
+                  </div>
+                  {team.next_threshold ? (
+                    <div className={styles["meta-row"]}>
+                      <span>{text.account.welfareTeamNextThreshold}</span>
+                      <strong>{formatMoney(team.next_threshold)}</strong>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoTeam}
+                </p>
+              )}
+              <div className={styles["welfare-team-block-head"]}>
+                <h3>{text.account.welfareTeamCurrentRanking}</h3>
+                <span>{welfareData?.teamPublicLeaderboard?.month || ""}</span>
+              </div>
+              {publicTeamRows.length ? (
+                <div className={styles["welfare-rank-list"]}>
+                  {publicTeamRows.map((row) => (
+                    <div
+                      key={row.team_id}
+                      className={clsx({
+                        [styles["is-me"]]: row.team_id === team?.id,
+                      })}
+                    >
+                      <strong>#{row.rank}</strong>
+                      <span>
+                        <b>{row.team_name}</b>
+                        <small>
+                          {text.account.welfareTeamMembers(row.member_count)} ·{" "}
+                          {text.account.welfareTeamSpend}{" "}
+                          {formatMoney(row.monthly_spend)}
+                        </small>
+                      </span>
+                      <em>{formatMoney(row.estimated_pool)}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoLeaderboard}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareTeamDirectory}</h2>
+                <span>{welfareData?.teamDirectory?.month || ""}</span>
+              </div>
+              {teamActionError && (
+                <div className={styles["form-error"]}>{teamActionError}</div>
+              )}
+              {teamActionMessage && (
+                <div className={styles["form-success"]}>
+                  {teamActionMessage}
+                </div>
+              )}
+              {!team && pendingTeamApplication ? (
+                <div className={styles["welfare-team-status"]}>
+                  <strong>
+                    {teamApplicationStatuses[pendingTeamApplication.status] ||
+                      text.account.welfareTeamApplicationPending}
+                  </strong>
+                  <span>
+                    {text.account.welfareTeamCaptainReplyWithin(
+                      teamAdmission?.captain_sla_hours || 72,
+                    )}
+                  </span>
+                  <small>
+                    {text.account.welfareTeamApplicationExpires}:{" "}
+                    {formatDateTime(pendingTeamApplication.expires_at, text)}
+                  </small>
+                </div>
+              ) : !team && teamAdmission?.cooldown_active ? (
+                <div className={styles["welfare-team-status"]}>
+                  <strong>
+                    {text.account.welfareTeamAdmissionUnavailable}
+                  </strong>
+                  <span>
+                    {text.account.welfareTeamCooldownUntil(
+                      teamAdmission.cooldown_ends_at
+                        ? formatDateTime(teamAdmission.cooldown_ends_at, text)
+                        : text.notSynced,
+                    )}
+                  </span>
+                </div>
+              ) : null}
+              {teamApplicationTarget ? (
+                <div className={styles["welfare-team-application"]}>
+                  <strong>
+                    {text.account.welfareTeamApplyTo(
+                      teamApplicationTarget.team_name,
+                    )}
+                  </strong>
+                  <label className={styles["field-card"]}>
+                    <span>{text.account.welfareTeamApplicationMessage}</span>
+                    <textarea
+                      value={teamApplicationMessage}
+                      onChange={(event) =>
+                        setTeamApplicationMessage(event.currentTarget.value)
+                      }
+                      placeholder={
+                        text.account.welfareTeamApplicationPlaceholder
+                      }
+                      maxLength={300}
+                      rows={3}
+                    />
+                  </label>
+                  <div className={styles["welfare-team-action-row"]}>
+                    <button
+                      className={styles["wide-soft-action"]}
+                      onClick={() => setTeamApplicationTarget(null)}
+                      disabled={teamActionBusy !== null}
+                    >
+                      {text.common.cancel}
+                    </button>
+                    <button
+                      className={styles["primary-action"]}
+                      onClick={submitTeamApplication}
+                      disabled={teamActionBusy !== null}
+                    >
+                      {text.account.welfareTeamApply}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {welfareData?.teamDirectory?.rows?.length ? (
+                <div className={styles["welfare-team-directory"]}>
+                  {welfareData.teamDirectory.rows.map((entry) => {
+                    const canApply =
+                      !team &&
+                      !!teamAdmission?.can_apply_or_join &&
+                      !pendingTeamApplication &&
+                      entry.accepting_applications;
+                    return (
+                      <article key={entry.team_id}>
+                        <div>
+                          <strong>{entry.team_name}</strong>
+                          <span>
+                            {text.account.welfareTeamSlots(
+                              Math.max(
+                                0,
+                                entry.member_capacity - entry.member_count,
+                              ),
+                              entry.member_capacity,
+                            )}
+                          </span>
+                          <small>
+                            {text.account.welfareEstimatedPool}{" "}
+                            {formatMoney(entry.estimated_pool)}
+                          </small>
+                        </div>
+                        {!team ? (
+                          <button
+                            onClick={() => setTeamApplicationTarget(entry)}
+                            disabled={!canApply || teamActionBusy !== null}
+                          >
+                            {entry.accepting_applications
+                              ? text.account.welfareTeamApply
+                              : text.account.welfareTeamNotRecruiting}
+                          </button>
+                        ) : null}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoLeaderboard}
+                </p>
+              )}
+              {team && isTeamCaptain ? (
+                <div className={styles["welfare-team-captain-controls"]}>
+                  <div className={styles["welfare-team-block-head"]}>
+                    <h3>{text.account.welfareTeamCaptainControls}</h3>
+                    <span>
+                      {team.is_recruiting
+                        ? text.account.welfareTeamRecruitingOpen
+                        : text.account.welfareTeamRecruitingPaused}
+                    </span>
+                  </div>
+                  <div className={styles["welfare-team-action-row"]}>
+                    <button
+                      className={styles["wide-soft-action"]}
+                      onClick={() => updateTeamRecruiting(!team.is_recruiting)}
+                      disabled={teamActionBusy !== null}
+                    >
+                      {team.is_recruiting
+                        ? text.account.welfareTeamStopRecruiting
+                        : text.account.welfareTeamStartRecruiting}
+                    </button>
+                    <button
+                      className={styles["wide-soft-action"]}
+                      onClick={rotateTeamInvite}
+                      disabled={teamActionBusy !== null}
+                    >
+                      {text.account.welfareTeamRotateInvite}
+                    </button>
+                  </div>
+                  {team.invite_code ? (
+                    <div className={styles["welfare-team-invite"]}>
+                      <span>{text.account.welfareTeamInviteCode}</span>
+                      <code>{team.invite_code}</code>
+                      <button
+                        className={styles["wide-soft-action"]}
+                        onClick={shareTeamInvite}
+                        disabled={teamActionBusy !== null}
+                      >
+                        {text.account.welfareTeamShareInvite}
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className={styles["welfare-team-block-head"]}>
+                    <h3>{text.account.welfareTeamCaptainQueue}</h3>
+                    <span>
+                      {text.shortCount(pendingCaptainApplications.length)}
+                    </span>
+                  </div>
+                  {pendingCaptainApplications.length ? (
+                    <div className={styles["welfare-team-captain-queue"]}>
+                      {pendingCaptainApplications.map((application) => (
+                        <article key={application.id}>
+                          <div>
+                            <strong>
+                              {application.applicant_display_name ||
+                                text.account.welfareTeamApplicant}
+                            </strong>
+                            <span>
+                              {formatDateTime(application.requested_at, text)}
+                            </span>
+                            {application.message ? (
+                              <small>{application.message}</small>
+                            ) : null}
+                          </div>
+                          <div>
+                            <button
+                              onClick={() =>
+                                decideTeamApplication(application.id, "approve")
+                              }
+                              disabled={teamActionBusy !== null}
+                            >
+                              {text.account.welfareTeamApprove}
+                            </button>
+                            <button
+                              onClick={() =>
+                                decideTeamApplication(application.id, "reject")
+                              }
+                              disabled={teamActionBusy !== null}
+                            >
+                              {text.account.welfareTeamReject}
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareTeamNoApplications}
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareTeamSeasonProof}</h2>
+                <span>{teamHistoryMonth || text.notSynced}</span>
+              </div>
+              {welfareData?.teamSeasons?.length ? (
+                <div className={styles["welfare-team-season-picker"]}>
+                  {welfareData.teamSeasons.map((season) => (
+                    <button
+                      key={season.month}
+                      className={clsx({
+                        [styles["active"]]: season.month === teamHistoryMonth,
+                      })}
+                      onClick={() => setTeamHistoryMonth(season.month)}
+                    >
+                      {season.month}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {teamSeasonError && (
+                <div className={styles["form-error"]}>{teamSeasonError}</div>
+              )}
+              {teamSeasonLoading ? (
+                <div className={styles["sync-notice"]}>
+                  {text.account.welfareTeamSeasonLoading}
+                </div>
+              ) : teamSeasonDetail?.rows?.length ? (
+                <>
+                  <div className={styles["welfare-team-season-meta"]}>
+                    <span>
+                      {text.account.welfareTeamSettledAt}:{" "}
+                      {teamSeasonDetail.season.settled_at
+                        ? formatDateTime(
+                            teamSeasonDetail.season.settled_at,
+                            text,
+                          )
+                        : text.notSynced}
+                    </span>
+                    <span>
+                      {text.account.welfareTeamCount}:{" "}
+                      {teamSeasonDetail.total_teams}
+                    </span>
+                  </div>
+                  <div className={styles["welfare-rank-list"]}>
+                    {teamSeasonDetail.rows.map((row) => (
+                      <div key={row.team_id}>
+                        <strong>#{row.rank}</strong>
+                        <span>
+                          <b>{row.team_name}</b>
+                          <small>
+                            {text.account.welfareTeamMembers(row.member_count)}{" "}
+                            · {text.account.welfareTeamSpend}{" "}
+                            {formatMoney(row.team_spend)}
+                          </small>
+                        </span>
+                        <em>
+                          {text.account.welfareTeamPaidAmount}{" "}
+                          {formatMoney(row.paid_amount)}
+                        </em>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareTeamSeasonNoRecords}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareArenaLeaderboard}</h2>
+                <span>{welfareData?.arenaLeaderboard?.period?.name || ""}</span>
+              </div>
+              {welfareData?.hub?.arena ? (
+                <div className={styles["meta-list"]}>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaCurrentRank}</span>
+                    <strong>
+                      {welfareData.hub.arena.rank
+                        ? `#${welfareData.hub.arena.rank}`
+                        : text.account.inviteGrowthNotRanked}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaTokensToPrev}</span>
+                    <strong>
+                      {welfareData.hub.arena.tokens_to_prev_rank || 0}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaEstimatedReward}</span>
+                    <strong>
+                      {formatMoney(welfareData.hub.arena.estimated_reward)}
+                    </strong>
+                  </div>
+                </div>
+              ) : null}
+              {arenaRows.length ? (
+                <div className={styles["welfare-rank-list"]}>
+                  {arenaRows.map((row) => (
+                    <div key={`${row.rank}-${row.display_name}`}>
+                      <strong>#{row.rank}</strong>
+                      <span>
+                        <b>{row.display_name}</b>
+                        <small>
+                          {text.account.welfareScore}: {row.token_sum}
+                        </small>
+                      </span>
+                      <em>{row.token_sum}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoLeaderboard}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareArenaMonthlyRewards}</h2>
+                <span>
+                  {welfareData?.arenaRewardSummary
+                    ? `${text.account.welfareRewardsIssued}: ${formatMoney(
+                        welfareData.arenaRewardSummary.total_amount,
+                      )}`
+                    : text.notSynced}
+                </span>
+              </div>
+              {welfareData?.arenaRewardSummary?.winners?.length ? (
+                <div className={styles["welfare-rank-list"]}>
+                  {welfareData.arenaRewardSummary.winners
+                    .slice(0, 10)
+                    .map((winner) => (
+                      <div key={`${winner.rank}-${winner.display_name}`}>
+                        <strong>#{winner.rank}</strong>
+                        <span>
+                          <b>{winner.display_name}</b>
+                          <small>
+                            {welfareData.arenaRewardSummary?.period?.name || ""}
+                          </small>
+                        </span>
+                        <em>{formatMoney(winner.amount)}</em>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoRewards}
+                </p>
+              )}
+            </section>
+          </>
+        )}
+      </AndroidDetailShell>
+    );
+  }
+
   if (route === Path.AccountInvite) {
     const tiers = [...(inviteCampaign?.tiers || [])].sort(
       (left, right) => left.required_invites - right.required_invites,
@@ -12305,7 +13230,7 @@ function AndroidAccountSettings() {
       <AndroidDetailShell
         title={text.account.inviteGrowth}
         text={text}
-        onRefresh={refreshInviteGrowth}
+        onRefresh={() => refreshInviteGrowth(true)}
       >
         <section className={styles["section"]}>
           <div className={styles["section-head"]}>
@@ -12606,6 +13531,12 @@ function AndroidAccountSettings() {
             title={text.account.inviteGrowth}
             detail={text.account.inviteGrowthHint}
             onClick={() => navigate(Path.AccountInvite)}
+          />
+          <AccountMenuItem
+            icon={<FavoriteIcon />}
+            title={text.account.welfare}
+            detail={text.account.welfareHint}
+            onClick={() => navigate(Path.AccountWelfare)}
           />
           <AccountMenuItem
             icon={<HistoryIcon />}
