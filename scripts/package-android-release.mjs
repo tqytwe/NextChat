@@ -22,19 +22,13 @@ const metadataPath = path.join(
   "android/app/build/outputs/apk/release/output-metadata.json",
 );
 const downloadsDir = path.join(root, "public/downloads");
-const outDownloadsDir = path.join(root, "out/downloads");
 const apkTarget = path.join(downloadsDir, "jisudengchat-android.apk");
 const manifestPath = path.join(downloadsDir, "android-version.json");
-const outApkTarget = path.join(outDownloadsDir, "jisudengchat-android.apk");
-const outManifestPath = path.join(outDownloadsDir, "android-version.json");
 const legacyApkTarget = path.join(downloadsDir, "nextchat-android.apk");
-const legacyOutApkTarget = path.join(outDownloadsDir, "nextchat-android.apk");
 const androidPackageName = "com.jisudeng.chat";
 const releaseArtifactPaths = new Set([
   "public/downloads/android-version.json",
   "public/downloads/jisudengchat-android.apk",
-  "out/downloads/android-version.json",
-  "out/downloads/jisudengchat-android.apk",
 ]);
 
 function gitOutput(args) {
@@ -405,15 +399,8 @@ assertManifestMatchesApk(
   "Published Android",
 );
 
-if (existsSync(path.join(root, "out"))) {
-  mkdirSync(outDownloadsDir, { recursive: true });
-  copyFileSync(apkTarget, outApkTarget);
-  chmodSync(outApkTarget, 0o644);
-  if (existsSync(legacyOutApkTarget)) {
-    rmSync(legacyOutApkTarget);
-  }
-  writeFileSync(outManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-}
+// The public artifact is the only handoff. Gradle output is disposable.
+rmSync(path.dirname(apkSource), { recursive: true, force: true });
 
 console.log(`APK: ${path.relative(root, apkTarget)}`);
 console.log(`Size: ${manifest.size}`);
