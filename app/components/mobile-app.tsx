@@ -78,6 +78,7 @@ import {
 import {
   formatUsageUSD,
   mergeSubscriptionProgress,
+  needsSubscriptionProgressRefresh,
   planUsageInfo,
   subscriptionUsagePeriods,
 } from "../client/mobile-subscription";
@@ -13037,10 +13038,36 @@ function AndroidAccountSettings() {
         payment: text.account.paymentInfo,
         subscriptions: text.account.subscriptions,
       };
+      let summarySubscriptions = summary.subscriptions || [];
+      const partialErrors = [...(summary.partial_errors || [])];
+
+      // Account summaries from current servers include usage progress. Older
+      // deployments still return 200 without it, so supplement only those
+      // records rather than treating a valid account summary as complete.
+      if (needsSubscriptionProgressRefresh(summarySubscriptions)) {
+        try {
+          const progress = await managedAuthenticatedJsonRequest<any>(
+            "/api/v1/subscriptions/progress",
+          );
+          summarySubscriptions = mergeSubscriptionProgress(
+            summarySubscriptions,
+            arrayPayload(progress),
+          );
+        } catch (error) {
+          const progressRouteUnavailable =
+            error instanceof ManagedApiError && error.status === 404;
+          if (
+            !progressRouteUnavailable &&
+            !partialErrors.some((item) => item.source === "subscriptions")
+          ) {
+            partialErrors.push({ source: "subscriptions" });
+          }
+        }
+      }
       setAccountData({
         loading: false,
         error: "",
-        partialErrors: (summary.partial_errors || []).map(
+        partialErrors: partialErrors.map(
           (item) => labels[item.source || ""] || text.errors.syncFailed,
         ),
         updatedAt: Date.now(),
@@ -13048,7 +13075,7 @@ function AndroidAccountSettings() {
         transactions: summary.transactions || [],
         wallet: summary.wallet,
         plans: summary.plans || [],
-        subscriptions: summary.subscriptions || [],
+        subscriptions: summarySubscriptions,
       });
       managed.clearLastError();
       return;

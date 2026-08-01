@@ -217,6 +217,18 @@ describe("mobile app backend alignment", () => {
     expect(globalStyles).toContain("body.mobile-document-scroll");
   });
 
+  test("supplements account-summary subscriptions when a server omits usage progress", () => {
+    const refreshAccountData = source.slice(
+      source.indexOf("async function refreshAccountData()"),
+      source.indexOf("async function loadCheckoutInfo()"),
+    );
+    expect(refreshAccountData).toContain(
+      "needsSubscriptionProgressRefresh(summarySubscriptions)",
+    );
+    expect(refreshAccountData).toContain('"/api/v1/subscriptions/progress"');
+    expect(refreshAccountData).toContain("mergeSubscriptionProgress(");
+  });
+
   test("does not erase the saved default group before workspace models load", () => {
     const dashboard = source.slice(
       source.indexOf("function AndroidDashboard()"),

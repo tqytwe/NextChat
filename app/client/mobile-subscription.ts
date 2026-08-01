@@ -115,6 +115,23 @@ export function mergeSubscriptionProgress(
   return merged;
 }
 
+/**
+ * Newer account summaries include each subscription's progress directly. Some
+ * deployed backend versions only return the subscription record, so the mobile
+ * client can make one compatible supplemental request in that case.
+ */
+export function needsSubscriptionProgressRefresh(subscriptions: any[] = []) {
+  return subscriptions.some((subscription) => {
+    const progress = subscription?.progress;
+    return (
+      !progress ||
+      typeof progress !== "object" ||
+      Array.isArray(progress) ||
+      Object.keys(progress).length === 0
+    );
+  });
+}
+
 export function planUsageInfo(plan: any, subscriptions: any[] = []) {
   const subscription = matchingSubscription(plan, subscriptions);
   const source = subscription || plan || {};

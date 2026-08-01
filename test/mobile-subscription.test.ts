@@ -2,6 +2,7 @@ import { describe, expect, test } from "@jest/globals";
 
 import {
   mergeSubscriptionProgress,
+  needsSubscriptionProgressRefresh,
   planUsageInfo,
   subscriptionUsagePeriods,
 } from "../app/client/mobile-subscription";
@@ -97,6 +98,22 @@ describe("mobile subscription usage", () => {
     expect(subscriptionUsagePeriods(subscriptions[0], labels)).toEqual([
       { label: "Daily", limit: 20, used: 4, remaining: 16 },
     ]);
+  });
+
+  test("supplements a successful account summary only when it lacks progress", () => {
+    expect(
+      needsSubscriptionProgressRefresh([
+        { id: 8, status: "active", group: { id: 11 } },
+      ]),
+    ).toBe(true);
+    expect(
+      needsSubscriptionProgressRefresh([
+        {
+          id: 8,
+          progress: { daily: { limit_usd: 20, used_usd: 4 } },
+        },
+      ]),
+    ).toBe(false);
   });
 
   test("recognizes a plan quota_limit_usd as a USD entitlement", () => {
