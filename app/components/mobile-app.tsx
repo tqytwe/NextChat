@@ -12572,7 +12572,9 @@ function AndroidAccountSettings() {
     const isTeamCaptain = !!team?.is_captain && !!team.can_manage;
     const teamApplicationStatuses = text.account
       .welfareTeamApplicationStatuses as Record<string, string>;
-    const arenaRows = welfareData?.arenaLeaderboard?.rows || [];
+    const arenaOverview = welfareData?.arenaMonthlyOverview;
+    const arenaRows = arenaOverview?.rows || [];
+    const latestArenaHistory = arenaOverview?.history?.[0];
     const inviteQualified = inviteCampaign?.qualified_count || 0;
     const inviteRank = inviteCampaign?.ranking?.rank;
 
@@ -13120,28 +13122,28 @@ function AndroidAccountSettings() {
             <section className={styles["section"]}>
               <div className={styles["section-head"]}>
                 <h2>{text.account.welfareArenaLeaderboard}</h2>
-                <span>{welfareData?.arenaLeaderboard?.period?.name || ""}</span>
+                <span>{arenaOverview?.period?.name || ""}</span>
               </div>
-              {welfareData?.hub?.arena ? (
+              {arenaOverview?.current ? (
                 <div className={styles["meta-list"]}>
                   <div className={styles["meta-row"]}>
                     <span>{text.account.welfareArenaCurrentRank}</span>
                     <strong>
-                      {welfareData.hub.arena.rank
-                        ? `#${welfareData.hub.arena.rank}`
+                      {arenaOverview.current.rank
+                        ? `#${arenaOverview.current.rank}`
                         : text.account.inviteGrowthNotRanked}
                     </strong>
                   </div>
                   <div className={styles["meta-row"]}>
                     <span>{text.account.welfareArenaTokensToPrev}</span>
                     <strong>
-                      {welfareData.hub.arena.tokens_to_prev_rank || 0}
+                      {arenaOverview.current.tokens_to_prev_rank || 0}
                     </strong>
                   </div>
                   <div className={styles["meta-row"]}>
                     <span>{text.account.welfareArenaEstimatedReward}</span>
                     <strong>
-                      {formatMoney(welfareData.hub.arena.estimated_reward)}
+                      {formatMoney(arenaOverview.current.estimated_reward)}
                     </strong>
                   </div>
                 </div>
@@ -13172,29 +13174,25 @@ function AndroidAccountSettings() {
               <div className={styles["section-head"]}>
                 <h2>{text.account.welfareArenaMonthlyRewards}</h2>
                 <span>
-                  {welfareData?.arenaRewardSummary
+                  {latestArenaHistory
                     ? `${text.account.welfareRewardsIssued}: ${formatMoney(
-                        welfareData.arenaRewardSummary.total_amount,
+                        latestArenaHistory.total_amount,
                       )}`
                     : text.notSynced}
                 </span>
               </div>
-              {welfareData?.arenaRewardSummary?.winners?.length ? (
+              {latestArenaHistory?.winners?.length ? (
                 <div className={styles["welfare-rank-list"]}>
-                  {welfareData.arenaRewardSummary.winners
-                    .slice(0, 10)
-                    .map((winner) => (
-                      <div key={`${winner.rank}-${winner.display_name}`}>
-                        <strong>#{winner.rank}</strong>
-                        <span>
-                          <b>{winner.display_name}</b>
-                          <small>
-                            {welfareData.arenaRewardSummary?.period?.name || ""}
-                          </small>
-                        </span>
-                        <em>{formatMoney(winner.amount)}</em>
-                      </div>
-                    ))}
+                  {latestArenaHistory.winners.slice(0, 10).map((winner) => (
+                    <div key={`${winner.rank}-${winner.display_name}`}>
+                      <strong>#{winner.rank}</strong>
+                      <span>
+                        <b>{winner.display_name}</b>
+                        <small>{latestArenaHistory.period?.name || ""}</small>
+                      </span>
+                      <em>{formatMoney(winner.reward_amount)}</em>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <p className={styles["empty-copy"]}>

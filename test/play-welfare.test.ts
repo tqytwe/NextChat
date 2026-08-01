@@ -150,7 +150,7 @@ describe("native play welfare team competition", () => {
 
     const teamContract = clientSource.slice(
       clientSource.indexOf("export interface PlayWelfareTeamDirectoryEntry"),
-      clientSource.indexOf("export interface PlayWelfareArenaLeaderboard"),
+      clientSource.indexOf("export interface PlayWelfareMyTeam"),
     );
 
     expect(teamContract).not.toContain("user_id");

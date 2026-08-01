@@ -3,8 +3,8 @@ export const PLAY_WELFARE_ENDPOINTS = {
   teamDirectory: "/api/v1/play/teams/directory?limit=20",
   teamPublicLeaderboard: "/api/v1/play/teams/leaderboard/public?limit=10",
   teamSeasons: "/api/v1/play/teams/seasons?limit=3",
-  arenaLeaderboard: "/api/v1/play/arena/leaderboard?limit=10",
-  arenaRewardSummary: "/api/v1/play/arena/reward-summary",
+  arenaMonthlyOverview:
+    "/api/v1/play/arena/overview?period=monthly&include_history=1",
 } as const;
 
 export const PLAY_WELFARE_TEAM_ENDPOINTS = {
@@ -180,27 +180,37 @@ export interface PlayWelfareTeamInvite {
   rotated_at: string;
 }
 
-export interface PlayWelfareArenaLeaderboard {
+export interface PlayWelfareArenaOverview {
   enabled: boolean;
-  period?: { name?: string };
+  period?: { name?: string; status?: string };
+  current: {
+    rank?: number;
+    token_sum?: number;
+    tokens_to_prev_rank?: number;
+    estimated_reward?: number;
+  };
   rows: Array<{
     rank: number;
     display_name: string;
+    anonymous?: boolean;
     token_sum: number;
   }>;
-}
-
-export interface PlayWelfareArenaRewardSummary {
-  enabled: boolean;
-  period?: { name?: string };
-  settled_at?: string;
-  winners_count: number;
-  total_amount: number;
-  winners: Array<{
-    rank: number;
-    display_name: string;
-    amount: number;
-    paid_at?: string;
+  reward_tiers: Array<{
+    rank_start: number;
+    rank_end: number;
+    reward_amount: number;
+  }>;
+  history: Array<{
+    period?: { name?: string; settled_at?: string };
+    winners_count: number;
+    total_amount: number;
+    winners: Array<{
+      rank: number;
+      display_name: string;
+      anonymous?: boolean;
+      reward_amount: number;
+      paid_at?: string;
+    }>;
   }>;
 }
 
@@ -224,8 +234,7 @@ export interface PlayWelfareData {
   teamMyApplications?: PlayWelfareTeamApplication[];
   teamLeaderboard?: PlayWelfareTeamLeaderboard;
   teamCaptainApplications?: PlayWelfareTeamApplication[];
-  arenaLeaderboard?: PlayWelfareArenaLeaderboard;
-  arenaRewardSummary?: PlayWelfareArenaRewardSummary;
+  arenaMonthlyOverview?: PlayWelfareArenaOverview;
   unavailable: PlayWelfareUnavailable[];
 }
 
@@ -245,8 +254,7 @@ export async function loadPlayWelfareData(
     teamDirectory,
     teamPublicLeaderboard,
     teamSeasons,
-    arenaLeaderboard,
-    arenaRewardSummary,
+    arenaMonthlyOverview,
     teamMe,
     teamAdmission,
     teamMyApplications,
@@ -257,11 +265,8 @@ export async function loadPlayWelfareData(
       PLAY_WELFARE_ENDPOINTS.teamPublicLeaderboard,
     ),
     request<PlayWelfareTeamSeason[]>(PLAY_WELFARE_ENDPOINTS.teamSeasons),
-    request<PlayWelfareArenaLeaderboard>(
-      PLAY_WELFARE_ENDPOINTS.arenaLeaderboard,
-    ),
-    request<PlayWelfareArenaRewardSummary>(
-      PLAY_WELFARE_ENDPOINTS.arenaRewardSummary,
+    request<PlayWelfareArenaOverview>(
+      PLAY_WELFARE_ENDPOINTS.arenaMonthlyOverview,
     ),
     request<PlayWelfareTeamMe>(PLAY_WELFARE_TEAM_ENDPOINTS.me),
     request<PlayWelfareTeamAdmission>(PLAY_WELFARE_TEAM_ENDPOINTS.admission),
@@ -281,12 +286,9 @@ export async function loadPlayWelfareData(
   } else unavailable.push("teamPublicLeaderboard");
   if (teamSeasons.status === "fulfilled") data.teamSeasons = teamSeasons.value;
   else unavailable.push("teamSeasons");
-  if (arenaLeaderboard.status === "fulfilled") {
-    data.arenaLeaderboard = arenaLeaderboard.value;
-  } else unavailable.push("arenaLeaderboard");
-  if (arenaRewardSummary.status === "fulfilled") {
-    data.arenaRewardSummary = arenaRewardSummary.value;
-  } else unavailable.push("arenaRewardSummary");
+  if (arenaMonthlyOverview.status === "fulfilled") {
+    data.arenaMonthlyOverview = arenaMonthlyOverview.value;
+  } else unavailable.push("arenaMonthlyOverview");
   if (teamMe.status === "fulfilled") data.teamMe = teamMe.value;
   else unavailable.push("teamMe");
   if (teamAdmission.status === "fulfilled") {
