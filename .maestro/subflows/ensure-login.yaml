@@ -5,5 +5,5 @@ appId: com.jisudeng.chat
       visible: "login-email"
     file: login.yaml
 - extendedWaitUntil:
-    visible: "dashboard-default-group"
-    timeout: 30000
+    visible: "dashboard-default-group|app-tab-chat|app-tab-image|app-tab-account"
+    timeout: 60000

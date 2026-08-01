@@ -4,7 +4,7 @@ set -euo pipefail
 SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/dell/Android/Sdk}}"
 ADB="${ADB:-$SDK_ROOT/platform-tools/adb}"
 MAESTRO="${MAESTRO:-/home/codex/.maestro/bin/maestro}"
-APK_PATH="${ANDROID_E2E_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
+APK_PATH="${ANDROID_E2E_APK_PATH:-android/app/build/outputs/apk/release/app-release.apk}"
 PACKAGE_NAME="${ANDROID_PACKAGE_NAME:-com.jisudeng.chat}"
 MAIN_ACTIVITY="${ANDROID_MAIN_ACTIVITY:-.MainActivity}"
 REFERENCE_IMAGE="${ANDROID_E2E_REFERENCE_IMAGE:-public/android-chrome-192x192.png}"
@@ -82,3 +82,4 @@ run_flow .maestro/flows/06-local-reference-image.yaml
 ensure_logged_in
 run_flow .maestro/flows/07-retry-502.yaml
 run_flow .maestro/flows/08-local-gallery-restart.yaml
+run_flow .maestro/flows/09-content-kit.yaml

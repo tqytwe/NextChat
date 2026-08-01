@@ -11,7 +11,7 @@ tags:
     index: 0
 - tapOn:
     id: "com.google.android.providers.media.module:id/button_add"
-- assertVisible: "清空参考图|Clear references"
+- assertVisible: "image-clear-references"
 - tapOn: "image-prompt"
 - inputText: "maestro local reference image"
 - hideKeyboard

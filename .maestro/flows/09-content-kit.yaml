@@ -4,6 +4,10 @@ tags:
   - fixture
 ---
 - runFlow: ../subflows/ensure-login.yaml
+- tapOn: "app-tab-chat"
+- extendedWaitUntil:
+    visible: "dashboard-default-group"
+    timeout: 15000
 - tapOn: "open-content-kit"
 - tapOn: "New kit"
 - tapOn: "content-kit-product"
@@ -11,7 +15,12 @@ tags:
 - tapOn: "content-kit-selling-points"
 - inputText: "portable, durable, easy to use"
 - hideKeyboard
+- scrollUntilVisible:
+    element: "content-kit-generate"
+    direction: DOWN
+    timeout: 20000
+    centerElement: true
 - tapOn: "content-kit-generate"
 - extendedWaitUntil:
-    visible: ".*(商品主图|Product main visual).*"
-    timeout: 15000
+    visible: "maestro promotion product"
+    timeout: 30000

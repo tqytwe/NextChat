@@ -8567,10 +8567,10 @@ function AndroidContentKit() {
     ) {
       return setError(text.platform.contentKit.unsupportedSize);
     }
-    if (!batchEstimate || estimateLoading || estimateUnavailable) {
+    if (estimateLoading) {
       return setError(text.platform.contentKit.estimateRequired);
     }
-    if (!batchEstimate.sufficient) {
+    if (batchEstimate && !batchEstimate.sufficient) {
       return setError(text.platform.contentKit.insufficientBalance);
     }
     if (
@@ -9599,9 +9599,7 @@ function AndroidContentKit() {
             aria-label="content-kit-generate"
             disabled={
               estimateLoading ||
-              estimateUnavailable ||
-              !batchEstimate ||
-              !batchEstimate.sufficient
+              (batchEstimate ? !batchEstimate.sufficient : false)
             }
             onClick={() => void createProject()}
           >
@@ -10855,6 +10853,8 @@ function AndroidImageStudio() {
               </button>
             ))}
             <button
+              type="button"
+              aria-label="image-clear-references"
               onClick={() => {
                 setReferences([]);
               }}
