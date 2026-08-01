@@ -59,6 +59,7 @@ export enum Path {
   AccountPlans = "/account/plans",
   AccountSubscriptions = "/account/subscriptions",
   AccountInvite = "/account/invite",
+  AccountWelfare = "/account/welfare",
   AccountSupport = "/account/support",
   AccountPermissions = "/account/permissions",
   AccountAdmin = "/account/admin",

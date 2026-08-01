@@ -78,6 +78,15 @@ export const MANAGED_MOBILE_TEXT = {
       feedbackInvalid: "请填写反馈标题和详细内容",
       feedbackTooManyScreenshots: "最多只能上传 3 张截图",
       feedbackUnavailable: "反馈服务暂时不可用，请稍后重试",
+      teamAlreadyJoined: "你已加入其他战队",
+      teamFull: "该战队人数已满",
+      teamJoinCooldown: "离队冷却期尚未结束",
+      teamRecruitmentClosed: "该战队当前未开放招募",
+      teamAdmissionRejected: "当前账号暂不能申请加入战队",
+      teamCaptainRequired: "仅队长可以执行此操作",
+      teamApplicationNotPending: "该申请已不处于待处理状态",
+      teamApplicationExpired: "该申请已过期",
+      teamCompetitionUnavailable: "战队功能暂时不可用，请稍后重试",
     },
     common: {
       cancel: "取消",
@@ -434,6 +443,113 @@ export const MANAGED_MOBILE_TEXT = {
       moreServices: "更多服务",
       packages: "套餐",
       subscriptions: "套餐权益",
+      welfare: "福利与排行",
+      welfareHint: "查看会员权益、活动进度和公开排行",
+      welfareLoading: "正在同步福利与排行",
+      welfareUnavailable: "福利与排行暂时无法加载，请稍后再试",
+      welfarePartialUnavailable: (count: number) =>
+        `${count} 项排行数据暂时不可用，已展示其余内容`,
+      welfareMemberBenefits: "会员权益",
+      welfareCurrentVIP: "当前会员等级",
+      welfareMemberPaid: "累计净实付",
+      welfareNextVIP: "距下一等级",
+      welfareTopVIP: "已达当前最高等级",
+      welfareNotMember: "暂未成为会员",
+      welfarePerks: "当前权益",
+      welfareVIPLevels: "会员等级",
+      welfareTierThreshold: "会员门槛",
+      welfareRechargeBonus: (value: number) => `充值加成 ${value}%`,
+      welfarePerkGeneric: "会员专属权益",
+      vipPerkLabels: {
+        models_vip_tag: "会员模型标识",
+        blindbox_pool_upgrade: "盲盒奖池升级",
+        arena_settlement_bonus: "竞技结算加成",
+        affiliate_bonus_5pct: "邀请返利加成",
+      },
+      welfareCampaigns: "当前活动",
+      welfareNoCampaigns: "当前没有可参与的限时活动",
+      welfareCampaignWindow: "活动时间",
+      welfareInviteSnapshot: "邀请活动进度",
+      welfareViewInvite: "查看邀请活动",
+      welfareTeamLeaderboard: "本月团队榜",
+      welfareTeamCount: "参赛团队",
+      welfareTeamSpend: "本月实际消费",
+      welfareEstimatedPool: "预计共享奖池",
+      welfareGapToPrevious: "距上一名",
+      welfareLeading: "当前领先",
+      welfareMyTeam: "我的团队",
+      welfareNoTeam: "加入团队后可查看你的实时排名与奖励进度",
+      welfareTeamRewardShowcase: "已发放团队奖励",
+      welfareArenaLeaderboard: "本月竞技榜",
+      welfareArenaCurrentRank: "我的当前排名",
+      welfareArenaTokensToPrev: "距上一名积分",
+      welfareArenaEstimatedReward: "预计奖励",
+      welfareArenaMonthlyRewards: "最近月度竞技奖励",
+      welfareRewardsIssued: "已发放奖励",
+      welfareNoLeaderboard: "当前暂无排行数据",
+      welfareNoRewards: "当前暂无已发放奖励",
+      welfareRank: "排名",
+      welfareUser: "用户",
+      welfareTeam: "团队",
+      welfareScore: "竞技积分",
+      welfareReward: "奖励",
+      welfareTeamCompetition: "战队竞争",
+      welfareTeamCurrentRanking: "本月实时排名",
+      welfareTeamDirectory: "可加入战队",
+      welfareTeamMembers: (count: number) => `${count} 名成员`,
+      welfareTeamNextThreshold: "下一奖励门槛",
+      welfareTeamApplicationPending: "入队申请待处理",
+      welfareTeamApplicationExpires: "申请失效时间",
+      welfareTeamCaptainReplyWithin: (hours: number) =>
+        `队长将在 ${hours} 小时内处理`,
+      welfareTeamAdmissionUnavailable: "当前暂不能申请入队",
+      welfareTeamCooldownUntil: (time: string) => `冷却至 ${time}`,
+      welfareTeamApplyTo: (name: string) => `申请加入 ${name}`,
+      welfareTeamApplicationMessage: "申请留言（可选）",
+      welfareTeamApplicationPlaceholder: "简单介绍你想加入战队的原因",
+      welfareTeamApply: "申请加入",
+      welfareTeamApplicationSubmitted: "申请已提交，等待队长处理",
+      welfareTeamApplicationFailed: "申请提交失败，请稍后重试",
+      welfareTeamSlots: (available: number, capacity: number) =>
+        `剩余 ${available}/${capacity} 名额`,
+      welfareTeamNotRecruiting: "暂不招募",
+      welfareTeamCaptainControls: "队长管理",
+      welfareTeamRecruitingOpen: "招募中",
+      welfareTeamRecruitingPaused: "已暂停招募",
+      welfareTeamStartRecruiting: "开启招募",
+      welfareTeamStopRecruiting: "暂停招募",
+      welfareTeamRecruitingUpdated: "招募状态已更新",
+      welfareTeamRecruitingFailed: "招募状态更新失败，请稍后重试",
+      welfareTeamInviteCode: "战队邀请码",
+      welfareTeamRotateInvite: "轮换邀请码",
+      welfareTeamInviteRotated: "邀请码已轮换，旧码已失效",
+      welfareTeamInviteRotateFailed: "邀请码轮换失败，请稍后重试",
+      welfareTeamShareInvite: "分享邀请码",
+      welfareTeamInviteShared: "邀请码已准备好分享",
+      welfareTeamInviteShareFailed: "邀请码分享失败，请稍后重试",
+      welfareTeamInviteShareText: (name: string, code: string) =>
+        `邀请你加入 ${name}，在 APP 中使用邀请码加入：${code}`,
+      welfareTeamCaptainQueue: "待处理申请",
+      welfareTeamApplicant: "申请用户",
+      welfareTeamApprove: "通过",
+      welfareTeamReject: "拒绝",
+      welfareTeamApplicationApproved: "申请已通过",
+      welfareTeamApplicationRejected: "申请已拒绝",
+      welfareTeamDecisionFailed: "申请处理失败，请稍后重试",
+      welfareTeamNoApplications: "暂无待处理申请",
+      welfareTeamApplicationStatuses: {
+        pending: "待处理",
+        approved: "已通过",
+        rejected: "已拒绝",
+        withdrawn: "已撤回",
+        expired: "已过期",
+      },
+      welfareTeamSeasonProof: "历史战队结算",
+      welfareTeamSeasonLoading: "正在加载历史结算",
+      welfareTeamSeasonUnavailable: "历史战队结算暂时无法加载，请稍后重试",
+      welfareTeamSettledAt: "结算时间",
+      welfareTeamPaidAmount: "已发放",
+      welfareTeamSeasonNoRecords: "暂无可公开的历史战队结算",
       inviteGrowth: "邀请活动",
       inviteGrowthHint: "分享海报，邀请好友解锁奖励",
       inviteGrowthShare: "分享邀请海报",
@@ -742,6 +858,17 @@ export const MANAGED_MOBILE_TEXT = {
       feedbackTooManyScreenshots: "You can upload up to 3 screenshots.",
       feedbackUnavailable:
         "Feedback service is temporarily unavailable. Please try again later.",
+      teamAlreadyJoined: "You are already in another team.",
+      teamFull: "This team has reached its member capacity.",
+      teamJoinCooldown: "The team join cooldown is still active.",
+      teamRecruitmentClosed: "This team is not accepting applications now.",
+      teamAdmissionRejected:
+        "This account cannot apply to join a team right now.",
+      teamCaptainRequired: "Only the team captain can perform this action.",
+      teamApplicationNotPending: "This application is no longer pending.",
+      teamApplicationExpired: "This application has expired.",
+      teamCompetitionUnavailable:
+        "Team competition is temporarily unavailable. Try again later.",
     },
     common: {
       cancel: "Cancel",
@@ -1115,6 +1242,126 @@ export const MANAGED_MOBILE_TEXT = {
       moreServices: "More",
       packages: "Plans",
       subscriptions: "Entitlements",
+      welfare: "Benefits and rankings",
+      welfareHint:
+        "View member benefits, activity progress, and public rankings",
+      welfareLoading: "Syncing benefits and rankings",
+      welfareUnavailable:
+        "Benefits and rankings are temporarily unavailable. Try again later.",
+      welfarePartialUnavailable: (count: number) =>
+        `${count} ranking data source${
+          count === 1 ? " is" : "s are"
+        } temporarily unavailable. Other content is shown.`,
+      welfareMemberBenefits: "Member benefits",
+      welfareCurrentVIP: "Current member level",
+      welfareMemberPaid: "Lifetime net paid",
+      welfareNextVIP: "To next level",
+      welfareTopVIP: "Current highest level reached",
+      welfareNotMember: "Not a member yet",
+      welfarePerks: "Current benefits",
+      welfareVIPLevels: "Member levels",
+      welfareTierThreshold: "Member threshold",
+      welfareRechargeBonus: (value: number) => `Recharge bonus ${value}%`,
+      welfarePerkGeneric: "Member-only benefit",
+      vipPerkLabels: {
+        models_vip_tag: "Member model badge",
+        blindbox_pool_upgrade: "Blind-box pool upgrade",
+        arena_settlement_bonus: "Arena settlement bonus",
+        affiliate_bonus_5pct: "Referral rebate bonus",
+      },
+      welfareCampaigns: "Current activities",
+      welfareNoCampaigns: "No limited-time activity is available right now.",
+      welfareCampaignWindow: "Activity window",
+      welfareInviteSnapshot: "Invite activity progress",
+      welfareViewInvite: "View invite activity",
+      welfareTeamLeaderboard: "This month's team ranking",
+      welfareTeamCount: "Teams competing",
+      welfareTeamSpend: "Actual spend this month",
+      welfareEstimatedPool: "Estimated shared pool",
+      welfareGapToPrevious: "Gap to previous",
+      welfareLeading: "Currently leading",
+      welfareMyTeam: "My team",
+      welfareNoTeam: "Join a team to see your live rank and reward progress.",
+      welfareTeamRewardShowcase: "Team rewards paid",
+      welfareArenaLeaderboard: "This month's arena ranking",
+      welfareArenaCurrentRank: "My current rank",
+      welfareArenaTokensToPrev: "Points to previous rank",
+      welfareArenaEstimatedReward: "Estimated reward",
+      welfareArenaMonthlyRewards: "Latest monthly arena rewards",
+      welfareRewardsIssued: "Rewards paid",
+      welfareNoLeaderboard: "No ranking data yet.",
+      welfareNoRewards: "No paid rewards yet.",
+      welfareRank: "Rank",
+      welfareUser: "User",
+      welfareTeam: "Team",
+      welfareScore: "Arena points",
+      welfareReward: "Reward",
+      welfareTeamCompetition: "Team competition",
+      welfareTeamCurrentRanking: "Live ranking this month",
+      welfareTeamDirectory: "Teams to join",
+      welfareTeamMembers: (count: number) => `${count} members`,
+      welfareTeamNextThreshold: "Next reward threshold",
+      welfareTeamApplicationPending: "Join request pending",
+      welfareTeamApplicationExpires: "Request expires",
+      welfareTeamCaptainReplyWithin: (hours: number) =>
+        `The captain will respond within ${hours} hours`,
+      welfareTeamAdmissionUnavailable: "Team applications are unavailable now",
+      welfareTeamCooldownUntil: (time: string) => `Cooldown ends ${time}`,
+      welfareTeamApplyTo: (name: string) => `Apply to join ${name}`,
+      welfareTeamApplicationMessage: "Application message (optional)",
+      welfareTeamApplicationPlaceholder:
+        "Briefly explain why you would like to join this team",
+      welfareTeamApply: "Apply",
+      welfareTeamApplicationSubmitted:
+        "Application submitted. It is waiting for the captain.",
+      welfareTeamApplicationFailed:
+        "Could not submit the application. Try again later.",
+      welfareTeamSlots: (available: number, capacity: number) =>
+        `${available}/${capacity} slots available`,
+      welfareTeamNotRecruiting: "Not recruiting",
+      welfareTeamCaptainControls: "Captain controls",
+      welfareTeamRecruitingOpen: "Recruiting",
+      welfareTeamRecruitingPaused: "Recruiting paused",
+      welfareTeamStartRecruiting: "Start recruiting",
+      welfareTeamStopRecruiting: "Pause recruiting",
+      welfareTeamRecruitingUpdated: "Recruiting status updated",
+      welfareTeamRecruitingFailed:
+        "Could not update recruiting status. Try again later.",
+      welfareTeamInviteCode: "Team invite code",
+      welfareTeamRotateInvite: "Rotate invite code",
+      welfareTeamInviteRotated:
+        "Invite code rotated. The previous code has expired.",
+      welfareTeamInviteRotateFailed:
+        "Could not rotate the invite code. Try again later.",
+      welfareTeamShareInvite: "Share invite code",
+      welfareTeamInviteShared: "Invite code is ready to share",
+      welfareTeamInviteShareFailed:
+        "Could not share the invite code. Try again later.",
+      welfareTeamInviteShareText: (name: string, code: string) =>
+        `Join ${name} in the app with this invite code: ${code}`,
+      welfareTeamCaptainQueue: "Pending applications",
+      welfareTeamApplicant: "Applicant",
+      welfareTeamApprove: "Approve",
+      welfareTeamReject: "Reject",
+      welfareTeamApplicationApproved: "Application approved",
+      welfareTeamApplicationRejected: "Application rejected",
+      welfareTeamDecisionFailed:
+        "Could not process the application. Try again later.",
+      welfareTeamNoApplications: "No pending applications",
+      welfareTeamApplicationStatuses: {
+        pending: "Pending",
+        approved: "Approved",
+        rejected: "Rejected",
+        withdrawn: "Withdrawn",
+        expired: "Expired",
+      },
+      welfareTeamSeasonProof: "Historical team settlements",
+      welfareTeamSeasonLoading: "Loading historical settlements",
+      welfareTeamSeasonUnavailable:
+        "Historical team settlements are unavailable. Try again later.",
+      welfareTeamSettledAt: "Settled at",
+      welfareTeamPaidAmount: "Paid",
+      welfareTeamSeasonNoRecords: "No public historical team settlement yet.",
       inviteGrowth: "Invite campaign",
       inviteGrowthHint: "Share a poster and unlock rewards with friends",
       inviteGrowthShare: "Share invite poster",
@@ -1431,6 +1678,59 @@ export function localizeManagedMobileError(input: {
   }
   if (/mobile_feedback_invalid|invalid feedback/.test(normalized)) {
     return text.errors.feedbackInvalid;
+  }
+  if (
+    /play_team_already_joined|already in a squad|已加入.*战队/.test(normalized)
+  ) {
+    return text.errors.teamAlreadyJoined;
+  }
+  if (/play_team_full|member capacity|人数已满/.test(normalized)) {
+    return text.errors.teamFull;
+  }
+  if (/play_team_join_cooldown|join cooldown|冷却/.test(normalized)) {
+    return text.errors.teamJoinCooldown;
+  }
+  if (
+    /play_team_recruitment_closed|not accepting.*application|未开放招募/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.teamRecruitmentClosed;
+  }
+  if (
+    /play_team_admission_risk_rejected|team admission is unavailable|暂不能申请加入战队/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.teamAdmissionRejected;
+  }
+  if (
+    /play_team_captain_required|only the active squad captain|仅队长/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.teamCaptainRequired;
+  }
+  if (
+    /play_team_application_not_pending|no longer pending|不处于待处理/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.teamApplicationNotPending;
+  }
+  if (
+    /play_team_application_expired|application has expired|申请已过期/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.teamApplicationExpired;
+  }
+  if (
+    /play_team_competition_unavailable|team competition.*unavailable|战队功能暂时不可用/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.teamCompetitionUnavailable;
   }
   if (
     /payment_gateway|payment gateway|payment_provider|provider_misconfigured|method_not_configured|no_available_instance|easypay|xunhupay|wxpay|alipay|支付通道|支付网关|支付方式/.test(

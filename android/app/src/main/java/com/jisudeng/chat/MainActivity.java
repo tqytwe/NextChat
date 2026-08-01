@@ -166,7 +166,13 @@ public class MainActivity extends Activity {
         String host = uri.getHost() == null ? "" : uri.getHost();
         if (!("jisudeng.com".equalsIgnoreCase(host) || "www.jisudeng.com".equalsIgnoreCase(host))) return;
         String path = uri.getPath() == null ? "" : uri.getPath();
-        if (!(path.equals("/register") || path.equals("/affiliate") || path.startsWith("/invite") || path.startsWith("/r/"))) return;
+        boolean isInvitePath = path.equals("/register")
+            || path.equals("/affiliate")
+            || path.startsWith("/invite")
+            || path.startsWith("/r/")
+            || path.equals("/download/android")
+            || path.startsWith("/download/android/");
+        if (!isInvitePath) return;
         try {
             JSONObject detail = new JSONObject();
             detail.put("url", uri.toString());
