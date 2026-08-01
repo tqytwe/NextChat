@@ -17,7 +17,10 @@ class IndexedDBStorage implements StateStorage {
   public async setItem(name: string, value: string): Promise<void> {
     try {
       const _value = JSON.parse(value);
-      if (!_value?.state?._hasHydrated) {
+      if (
+        !_value?.state?._hasHydrated ||
+        _value?.state?._persistenceBlocked
+      ) {
         console.warn("skip setItem", name);
         return;
       }
@@ -32,6 +35,15 @@ class IndexedDBStorage implements StateStorage {
       await del(name);
     } catch (error) {
       localStorage.removeItem(name);
+    }
+  }
+
+  /** Persists a pre-migration snapshot without going through hydration guards. */
+  public async backupItem(name: string, value: string): Promise<void> {
+    try {
+      await set(name, value);
+    } catch (error) {
+      localStorage.setItem(name, value);
     }
   }
 

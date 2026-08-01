@@ -26,6 +26,13 @@ import { createPersistStore } from "../utils/store";
 import { useAccessStore } from "./access";
 import { useAppConfig } from "./config";
 import { useChatStore } from "./chat";
+import { useManagedMobileAppStore } from "./mobile";
+import { useSdStore } from "./sd";
+import {
+  clearManagedSessionSecrets,
+  loadManagedSessionSecrets,
+  saveManagedSessionSecrets,
+} from "../client/android-native";
 
 const DEFAULT_MANAGED_STATE = {
   backendBaseUrl: DEFAULT_MANAGED_BACKEND_BASE_URL,
@@ -55,6 +62,7 @@ export const useManagedNextChatStore = createPersistStore<
     clearLastError: () => void;
     cancel2FA: () => void;
     isAuthenticated: () => boolean;
+    restoreSecureSession: () => Promise<boolean>;
     login: (
       email: string,
       password: string,
@@ -123,6 +131,42 @@ export const useManagedNextChatStore = createPersistStore<
 
       isAuthenticated() {
         return !!get().accessToken && !!get().session?.api_key;
+      },
+
+      async restoreSecureSession() {
+        if (get().accessToken) {
+          void saveManagedSessionSecrets({
+            backendBaseUrl: get().backendBaseUrl,
+            accessToken: get().accessToken,
+            refreshToken: get().refreshToken,
+            tokenType: get().tokenType,
+            accessTokenExpiresAt: get().accessTokenExpiresAt,
+            user: get().user,
+            session: get().session,
+            imageSession: get().imageSession,
+          }).catch(() => undefined);
+          return true;
+        }
+        try {
+          const secrets = await loadManagedSessionSecrets();
+          if (!secrets.saved || !secrets.accessToken) return false;
+          set({
+            backendBaseUrl: normalizeManagedBaseUrl(
+              secrets.backendBaseUrl || get().backendBaseUrl,
+            ),
+            accessToken: secrets.accessToken,
+            refreshToken: secrets.refreshToken || "",
+            tokenType: secrets.tokenType || "Bearer",
+            accessTokenExpiresAt: secrets.accessTokenExpiresAt || "",
+            user: (secrets.user as ManagedAuthUser | null) || null,
+            session: (secrets.session as ManagedSession | null) || null,
+            imageSession:
+              (secrets.imageSession as ManagedSession | null) || null,
+          });
+          return true;
+        } catch {
+          return false;
+        }
       },
 
       async login(email: string, password: string, backendBaseUrl?: string) {
@@ -373,6 +417,16 @@ export const useManagedNextChatStore = createPersistStore<
           pendingTotpToken: "",
           pendingTotpEmail: "",
         });
+        void saveManagedSessionSecrets({
+          backendBaseUrl: get().backendBaseUrl,
+          accessToken: auth.access_token,
+          refreshToken: auth.refresh_token || get().refreshToken,
+          tokenType: auth.token_type || "Bearer",
+          accessTokenExpiresAt: expiresIn
+            ? new Date(Date.now() + expiresIn * 1000).toISOString()
+            : "",
+          user: auth.user || get().user,
+        }).catch(() => undefined);
       },
 
       applyBootstrap(bootstrap: ManagedMobileBootstrap) {
@@ -395,6 +449,10 @@ export const useManagedNextChatStore = createPersistStore<
         const backendBaseUrl = get().backendBaseUrl;
         const models = flattenManagedModels(chatModels);
         const defaultModel = pickManagedDefaultModel(chatModels);
+        const accountId = workspace.user?.id || chatSession.user_id;
+
+        useManagedMobileAppStore.getState().activateAccount(accountId);
+        useSdStore.getState().activateAccount(accountId);
 
         useAccessStore.getState().update((access) => {
           access.useCustomConfig = true;
@@ -435,6 +493,16 @@ export const useManagedNextChatStore = createPersistStore<
           loading: false,
           lastError: "",
         });
+        void saveManagedSessionSecrets({
+          backendBaseUrl,
+          accessToken: get().accessToken,
+          refreshToken: get().refreshToken,
+          tokenType: get().tokenType,
+          accessTokenExpiresAt: get().accessTokenExpiresAt,
+          user: workspace.user || get().user,
+          session: chatSession,
+          imageSession,
+        }).catch(() => undefined);
       },
 
       async logout() {
@@ -447,6 +515,7 @@ export const useManagedNextChatStore = createPersistStore<
             );
           }
         } finally {
+          await clearManagedSessionSecrets().catch(() => undefined);
           useAccessStore.getState().update((access) => {
             access.openaiApiKey = "";
             access.accessCode = "";
@@ -464,6 +533,21 @@ export const useManagedNextChatStore = createPersistStore<
   },
   {
     name: StoreKey.ManagedNextChat,
-    version: 1,
+    version: 3,
+    partialize: (state: any) => {
+      const {
+        accessToken: _accessToken,
+        refreshToken: _refreshToken,
+        accessTokenExpiresAt: _accessTokenExpiresAt,
+        session: _session,
+        imageSession: _imageSession,
+        ...persisted
+      } = state;
+      return persisted;
+    },
+    migrate: (persistedState: any, _persistedVersion: number) => ({
+      ...DEFAULT_MANAGED_STATE,
+      ...(persistedState || {}),
+    }),
   },
 );

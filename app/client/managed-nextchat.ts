@@ -2,8 +2,8 @@ import { Capacitor, CapacitorHttp } from "@capacitor/core";
 import { LLMModel } from "./api";
 import { ServiceProvider } from "../constant";
 import {
+  formatManagedMobileError,
   getManagedMobileText,
-  localizeManagedMobileError,
 } from "./managed-mobile-i18n";
 import {
   isDirectNativeStreamAvailable,
@@ -25,9 +25,24 @@ export class ManagedApiError extends Error {
     readonly status: number,
     readonly path: string,
     readonly code?: number | string,
+    readonly requestId = "unknown",
+    readonly category: "http" | "api" = "http",
   ) {
     super(message);
     this.name = "ManagedApiError";
+  }
+}
+
+export class ManagedTransportError extends Error {
+  constructor(
+    message: string,
+    readonly category: ReturnType<typeof diagnosticCategory>,
+    readonly path: string,
+    readonly requestId: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "ManagedTransportError";
   }
 }
 
@@ -121,6 +136,14 @@ export interface ManagedWorkspaceModel {
   sort_order?: number;
   effective_input_price?: number;
   effective_output_price?: number;
+  image_capabilities?: {
+    operations?: string[];
+    supported_sizes?: string[];
+    max_reference_images?: number;
+    max_outputs_per_job?: number;
+    recommended_parallelism?: number;
+    max_queued_outputs?: number;
+  };
 }
 
 export interface ManagedWorkspaceGroup {
@@ -137,6 +160,7 @@ export interface ManagedWorkspaceGroup {
 export interface ManagedWorkspaceModels {
   source?: string;
   default_model?: string;
+  image_capabilities_version?: string;
   selected_group_id?: number;
   groups?: ManagedWorkspaceGroup[];
 }
@@ -348,6 +372,117 @@ function initBodyAsNativeData(body?: BodyInit | null) {
   return body;
 }
 
+function escapeMultipartValue(value: string) {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r|\n/g, " ");
+}
+
+function concatUint8Arrays(parts: Uint8Array[]) {
+  const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  parts.forEach((part) => {
+    out.set(part, offset);
+    offset += part.byteLength;
+  });
+  return out;
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return globalThis.btoa(binary);
+}
+
+function encodeUTF8(value: string) {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(value);
+  }
+  if (typeof Buffer !== "undefined") {
+    return new Uint8Array(Buffer.from(value, "utf8"));
+  }
+  const encoded = unescape(encodeURIComponent(value));
+  const out = new Uint8Array(encoded.length);
+  for (let index = 0; index < encoded.length; index += 1) {
+    out[index] = encoded.charCodeAt(index);
+  }
+  return out;
+}
+
+function blobToUint8Array(blob: Blob) {
+  if (typeof blob.arrayBuffer === "function") {
+    return blob.arrayBuffer().then((buffer) => new Uint8Array(buffer));
+  }
+  if (typeof FileReader !== "undefined") {
+    return new Promise<Uint8Array>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () =>
+        resolve(new Uint8Array(reader.result as ArrayBuffer));
+      reader.onerror = () =>
+        reject(reader.error || new Error("blob read failed"));
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+  if (typeof Response !== "undefined") {
+    return new Response(blob)
+      .arrayBuffer()
+      .then((buffer) => new Uint8Array(buffer));
+  }
+  return Promise.reject(new Error("blob read failed"));
+}
+
+async function formDataToMultipartBody(formData: FormData, headers: Headers) {
+  const boundary = `----jisudengchat-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  const parts: Uint8Array[] = [];
+  const entries: Array<[string, FormDataEntryValue]> = [];
+
+  formData.forEach((value, name) => {
+    entries.push([name, value]);
+  });
+
+  for (const [name, value] of entries) {
+    parts.push(encodeUTF8(`--${boundary}\r\n`));
+    if (value instanceof Blob) {
+      const fileName =
+        "name" in value && typeof value.name === "string" && value.name.trim()
+          ? value.name
+          : "upload.bin";
+      const contentType = value.type || "application/octet-stream";
+      parts.push(
+        encodeUTF8(
+          `Content-Disposition: form-data; name="${escapeMultipartValue(
+            name,
+          )}"; filename="${escapeMultipartValue(fileName)}"\r\n` +
+            `Content-Type: ${contentType}\r\n\r\n`,
+        ),
+      );
+      parts.push(await blobToUint8Array(value));
+      parts.push(encodeUTF8("\r\n"));
+      continue;
+    }
+    parts.push(
+      encodeUTF8(
+        `Content-Disposition: form-data; name="${escapeMultipartValue(
+          name,
+        )}"\r\n\r\n${String(value)}\r\n`,
+      ),
+    );
+  }
+  parts.push(encodeUTF8(`--${boundary}--\r\n`));
+  headers.set("Content-Type", `multipart/form-data; boundary=${boundary}`);
+  return bytesToBase64(concatUint8Arrays(parts));
+}
+
 async function directNativeRequestText(
   url: string,
   method: string,
@@ -357,14 +492,26 @@ async function directNativeRequestText(
 ) {
   let status = 0;
   const lines: string[] = [];
+  let bodyBase64: string | undefined;
+  if (
+    typeof FormData !== "undefined" &&
+    body &&
+    typeof body !== "string" &&
+    body instanceof FormData
+  ) {
+    const multipartHeaders = new Headers(headers);
+    bodyBase64 = await formDataToMultipartBody(body, multipartHeaders);
+    Object.assign(headers, headersToRecord(multipartHeaders));
+  }
   const request = await startDirectNativeStreamRequest(
     {
       url,
       method,
       headers,
       body: typeof body === "string" ? body : undefined,
+      bodyBase64,
       connectTimeout: 15_000,
-      readTimeout: 30_000,
+      readTimeout: 120_000,
     },
     {
       onStatus: (nextStatus) => {
@@ -403,10 +550,15 @@ export async function managedRequestText(
   headers: Headers,
 ) {
   const url = managedApiUrl(baseUrl, path);
+  const requestId =
+    headers.get("X-Request-ID") ||
+    `mobile-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  headers.set("X-Request-ID", requestId);
   const method = (init.method || "GET").toUpperCase();
   const signal = init.signal;
   const diagnosticPath = sanitizedDiagnosticPath(path);
-  const idempotent = method === "GET" || method === "HEAD";
+  const idempotent =
+    method === "GET" || method === "HEAD" || headers.has("Idempotency-Key");
   const native = isAndroidNativeHttpAvailable();
   const nativeAttempts = native && idempotent ? 2 : 1;
   let lastError: unknown;
@@ -439,7 +591,7 @@ export async function managedRequestText(
                 data: initBodyAsNativeData(init.body),
                 responseType: "text",
                 connectTimeout: 15000,
-                readTimeout: 30000,
+                readTimeout: 120000,
               }),
               signal,
             );
@@ -484,7 +636,7 @@ export async function managedRequestText(
             message: "request recovered after retry",
           });
         }
-        return result;
+        return { ...result, requestId };
       } catch (error) {
         lastError = error;
         recordManagedRequestDiagnostic({
@@ -527,6 +679,7 @@ export async function managedRequestText(
           ok: res.ok,
           status: res.status,
           text: await res.text().catch(() => ""),
+          requestId,
         };
       } catch (error) {
         lastError = error;
@@ -552,6 +705,7 @@ export async function managedRequestText(
         ok: res.ok,
         status: res.status,
         text: await res.text().catch(() => ""),
+        requestId,
       };
     } catch (error) {
       lastError = error;
@@ -568,14 +722,25 @@ export async function managedRequestText(
     }
   }
 
-  if (
-    lastError instanceof TypeError &&
-    /failed to fetch|network/i.test(lastError.message)
-  ) {
-    throw new Error(getManagedMobileText().errors.networkFailed);
-  }
   if (native || lastError) {
-    throw new Error(getManagedMobileText().errors.networkFailed);
+    const category = diagnosticCategory(lastError);
+    const label =
+      category === "timeout"
+        ? getManagedMobileText().errors.requestTimeout
+        : category === "offline"
+        ? getManagedMobileText().errors.offline
+        : getManagedMobileText().errors.networkFailed;
+    throw new ManagedTransportError(
+      formatManagedMobileError({
+        message: label,
+        category,
+        requestId,
+      }),
+      category,
+      diagnosticPath,
+      requestId,
+      { cause: lastError },
+    );
   }
   throw lastError;
 }
@@ -616,15 +781,20 @@ export async function managedJsonRequest<T>(
       })()
     : null;
   if (!res.ok || !payload || payload.code !== 0) {
+    const category = !res.ok ? "http" : "api";
     throw new ManagedApiError(
-      localizeManagedMobileError({
+      formatManagedMobileError({
         message: payload?.message || bodyText,
         status: res.status,
         path,
+        category,
+        requestId: res.requestId,
       }),
       res.status,
       path,
       payload?.code,
+      res.requestId,
+      category,
     );
   }
   return payload.data as T;

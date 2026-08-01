@@ -22,6 +22,7 @@ export const getBuildConfig = () => {
       ? ""
       : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
   const version = "v" + tauriConfig.package.version;
+  const androidVersion = process.env.NEXT_PUBLIC_ANDROID_VERSION ?? version;
 
   const commitInfo = (() => {
     try {
@@ -57,11 +58,13 @@ export const getBuildConfig = () => {
       process.env.NEXT_PUBLIC_NEXTCHAT_WEB_URL ?? "https://www.jisudeng.com",
     androidApkUrl:
       process.env.NEXT_PUBLIC_ANDROID_APK_URL ??
-      "/downloads/jisudengchat-android.apk",
+      `/downloads/jisudengchat-android.apk?v=${encodeURIComponent(
+        androidVersion,
+      )}`,
     androidManifestUrl:
       process.env.NEXT_PUBLIC_ANDROID_MANIFEST_URL ??
       "/downloads/android-version.json",
-    androidVersion: process.env.NEXT_PUBLIC_ANDROID_VERSION ?? version,
+    androidVersion,
     androidApkSha256: process.env.NEXT_PUBLIC_ANDROID_APK_SHA256 ?? "",
     androidApkSize: process.env.NEXT_PUBLIC_ANDROID_APK_SIZE ?? "",
     androidReleaseNotes: process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES ?? "",

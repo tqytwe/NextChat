@@ -1,0 +1,26 @@
+appId: com.jisudeng.chat
+name: Local reference image generation bypasses cloud assets
+tags:
+  - fixture
+---
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "app-tab-image"
+- tapOn: "image-add-reference"
+- tapOn:
+    id: "com.google.android.providers.media.module:id/icon_thumbnail"
+    index: 0
+- tapOn:
+    id: "com.google.android.providers.media.module:id/button_add"
+- assertVisible: "清空参考图|Clear references"
+- tapOn: "image-prompt"
+- inputText: "maestro local reference image"
+- hideKeyboard
+- scroll
+- tapOn: "image-generate"
+- extendedWaitUntil:
+    visible: ".*(已完成|Completed).*"
+    timeout: 60000
+- tapOn: "app-tab-gallery"
+- extendedWaitUntil:
+    visible: "local-gallery-item-1"
+    timeout: 20000

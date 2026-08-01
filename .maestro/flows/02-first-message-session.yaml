@@ -1,0 +1,17 @@
+appId: com.jisudeng.chat
+name: First message creates the chat session
+tags:
+  - core
+---
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "dashboard-new-chat"
+- assertVisible: "chat-draft-no-session"
+- tapOn: "chat-composer"
+- inputText: "maestro-first-message-session"
+- hideKeyboard
+- tapOn: "chat-send"
+- assertVisible: "maestro-first-message-session"
+- assertNotVisible: "chat-draft-no-session"
+- assertVisible: "chat-message-user-1"

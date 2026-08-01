@@ -1,10 +1,10 @@
 import {
   ManagedApiError,
   ManagedEnvelope,
-  managedApiUrl,
   managedJsonRequest,
   managedRequestText,
 } from "./managed-nextchat";
+import { formatManagedMobileError } from "./managed-mobile-i18n";
 
 export const MOBILE_PLATFORM_API_PREFIX = "/api/v1/mobile";
 
@@ -416,10 +416,14 @@ export type MobilePaymentStatus =
 
 export interface MobilePaymentCreateRequest {
   product_id?: string;
-  plan_id?: string;
+  plan_id?: number | string;
   amount?: number;
-  provider: MobilePaymentProvider;
-  coupon_code?: string;
+  provider?: MobilePaymentProvider;
+  payment_type?: MobilePaymentProvider;
+  order_type?: "balance" | "subscription" | string;
+  payment_source?: string;
+  is_mobile?: boolean;
+  coupon_id?: number;
   client_request_id: string;
   return_url?: string;
   locale?: MobileLocale;
@@ -427,18 +431,34 @@ export interface MobilePaymentCreateRequest {
 }
 
 export interface MobilePaymentOrder {
-  order_id: string;
-  status: MobilePaymentStatus;
-  provider: MobilePaymentProvider;
+  order?: Record<string, unknown>;
+  order_id?: string | number;
+  id?: string | number;
+  status?: MobilePaymentStatus | string;
+  provider?: MobilePaymentProvider;
+  payment_type?: string;
   amount?: number;
+  pay_amount?: number;
   currency?: string;
+  launch?: {
+    type?: string;
+    url?: string;
+    fallback_url?: string;
+    package?: string;
+  };
   deeplink?: string;
   scheme_url?: string;
   mweb_url?: string;
   h5_url?: string;
   pay_url?: string;
   qr_code?: string;
+  result_type?: string;
   return_url?: string;
+  resume_token?: string;
+  verify_after_ms?: number;
+  paid?: boolean;
+  completed?: boolean;
+  can_retry_payment?: boolean;
   expires_at?: string;
   paid_at?: string;
   created_at?: string;
@@ -737,13 +757,17 @@ export async function uploadMobileAssetFormData(
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
-  const response = await fetch(managedApiUrl(baseUrl, path), {
-    method: "POST",
+  const response = await managedRequestText(
+    baseUrl,
+    path,
+    {
+      method: "POST",
+      body: formData,
+      signal: options?.signal ?? undefined,
+    },
     headers,
-    body: formData,
-    signal: options?.signal ?? undefined,
-  });
-  const bodyText = await response.text().catch(() => "");
+  );
+  const bodyText = response.text;
   const payload = bodyText
     ? (() => {
         try {
@@ -754,11 +778,20 @@ export async function uploadMobileAssetFormData(
       })()
     : null;
   if (!response.ok || !payload || payload.code !== 0) {
+    const category = !response.ok ? "http" : "api";
     throw new ManagedApiError(
-      payload?.message || bodyText || `HTTP ${response.status}`,
+      formatManagedMobileError({
+        message: payload?.message || bodyText,
+        status: response.status,
+        path,
+        category,
+        requestId: response.requestId,
+      }),
       response.status,
       path,
       payload?.code,
+      response.requestId,
+      category,
     );
   }
   return payload.data as MobileAsset;

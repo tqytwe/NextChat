@@ -1,0 +1,24 @@
+appId: com.jisudeng.chat
+name: Offline failure automatically retries after network recovery
+tags:
+  - network
+---
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "dashboard-new-chat"
+- toggleAirplaneMode
+- tapOn: "chat-composer"
+- inputText: "maestro-network-recovery"
+- hideKeyboard
+- tapOn: "chat-send"
+- extendedWaitUntil:
+    visible:
+      text: ".*HTTP unavailable.*(offline|network|timeout).*"
+    timeout: 30000
+- toggleAirplaneMode
+- extendedWaitUntil:
+    notVisible:
+      text: ".*HTTP unavailable.*(offline|network|timeout).*"
+    timeout: 60000
+- assertVisible: "maestro-network-recovery"

@@ -1,0 +1,17 @@
+appId: com.jisudeng.chat
+name: Product promotion kit creates independent local image tasks
+tags:
+  - fixture
+---
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "open-content-kit"
+- tapOn: "New kit"
+- tapOn: "content-kit-product"
+- inputText: "maestro promotion product"
+- tapOn: "content-kit-selling-points"
+- inputText: "portable, durable, easy to use"
+- hideKeyboard
+- tapOn: "content-kit-generate"
+- extendedWaitUntil:
+    visible: ".*(商品主图|Product main visual).*"
+    timeout: 15000

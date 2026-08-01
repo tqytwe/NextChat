@@ -18,6 +18,8 @@ import CloseIcon from "../icons/close.svg";
 import CopyIcon from "../icons/copy.svg";
 import DeleteIcon from "../icons/delete.svg";
 import DownloadIcon from "../icons/download.svg";
+import EyeIcon from "../icons/eye.svg";
+import EyeOffIcon from "../icons/eye-off.svg";
 import FavoriteIcon from "../icons/favorite.svg";
 import HistoryIcon from "../icons/history.svg";
 import ImageIcon from "../icons/image.svg";
@@ -29,6 +31,7 @@ import SDIcon from "../icons/sd.svg";
 import SendIcon from "../icons/send-white.svg";
 import SettingsIcon from "../icons/settings.svg";
 import ShareIcon from "../icons/share.svg";
+import ThreeDotsIcon from "../icons/three-dots.svg";
 import UploadIcon from "../icons/upload.svg";
 import VoiceIcon from "../icons/voice.svg";
 import BotIcon from "../icons/bot.svg";
@@ -45,10 +48,14 @@ import type {
   ManagedMobileChatMessage,
   ManagedMobileChatRole,
   ManagedMobileChatSession,
+  ManagedMobileContentKit,
+  ManagedMobileContentKitAsset,
 } from "../store/mobile";
+import { localizedMobileDisplay } from "../client/mobile-display";
 import { compressImage, removeImage } from "../utils/chat";
 import {
   ManagedApiError,
+  ManagedTransportError,
   managedJsonRequest as managedApiJsonRequest,
   managedApiUrl,
   managedGatewayBaseUrl,
@@ -63,13 +70,20 @@ import {
 } from "../client/managed-nextchat";
 import type { ManagedWorkspaceModel } from "../client/managed-nextchat";
 import {
+  formatManagedMobileError,
   getManagedMobileText,
   localizeManagedMobileError,
 } from "../client/managed-mobile-i18n";
+import {
+  formatUsageUSD,
+  planUsageInfo,
+  subscriptionUsagePeriods,
+} from "../client/mobile-subscription";
 import type { ManagedMobileText } from "../client/managed-mobile-i18n";
 import {
   getNativeDownloadStatus,
   getNativeDeviceInfo,
+  getNativeE2EFixtureFlags,
   installDownloadedApk,
   captureImage,
   deleteAppImages,
@@ -85,6 +99,7 @@ import {
   saveImageToAppStorage,
   saveImageToGallery,
   shareImage,
+  shareImages,
   shareText,
   showNativeNotification,
   isDirectNativeStreamAvailable,
@@ -93,6 +108,9 @@ import {
   startNativeDownload,
   stopHoldSpeechRecognition,
   readNativeSharedMaterial,
+  loadLoginCredentials,
+  saveLoginCredentials,
+  clearLoginCredentials,
 } from "../client/android-native";
 import type {
   NativeAppImage,
@@ -102,7 +120,10 @@ import {
   createMobilePlatformClient,
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
-import { registerMobilePush } from "../client/mobile-push";
+import {
+  mobileInstallationId,
+  registerMobilePush,
+} from "../client/mobile-push";
 import {
   buildMobileRegistrationPayload,
   buildInvitePosterPayload,
@@ -132,8 +153,14 @@ import type {
   PlayWelfareTeamInvite,
   PlayWelfareTeamSeasonDetail,
 } from "../client/play-welfare";
+import {
+  mobileAttributionAffiliateCode,
+  mobileAttributionToken,
+  reportMobileAttributionEvent,
+} from "../client/mobile-attribution";
 import type {
   MobileAsset,
+  MobilePaymentOrder,
   MobileSkill,
   MobileSupportTicket,
   MobileSupportTicketDetail,
@@ -143,7 +170,7 @@ import type {
 
 type ClientBuildConfig = NonNullable<ReturnType<typeof getClientConfig>>;
 
-type MaterialUploadState = "uploading" | "ready" | "failed";
+type MaterialUploadState = "uploading" | "ready" | "local" | "failed";
 
 type MaterialDraft = {
   localId: string;
@@ -152,6 +179,7 @@ type MaterialDraft = {
   state: MaterialUploadState;
   previewUrl?: string;
   asset?: MobileAsset;
+  localText?: string;
   error?: string;
 };
 
@@ -164,6 +192,36 @@ type ServerSkillSelection = {
 
 const SERVER_SKILL_SELECTION_KEY = "jisudengchat-server-skills-v1";
 const COLLABORATION_AGENT_ID = "multi-agent-collaboration";
+const CONTENT_KIT_GLOBAL_CONCURRENCY = 2;
+const CONTENT_KIT_MAX_OUTPUTS_PER_RUN = 24;
+const CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT = 48;
+const activeContentKitOutputs = new Set<string>();
+
+type ContentKitShotPlan = {
+  id: string;
+  kind: string;
+  label: string;
+  size: string;
+  count: number;
+};
+
+type ContentKitBatchEstimate = {
+  estimated_cost: number;
+  balance: number;
+  sufficient: boolean;
+};
+
+type ContentKitUsageRecord = {
+  id: number | string;
+  request_id?: string;
+  actual_cost?: number;
+};
+
+type ContentKitUsagePage = {
+  items?: ContentKitUsageRecord[];
+};
+
+type ContentKitAssetTag = "keep" | "review" | "reject" | "video";
 
 function clientRequestID(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -190,7 +248,7 @@ async function requestWithManagedAuth<T>(
   run: (input: { accessToken: string; baseUrl: string }) => Promise<T>,
   options: { networkRetries?: number; authRetries?: number } = {},
 ) {
-  const networkRetries = options.networkRetries ?? 2;
+  const networkRetries = options.networkRetries ?? 0;
   const authRetries = options.authRetries ?? 1;
   let networkAttempt = 0;
   let authAttempt = 0;
@@ -299,6 +357,24 @@ async function mobilePlatformClient() {
           makeClient(baseUrl, accessToken).tasks.status(...args),
         ),
     },
+    payments: {
+      create: (
+        ...args: Parameters<MobilePlatformClient["payments"]["create"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).payments.create(...args),
+        ),
+      detail: (
+        ...args: Parameters<MobilePlatformClient["payments"]["detail"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).payments.detail(...args),
+        ),
+      sync: (...args: Parameters<MobilePlatformClient["payments"]["sync"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).payments.sync(...args),
+        ),
+    },
     support: {
       tickets: {
         list: (
@@ -385,41 +461,45 @@ function blobToDataUrl(blob: Blob) {
   });
 }
 
+function blobToText(blob: Blob) {
+  if (typeof blob.text === "function") return blob.text();
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsText(blob);
+  });
+}
+
 function mobileTaskStatusLabel(
   status: MobileTaskStatus,
   text: ManagedMobileText,
 ) {
-  return text.platform.taskStatuses[status] || status;
+  return text.platform.taskStatuses[status] || text.notSynced;
 }
 
 function mobileAssetTitle(asset: MobileAsset, text: ManagedMobileText) {
-  return (
-    asset.title_zh ||
-    asset.title ||
-    asset.name_zh ||
-    asset.name ||
-    asset.metadata?.file_name ||
-    text.platform.unnamedAsset
-  ).toString();
+  const fileName = asset.metadata?.file_name;
+  return localizedMobileDisplay(asset, {
+    defaultFields: ["name", "name_zh", "name_en"],
+    fallback:
+      (typeof fileName === "string" ? fileName : "") ||
+      text.platform.unnamedAsset,
+  });
 }
 
 function serverSkillTitle(skill: MobileSkill, text: ManagedMobileText) {
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
-  return (
-    (zh ? skill.title_zh || skill.name_zh : skill.title_en || skill.name_en) ||
-    skill.title ||
-    skill.name ||
-    skill.slug
-  );
+  return localizedMobileDisplay(skill, {
+    defaultFields: ["name", "name_zh", "name_en", "slug"],
+    fallback: text.platform.skillDefaultDescription,
+  });
 }
 
 function serverSkillDescription(skill: MobileSkill, text: ManagedMobileText) {
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
-  return (
-    (zh ? skill.description_zh : skill.description_en) ||
-    skill.description ||
-    text.platform.skillDefaultDescription
-  );
+  return localizedMobileDisplay(skill, {
+    kind: "description",
+    fallback: text.platform.skillDefaultDescription,
+  });
 }
 
 function normalizedSkillCategory(value?: string) {
@@ -561,6 +641,9 @@ type AndroidUpdateManifest = {
   version?: string;
   latestVersion?: string;
   androidVersion?: string;
+  minSupportedVersion?: string;
+  minAndroidVersion?: string;
+  severity?: "normal" | "recommended" | "required";
   apkUrl?: string;
   androidApkUrl?: string;
   url?: string;
@@ -569,6 +652,10 @@ type AndroidUpdateManifest = {
   notes?: string[] | string;
   releaseNotes?: string[] | string;
 };
+
+const UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const UPDATE_CHECKED_AT_STORAGE_KEY = "managed-mobile-update-checked-at";
+const UPDATE_DISMISSED_VERSION_STORAGE_KEY = "managed-mobile-update-dismissed";
 
 type AccountData = {
   orders?: any[];
@@ -613,9 +700,33 @@ type CheckoutInfo = {
   help_image_url?: string;
 };
 
+type UserCoupon = {
+  id: number;
+  template_name?: string;
+  status?: string;
+  expires_at?: string;
+  valid_from?: string;
+  terms_snapshot?: {
+    benefit_type?: string;
+    benefit_value?: number;
+    minimum_amount?: number;
+    currency?: string;
+    scope?: string;
+  };
+};
+
+type CouponPaymentQuote = {
+  user_coupon_id?: number;
+  list_amount?: number;
+  discount_amount?: number;
+  fee_amount?: number;
+  pay_amount?: number;
+  payment_currency?: string;
+};
+
 type PaymentOrderCreateResult = {
-  order_id?: number;
-  id?: number;
+  order_id?: number | string;
+  id?: number | string;
   amount?: number;
   pay_amount?: number;
   fee_rate?: number;
@@ -638,6 +749,7 @@ type PaymentOrderCreateResult = {
   currency?: string;
   expires_at?: string;
   payment_mode?: string;
+  return_url?: string;
   resume_token?: string;
   order_type?: string;
   failed_at?: string;
@@ -645,14 +757,86 @@ type PaymentOrderCreateResult = {
   failure_reason?: string;
   error?: string;
   message?: string;
+  paid?: boolean;
+  completed?: boolean;
+  can_retry_payment?: boolean;
+  verify_after_ms?: number;
+  launch?: {
+    type?: string;
+    url?: string;
+    fallback_url?: string;
+    package?: string;
+  };
+  order?: Record<string, any>;
 };
 
 const PENDING_PAYMENT_STORAGE_KEY = "jisudeng-pending-payment-v1";
 
+function normalizeMobilePaymentOrder(
+  result: MobilePaymentOrder | any,
+  orderType?: string,
+): PaymentOrderCreateResult {
+  const nested =
+    result?.order && typeof result.order === "object" ? result.order : {};
+  const launch =
+    result?.launch && typeof result.launch === "object" ? result.launch : {};
+  const orderId =
+    nested.order_id || nested.id || result?.order_id || result?.id;
+  return {
+    ...nested,
+    ...result,
+    order: nested,
+    order_id: orderId,
+    id: nested.id || orderId,
+    amount: nested.amount ?? result?.amount,
+    pay_amount: nested.pay_amount ?? result?.pay_amount ?? result?.amount,
+    status: nested.status || result?.status,
+    payment_type:
+      nested.payment_type || result?.payment_type || result?.provider || "",
+    out_trade_no: nested.out_trade_no || result?.out_trade_no,
+    result_type: result?.result_type || nested.result_type,
+    pay_url: result?.pay_url || nested.pay_url || launch.url || "",
+    payment_url: result?.payment_url || nested.payment_url || "",
+    checkout_url: result?.checkout_url || nested.checkout_url || "",
+    h5_url: result?.h5_url || nested.h5_url || "",
+    mweb_url: result?.mweb_url || nested.mweb_url || "",
+    deeplink: result?.deeplink || nested.deeplink || launch.url || "",
+    deep_link: result?.deep_link || nested.deep_link || "",
+    scheme_url: result?.scheme_url || nested.scheme_url || "",
+    app_url: result?.app_url || nested.app_url || "",
+    url: result?.url || nested.url || launch.fallback_url || "",
+    qr_code: result?.qr_code || nested.qr_code || "",
+    code_url: result?.code_url || nested.code_url || "",
+    return_url: result?.return_url || nested.return_url,
+    resume_token: result?.resume_token || nested.resume_token,
+    verify_after_ms: result?.verify_after_ms || nested.verify_after_ms,
+    paid: Boolean(result?.paid || nested.paid),
+    completed: Boolean(result?.completed || nested.completed),
+    can_retry_payment: Boolean(
+      result?.can_retry_payment ?? nested.can_retry_payment,
+    ),
+    expires_at: nested.expires_at || result?.expires_at,
+    failed_at: nested.failed_at || result?.failed_at,
+    failed_reason:
+      nested.failed_reason ||
+      nested.failure_reason ||
+      result?.failed_reason ||
+      result?.failure_reason,
+    failure_reason:
+      nested.failure_reason ||
+      nested.failed_reason ||
+      result?.failure_reason ||
+      result?.failed_reason,
+    order_type: orderType || nested.order_type || result?.order_type,
+    launch: result?.launch,
+  };
+}
+
 function readPendingPaymentOrder(): PaymentOrderCreateResult | null {
   try {
-    const value = JSON.parse(
-      localStorage.getItem(PENDING_PAYMENT_STORAGE_KEY) || "null",
+    const value = readStoredJSON<PaymentOrderCreateResult | null>(
+      PENDING_PAYMENT_STORAGE_KEY,
+      null,
     );
     if (!value || typeof value !== "object") return null;
     if (!value.order_id && !value.out_trade_no && !value.resume_token)
@@ -665,27 +849,24 @@ function readPendingPaymentOrder(): PaymentOrderCreateResult | null {
 
 function persistPendingPaymentOrder(order: PaymentOrderCreateResult | null) {
   if (!order || !isPendingOrderStatus(order.status)) {
-    localStorage.removeItem(PENDING_PAYMENT_STORAGE_KEY);
+    localStorage.removeItem(accountStorageKey(PENDING_PAYMENT_STORAGE_KEY));
     return;
   }
-  localStorage.setItem(
-    PENDING_PAYMENT_STORAGE_KEY,
-    JSON.stringify({
-      order_id: order.order_id || order.id,
-      out_trade_no: order.out_trade_no,
-      resume_token: order.resume_token,
-      expires_at: order.expires_at,
-      status: order.status,
-      order_type: order.order_type,
-      pay_url: order.pay_url,
-      payment_url: order.payment_url,
-      mweb_url: order.mweb_url,
-      h5_url: order.h5_url,
-      deeplink: order.deeplink,
-      scheme_url: order.scheme_url,
-      qr_code: order.qr_code,
-    }),
-  );
+  writeStoredJSON(PENDING_PAYMENT_STORAGE_KEY, {
+    order_id: order.order_id || order.id,
+    out_trade_no: order.out_trade_no,
+    resume_token: order.resume_token,
+    expires_at: order.expires_at,
+    status: order.status,
+    order_type: order.order_type,
+    pay_url: order.pay_url,
+    payment_url: order.payment_url,
+    mweb_url: order.mweb_url,
+    h5_url: order.h5_url,
+    deeplink: order.deeplink,
+    scheme_url: order.scheme_url,
+    qr_code: order.qr_code,
+  });
 }
 
 type ChatMessageActionTarget = {
@@ -812,6 +993,8 @@ const GALLERY_PREF_STORAGE_KEY = "jisudengchat-gallery-preferences-v1";
 const IMAGE_PREF_STORAGE_KEY = "jisudengchat-image-preferences-v1";
 const CHAT_PREF_STORAGE_KEY = "jisudengchat-chat-preferences-v1";
 const NATIVE_SHARE_DRAFT_KEY = "jisudengchat-native-share-draft-v1";
+const CRASH_LOG_STORAGE_KEY = "nextchat-mobile-crash-log";
+const DIAGNOSTICS_CURSOR_STORAGE_KEY = "jisudengchat-diagnostics-last-sent-v1";
 
 const IMAGE_PROMPT_TEMPLATES: ImagePromptTemplate[] = [
   {
@@ -1823,6 +2006,60 @@ function imageModelSupportsStyle(model: string) {
   return /dall-e-3/i.test(model);
 }
 
+function imageModelSupportsReferences(
+  model: ManagedWorkspaceModel | string,
+  knownModels: ManagedWorkspaceModel[] = [],
+  allowLegacyFallback = true,
+) {
+  const workspaceModel =
+    typeof model === "string"
+      ? knownModels.find((item) => modelValue(item) === model)
+      : model;
+  const capabilities = workspaceModel?.image_capabilities;
+  if (capabilities) {
+    return (
+      capabilities.operations?.includes("edit") === true &&
+      Number(capabilities.max_reference_images || 0) > 0
+    );
+  }
+
+  if (!allowLegacyFallback) return false;
+
+  // Compatibility only for older servers that do not expose capabilities.
+  const normalized = (typeof model === "string" ? model : modelValue(model))
+    .toLowerCase()
+    .trim();
+  return (
+    /^gpt-image-/.test(normalized) ||
+    /(?:gemini|imagen).*image/.test(normalized) ||
+    /^grok-imagine/.test(normalized)
+  );
+}
+
+function contentKitReferenceLimit(model?: ManagedWorkspaceModel) {
+  return Math.max(
+    0,
+    Math.min(12, Number(model?.image_capabilities?.max_reference_images || 0)),
+  );
+}
+
+function contentKitModelSupportsSize(
+  model: ManagedWorkspaceModel | undefined,
+  size: string,
+) {
+  const supported = model?.image_capabilities?.supported_sizes;
+  return !supported?.length || supported.includes(size);
+}
+
+function firstReferenceImageModel(
+  models: ManagedWorkspaceModel[],
+  allowLegacyFallback = true,
+) {
+  return models.find((model) =>
+    imageModelSupportsReferences(model, [], allowLegacyFallback),
+  );
+}
+
 function imageSizeOptionsForModel(model: string) {
   const normalized = model.toLowerCase();
   if (/dall-e-3/.test(normalized)) {
@@ -1898,6 +2135,28 @@ function isInformativeImageError(message: string) {
   return !/^(bad gateway|service unavailable|upstream|temporarily unavailable|服务器暂时不可用|图片服务暂时繁忙)$/.test(
     normalized,
   );
+}
+
+function conciseImageGatewayReason(message: string) {
+  const raw = message.trim();
+  if (!raw) return "";
+  try {
+    const payload = JSON.parse(raw);
+    if (payload && typeof payload === "object") {
+      const parts = [
+        payload.title,
+        payload.detail,
+        payload.instance ? `request ${payload.instance}` : "",
+      ]
+        .filter((item) => typeof item === "string" && item.trim())
+        .map((item) => String(item).trim());
+      if (parts.length)
+        return Array.from(new Set(parts)).join(". ").slice(0, 360);
+    }
+  } catch {
+    // Plain upstream messages are handled below.
+  }
+  return raw.replace(/\s+/g, " ").slice(0, 240);
 }
 
 function imageResults(item: any) {
@@ -2010,10 +2269,19 @@ function preferredChatGroupID(
 function storedChatGroupID(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
-  const stored = Number(
-    readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId,
-  );
+  const stored = storedChatPreferenceGroupID();
   return preferredChatGroupID(workspace, stored || undefined);
+}
+
+function storedChatPreferenceGroupID() {
+  return Number(readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId);
+}
+
+function persistChatPreference(groupId?: number, model = "") {
+  writeStoredJSON(CHAT_PREF_STORAGE_KEY, {
+    groupId: groupId || 0,
+    model,
+  });
 }
 
 function stableChatGroupName(
@@ -2039,9 +2307,6 @@ function describeImageError(
       : context.text.errors.noImageModels;
   }
   const normalized = (message || "").toLowerCase();
-  if (/failed to fetch|network|timeout|timed out|网络/.test(normalized)) {
-    return context.text.errors.networkFailed;
-  }
   if (/404|not found|model.*not.*found|model_not_found/.test(normalized)) {
     return context.text.errors.imageModelUnavailable(
       context.selectedModel || "",
@@ -2077,10 +2342,14 @@ function describeImageError(
       normalized,
     )
   ) {
-    if (isInformativeImageError(message)) {
-      return context.text.errors.imageGatewayUnavailableWithReason(message);
+    const reason = conciseImageGatewayReason(message);
+    if (isInformativeImageError(reason)) {
+      return context.text.errors.imageGatewayUnavailableWithReason(reason);
     }
     return context.text.errors.imageGatewayUnavailable;
+  }
+  if (/failed to fetch|network|timeout|timed out|网络/.test(normalized)) {
+    return context.text.errors.networkFailed;
   }
   return message || context.text.image.generateFailed;
 }
@@ -2115,6 +2384,41 @@ function openAIImageData(json: any) {
   return [];
 }
 
+async function persistContentKitImageResult(
+  result: any,
+  context: {
+    taskId: string;
+    prompt: string;
+    model: string;
+    ownerUserId: string;
+  },
+) {
+  let imageData = "";
+  const source =
+    typeof result === "string"
+      ? result
+      : result?.b64_json
+      ? `data:image/png;base64,${result.b64_json}`
+      : result?.image || result?.url || "";
+  if (/^https?:\/\//i.test(source)) {
+    imageData = await compressImage(
+      await (await fetch(source)).blob(),
+      1024 * 1024,
+    );
+  } else if (source) {
+    imageData = source.startsWith("data:")
+      ? source
+      : `data:image/png;base64,${source}`;
+  }
+  if (!imageData) throw new Error("Image response did not contain an image.");
+  const saved = await saveImageToAppStorage(
+    imageData,
+    makeImageFileName("content-kit", context.taskId),
+    context,
+  );
+  return { url: saved.localUrl || imageData, fileName: saved.fileName || "" };
+}
+
 function imageLocalFileNames(item: any) {
   const names = [
     ...(Array.isArray(item?.local_files) ? item.local_files : []),
@@ -2134,26 +2438,34 @@ function galleryItemPreferenceKey(item: any) {
 }
 
 function readGalleryPreferences(): GalleryPreferences {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const parsed = JSON.parse(
-      localStorage.getItem(GALLERY_PREF_STORAGE_KEY) || "{}",
-    );
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+  return readStoredJSON(GALLERY_PREF_STORAGE_KEY, {} as GalleryPreferences);
 }
 
 function writeGalleryPreferences(preferences: GalleryPreferences) {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(GALLERY_PREF_STORAGE_KEY, JSON.stringify(preferences));
+  writeStoredJSON(GALLERY_PREF_STORAGE_KEY, preferences);
+}
+
+function accountStorageKey(key: string) {
+  const state = useManagedNextChatStore.getState();
+  const userId =
+    state.user?.id || state.workspace?.user?.id || state.session?.user_id;
+  return userId ? `${key}:user:${userId}` : key;
 }
 
 function readStoredJSON<T>(key: string, fallback: T): T {
   if (typeof localStorage === "undefined") return fallback;
   try {
-    const parsed = JSON.parse(localStorage.getItem(key) || "null");
+    const scopedKey = accountStorageKey(key);
+    let raw = localStorage.getItem(scopedKey);
+    if (raw === null && scopedKey !== key) {
+      raw = localStorage.getItem(key);
+      if (raw !== null) {
+        localStorage.setItem(scopedKey, raw);
+        localStorage.removeItem(key);
+      }
+    }
+    const parsed = JSON.parse(raw || "null");
+    if (fallback === null) return (parsed ?? fallback) as T;
     if (Array.isArray(fallback)) {
       return (Array.isArray(parsed) ? parsed : fallback) as T;
     }
@@ -2168,7 +2480,7 @@ function readStoredJSON<T>(key: string, fallback: T): T {
 
 function writeStoredJSON(key: string, value: unknown) {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(key, JSON.stringify(value));
+  localStorage.setItem(accountStorageKey(key), JSON.stringify(value));
 }
 
 function galleryItemPreference(item: any, preferences: GalleryPreferences) {
@@ -2245,7 +2557,9 @@ function localizedOrderStatus(status: string, text: ManagedMobileText) {
         refunding: "Refunding",
         refund_failed: "Refund failed",
       };
-  return labels[key] || status || "-";
+  if (labels[key]) return labels[key];
+  if (!key) return "-";
+  return zh ? "订单状态待同步" : "Order status unavailable";
 }
 
 function localizedPaymentType(type: string, text: ManagedMobileText) {
@@ -2452,27 +2766,20 @@ async function managedFormDataRequest<T>(
   text: ManagedMobileText,
 ) {
   return requestWithManagedAuth(async ({ baseUrl, accessToken }) => {
-    let response: Response;
-    try {
-      response = await fetch(managedApiUrl(baseUrl, path), {
+    const response = await managedRequestText(
+      baseUrl,
+      path,
+      {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Accept-Language": text.dateLocale,
-          Authorization: `Bearer ${accessToken}`,
-        },
         body,
-      });
-    } catch (error) {
-      if (
-        error instanceof TypeError &&
-        /failed to fetch|network/i.test(error.message)
-      ) {
-        throw new Error(text.errors.networkFailed);
-      }
-      throw error;
-    }
-    const bodyText = await response.text().catch(() => "");
+      },
+      new Headers({
+        Accept: "application/json",
+        "Accept-Language": text.dateLocale,
+        Authorization: `Bearer ${accessToken}`,
+      }),
+    );
+    const bodyText = response.text;
     const payload = bodyText
       ? (() => {
           try {
@@ -2487,15 +2794,20 @@ async function managedFormDataRequest<T>(
         })()
       : null;
     if (!response.ok || !payload || payload.code !== 0) {
+      const category = !response.ok ? "http" : "api";
       throw new ManagedApiError(
-        localizeManagedMobileError({
+        formatManagedMobileError({
           message: payload?.message || bodyText,
           status: response.status,
           path,
+          category,
+          requestId: response.requestId,
         }),
         response.status,
         path,
         payload?.code,
+        response.requestId,
+        category,
       );
     }
     return payload.data as T;
@@ -2510,28 +2822,63 @@ async function managedGatewayRequestText(
   text: ManagedMobileText,
 ) {
   let lastError: unknown = null;
-  for (let attempt = 0; attempt <= 2; attempt += 1) {
+  const method = (init.method || "GET").toUpperCase();
+  const requestHeaders = new Headers(init.headers);
+  const requestId =
+    requestHeaders.get("X-Request-ID") || clientRequestID("gateway");
+  requestHeaders.set("X-Request-ID", requestId);
+  const requestInit = { ...init, headers: requestHeaders };
+  const retryable =
+    method === "GET" ||
+    method === "HEAD" ||
+    requestHeaders.has("Idempotency-Key");
+  const maxAttempts = retryable ? 3 : 1;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const result = await managedGatewayRequestTextOnce(
         baseUrl,
         path,
-        init,
+        requestInit,
         accessToken,
         text,
       );
-      if (attempt < 2 && [408, 425, 502, 503, 504].includes(result.status)) {
+      if (!result.ok && result.status === 0) {
+        throw new Error(result.text || "transport returned no HTTP status");
+      }
+      if (
+        attempt + 1 < maxAttempts &&
+        [408, 425, 502, 503, 504].includes(result.status)
+      ) {
         await sleep(300 * (attempt + 1));
         continue;
       }
-      return result;
+      return { ...result, requestId };
     } catch (error) {
       lastError = error;
       if (
-        init.signal?.aborted ||
+        requestInit.signal?.aborted ||
         !isManagedNetworkLikeError(error) ||
-        attempt >= 2
+        attempt + 1 >= maxAttempts
       ) {
-        throw error;
+        if (error instanceof ManagedTransportError) throw error;
+        const category = diagnosticCategory(error);
+        const label =
+          category === "timeout"
+            ? text.errors.requestTimeout
+            : category === "offline"
+            ? text.errors.offline
+            : text.errors.networkFailed;
+        throw new ManagedTransportError(
+          formatManagedMobileError({
+            message: label,
+            category,
+            requestId,
+          }),
+          category,
+          path,
+          requestId,
+          { cause: error },
+        );
       }
       await sleep(300 * (attempt + 1));
     }
@@ -2710,7 +3057,15 @@ async function readImageFiles(files: FileList | File[], limit = 6) {
   const selected = Array.from(files).slice(0, limit);
   const urls: string[] = [];
   for (const file of selected) {
-    const dataUrl = await compressImage(file, 1024 * 1024);
+    let dataUrl: string;
+    try {
+      dataUrl = await compressImage(file, 1024 * 1024);
+    } catch (error) {
+      if (!file.type.startsWith("image/") || file.size > 768 * 1024) {
+        throw error;
+      }
+      dataUrl = await blobToDataUrl(file);
+    }
     urls.push(dataUrl);
   }
   return urls;
@@ -2742,18 +3097,29 @@ function extractChatContent(payload: any) {
   );
 }
 
-function parseOpenAIError(responseText: string, status: number, path: string) {
+function parseOpenAIError(
+  responseText: string,
+  status: number,
+  path: string,
+  requestId = "unknown",
+) {
+  let message = responseText;
   try {
     const json = JSON.parse(responseText);
-    return localizeManagedMobileError({
-      message:
-        json?.error?.message || json?.message || json?.error || responseText,
-      status,
-      path,
-    });
+    message =
+      json?.error?.message || json?.message || json?.error || responseText;
+    requestId =
+      json?.request_id || json?.requestId || json?.instance || requestId;
   } catch {
-    return localizeManagedMobileError({ message: responseText, status, path });
+    // Plain upstream responses still include the local request identifier.
   }
+  return formatManagedMobileError({
+    message,
+    status,
+    path,
+    category: "http",
+    requestId,
+  });
 }
 
 function MobileLoading() {
@@ -2835,6 +3201,18 @@ function useNativeBackHandler(enabled: boolean, onBack: () => void) {
   }, [enabled, onBack]);
 }
 
+function useNativeDocumentScroll(enabled = true) {
+  useEffect(() => {
+    if (!enabled || typeof document === "undefined") return;
+    document.body.classList.add("mobile-document-scroll");
+    document.documentElement.classList.add("mobile-document-scroll");
+    return () => {
+      document.body.classList.remove("mobile-document-scroll");
+      document.documentElement.classList.remove("mobile-document-scroll");
+    };
+  }, [enabled]);
+}
+
 type AndroidTab = "chat" | "image" | "gallery" | "account";
 
 function AndroidBottomTabs(props: {
@@ -2880,6 +3258,7 @@ function AndroidBottomTabs(props: {
         <button
           key={tab.id}
           type="button"
+          aria-label={`app-tab-${tab.id}`}
           className={clsx(styles["bottom-tab"], {
             [styles["active"]]: props.active === tab.id,
           })}
@@ -2898,8 +3277,15 @@ function AndroidAppShell(props: {
   text: ManagedMobileText;
   children: ReactNode;
 }) {
+  const usesDocumentScroll = props.active !== "chat";
+  useNativeDocumentScroll(usesDocumentScroll);
+
   return (
-    <main className={styles["mobile-app"]}>
+    <main
+      className={clsx(styles["mobile-app"], {
+        [styles["native-page"]]: usesDocumentScroll,
+      })}
+    >
       <section className={styles["app-shell"]}>
         <div className={styles["app-scroll"]}>{props.children}</div>
         <AndroidBottomTabs active={props.active} text={props.text} />
@@ -2921,6 +3307,11 @@ function AndroidLogin() {
   );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [credentialSource, setCredentialSource] = useState<"manual" | "saved">(
+    "manual",
+  );
+  const [rememberAccount, setRememberAccount] = useState(true);
   const [confirmPassword, setConfirmPassword] = useState("");
   const [verifyCode, setVerifyCode] = useState("");
   const [resetToken, setResetToken] = useState("");
@@ -2969,6 +3360,25 @@ function AndroidLogin() {
       );
   }, []);
 
+  useEffect(() => {
+    void loadLoginCredentials()
+      .then((credentials) => {
+        if (!credentials.saved) return;
+        setEmail(credentials.email || "");
+        setPassword(credentials.password || "");
+        setCredentialSource("saved");
+        setRememberAccount(true);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  async function persistLoginChoice() {
+    if (rememberAccount) {
+      await saveLoginCredentials(email.trim(), password);
+      return;
+    }
+    await clearLoginCredentials();
+  }
   async function sendCode() {
     if (!backendBaseUrl || !email.trim()) return;
     setLocalLoading(true);
@@ -3023,6 +3433,7 @@ function AndroidLogin() {
     try {
       managed.setBackendBaseUrl(backendBaseUrl);
       await managed.login2FA(totpCode.trim());
+      await persistLoginChoice().catch(() => undefined);
       setTotpCode("");
       navigate(Path.Home);
     } catch (err) {
@@ -3076,6 +3487,7 @@ function AndroidLogin() {
               attributionToken: affiliateToken,
             },
           ).catch(() => undefined);
+          await persistLoginChoice().catch(() => undefined);
           navigate(Path.Home);
         }
         return;
@@ -3091,8 +3503,8 @@ function AndroidLogin() {
           "/api/v1/auth/mobile/register",
           {
             method: "POST",
-            body: JSON.stringify(
-              buildMobileRegistrationPayload({
+            body: JSON.stringify({
+              ...buildMobileRegistrationPayload({
                 email,
                 password,
                 verifyCode,
@@ -3110,7 +3522,12 @@ function AndroidLogin() {
                       }
                     : null,
               }),
-            ),
+              aff_code:
+                affiliateCode ||
+                mobileAttributionAffiliateCode() ||
+                invitationCode.trim(),
+              invite_token: affiliateToken || mobileAttributionToken(),
+            }),
             headers: { "Accept-Language": text.dateLocale },
           },
         );
@@ -3137,6 +3554,15 @@ function AndroidLogin() {
           },
         ).catch(() => undefined);
         if (referralAttributed) storeInviteReferral(null);
+        void reportMobileAttributionEvent({
+          baseUrl: backendBaseUrl,
+          eventType: "register",
+          appVersion: clientConfig?.androidVersion || clientConfig?.version,
+          locale: text.dateLocale,
+          accessToken: auth.access_token,
+          userScope: auth.user?.id || "new-account",
+          metadata: { surface: "android_register", event_name: "registered" },
+        });
         await managed.bootstrap();
         navigate(Path.Home);
         return;
@@ -3179,13 +3605,22 @@ function AndroidLogin() {
         setMode("login");
       }
     } catch (err) {
-      setError(
+      const rawMessage =
         err instanceof Error
           ? err.message
           : mode === "login"
           ? text.errors.loginFailed
-          : text.errors.networkFailed,
-      );
+          : text.errors.networkFailed;
+      const message =
+        mode === "login" && err instanceof ManagedApiError && err.status === 401
+          ? `${rawMessage} ${text.login.loginDiagnostic(
+              password.length,
+              credentialSource === "saved"
+                ? text.login.savedCredentialSource
+                : text.login.manualCredentialSource,
+            )}`
+          : rawMessage;
+      setError(message);
     } finally {
       setLocalLoading(false);
     }
@@ -3239,8 +3674,12 @@ function AndroidLogin() {
               <label>
                 <span>{text.login.email}</span>
                 <input
+                  aria-label="login-email"
                   value={email}
-                  onChange={(e) => setEmail(e.currentTarget.value)}
+                  onChange={(e) => {
+                    setEmail(e.currentTarget.value);
+                    setCredentialSource("manual");
+                  }}
                   placeholder="name@example.com"
                   type="email"
                   autoComplete="email"
@@ -3253,15 +3692,45 @@ function AndroidLogin() {
                       ? text.login.newPassword
                       : text.login.password}
                   </span>
+                  <div className={styles["password-field"]}>
+                    <input
+                      aria-label="login-password"
+                      value={password}
+                      onChange={(e) => {
+                        setPassword(e.currentTarget.value);
+                        setCredentialSource("manual");
+                      }}
+                      placeholder={text.login.passwordPlaceholder}
+                      type={passwordVisible ? "text" : "password"}
+                      autoComplete={
+                        mode === "login" ? "current-password" : "new-password"
+                      }
+                    />
+                    <button
+                      aria-label={
+                        passwordVisible
+                          ? text.login.hidePassword
+                          : text.login.showPassword
+                      }
+                      type="button"
+                      onClick={() => setPasswordVisible((visible) => !visible)}
+                    >
+                      {passwordVisible ? <EyeOffIcon /> : <EyeIcon />}
+                    </button>
+                  </div>
+                </label>
+              )}
+              {mode === "login" && (
+                <label className={styles["remember-login"]}>
                   <input
-                    value={password}
-                    onChange={(e) => setPassword(e.currentTarget.value)}
-                    placeholder={text.login.passwordPlaceholder}
-                    type="password"
-                    autoComplete={
-                      mode === "login" ? "current-password" : "new-password"
+                    aria-label="login-remember-account"
+                    type="checkbox"
+                    checked={rememberAccount}
+                    onChange={(event) =>
+                      setRememberAccount(event.currentTarget.checked)
                     }
                   />
+                  <span>{text.login.rememberAccount}</span>
                 </label>
               )}
               {(mode === "register" || mode === "reset") && (
@@ -3385,6 +3854,7 @@ function AndroidLogin() {
           <button
             className={styles["primary-action"]}
             type="submit"
+            aria-label="login-submit"
             disabled={submitDisabled}
           >
             {busy
@@ -3418,7 +3888,9 @@ function AndroidDashboard() {
   const text = useMobileText();
   const navigate = useNavigate();
   const workspace = managed.workspace;
-  const dashboardChatGroupId = storedChatGroupID(workspace);
+  const [dashboardChatGroupId, setDashboardChatGroupId] = useState<
+    number | undefined
+  >(() => storedChatPreferenceGroupID() || undefined);
   const models = chatModelsForGroup(workspace, dashboardChatGroupId);
   const fallbackModel = modelValue(models[0]);
   const sessions = mobileStore.chatSessions;
@@ -3444,6 +3916,18 @@ function AndroidDashboard() {
     useState<ManagedMobileChatSession | null>(null);
   const [renameTarget, setRenameTarget] =
     useState<ManagedMobileChatSession | null>(null);
+  const [groupSheetOpen, setGroupSheetOpen] = useState(false);
+
+  useEffect(() => {
+    const validGroupId = preferredChatGroupID(workspace, dashboardChatGroupId);
+    if (validGroupId && validGroupId !== dashboardChatGroupId) {
+      setDashboardChatGroupId(validGroupId);
+      persistChatPreference(
+        validGroupId,
+        modelValue(chatModelsForGroup(workspace, validGroupId)[0]),
+      );
+    }
+  }, [dashboardChatGroupId, workspace]);
 
   async function refreshCloudTasks() {
     if (!managed.accessToken) return;
@@ -3578,9 +4062,8 @@ function AndroidDashboard() {
         </button>
         <button
           className={styles["summary-card"]}
-          onClick={() =>
-            navigate(Path.Chat, { state: { openGroupSheet: true } })
-          }
+          aria-label="dashboard-default-group"
+          onClick={() => setGroupSheetOpen(true)}
         >
           <span>{text.account.currentGroup}</span>
           <strong>{stableChatGroupName(workspace, text)}</strong>
@@ -3591,6 +4074,15 @@ function AndroidDashboard() {
       </section>
 
       <section className={styles["quick-grid"]}>
+        <button
+          type="button"
+          aria-label="open-content-kit"
+          onClick={() => navigate(Path.ContentKit)}
+        >
+          <ImageIcon />
+          <strong>{text.platform.contentKit.title}</strong>
+          <span>{text.platform.contentKit.hint}</span>
+        </button>
         <button type="button" onClick={openSkillCenter}>
           <BotIcon />
           <strong>{text.dashboard.skillCenter}</strong>
@@ -3643,7 +4135,10 @@ function AndroidDashboard() {
         </button>
       </div>
 
-      <section className={styles["conversation-panel"]}>
+      <section
+        className={styles["conversation-panel"]}
+        aria-label={`dashboard-session-count-${sessions.length}`}
+      >
         <div className={styles["section-head"]}>
           <h2>
             {showingTasks
@@ -3653,6 +4148,7 @@ function AndroidDashboard() {
               : text.chat.sessions}
           </h2>
           <button
+            aria-label="dashboard-new-chat"
             onClick={
               showingTasks
                 ? refreshCloudTasks
@@ -3703,10 +4199,10 @@ function AndroidDashboard() {
                   <i>{task.kind === "image" ? <ImageIcon /> : <ChatIcon />}</i>
                   <span>
                     <strong>
-                      {task.title_zh ||
-                        task.title ||
-                        task.operation ||
-                        text.platform.tasks}
+                      {localizedMobileDisplay(task, {
+                        defaultFields: ["operation"],
+                        fallback: text.platform.tasks,
+                      })}
                     </strong>
                     <small>
                       {formatDateTime(task.updated_at || task.created_at, text)}
@@ -3784,43 +4280,34 @@ function AndroidDashboard() {
                     ? text.chat.imageAttached(last.imageUrls.length)
                     : text.chat.emptyDesc);
                 return (
-                  <button
+                  <article
                     key={session.id}
-                    className={styles["conversation-item"]}
-                    onClick={() => openSession(session)}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      setSessionActionTarget(session);
-                    }}
-                    onTouchStart={(event) => {
-                      const target = event.currentTarget;
-                      const timer = window.setTimeout(() => {
-                        setSessionActionTarget(session);
-                      }, 520);
-                      target.dataset.longPressTimer = String(timer);
-                    }}
-                    onTouchMove={(event) => {
-                      const timer = Number(
-                        event.currentTarget.dataset.longPressTimer || 0,
-                      );
-                      if (timer) window.clearTimeout(timer);
-                      delete event.currentTarget.dataset.longPressTimer;
-                    }}
-                    onTouchEnd={(event) => {
-                      const timer = Number(
-                        event.currentTarget.dataset.longPressTimer || 0,
-                      );
-                      if (timer) window.clearTimeout(timer);
-                      delete event.currentTarget.dataset.longPressTimer;
-                    }}
+                    className={clsx(
+                      styles["conversation-item"],
+                      styles["conversation-session"],
+                    )}
                   >
-                    <i>{chatSessionDisplayTitle(session, text).slice(0, 1)}</i>
-                    <span>
-                      <strong>{chatSessionDisplayTitle(session, text)}</strong>
-                      <small>{preview}</small>
-                    </span>
-                    <em>{formatSyncTime(session.updatedAt, text)}</em>
-                  </button>
+                    <button
+                      type="button"
+                      className={styles["conversation-session-main"]}
+                      onClick={() => openSession(session)}
+                    >
+                      <i>
+                        {chatSessionDisplayTitle(session, text).slice(0, 1)}
+                      </i>
+                      <span>
+                        <strong>{chatSessionDisplayTitle(session, text)}</strong>
+                        <small>{preview}</small>
+                      </span>
+                      <em>{formatSyncTime(session.updatedAt, text)}</em>
+                    </button>
+                    <IconButton
+                      label={text.chat.sessionActions}
+                      onClick={() => setSessionActionTarget(session)}
+                    >
+                      <ThreeDotsIcon />
+                    </IconButton>
+                  </article>
                 );
               })}
         </div>
@@ -3857,6 +4344,33 @@ function AndroidDashboard() {
         onClose={() => setRenameTarget(null)}
         onSubmit={(value) => {
           if (renameTarget) renameSessionFromDashboard(renameTarget, value);
+        }}
+      />
+      <ChoiceSheet
+        open={groupSheetOpen}
+        title={text.chat.group}
+        text={text}
+        items={(workspace?.models?.groups || []).map((group) => ({
+          id: String(group.id),
+          title: group.name,
+          detail: text.modelCount(
+            group.models?.filter(isChatModel).length || 0,
+          ),
+          active: group.id === dashboardChatGroupId,
+        }))}
+        onClose={() => setGroupSheetOpen(false)}
+        onSelect={(id) => {
+          const groupId = Number(id);
+          const nextModels = chatModelsForGroup(workspace, groupId);
+          if (!Number.isFinite(groupId) || !nextModels.length) {
+            setTaskError(text.errors.noModel);
+            return;
+          }
+          const nextModel = modelValue(nextModels[0]);
+          persistChatPreference(groupId, nextModel);
+          setDashboardChatGroupId(groupId);
+          setTaskError("");
+          setGroupSheetOpen(false);
         }}
       />
     </AndroidAppShell>
@@ -4024,6 +4538,9 @@ function ChoiceSheet(props: {
           {props.items.map((item) => (
             <button
               key={item.id}
+              aria-label={`choice-option-${item.id}-${
+                item.active ? "selected" : "unselected"
+              }`}
               className={clsx({ [styles["selected"]]: item.active })}
               onClick={() => props.onSelect(item.id)}
             >
@@ -4743,6 +5260,7 @@ function MessageActionSheet(props: {
   text: ManagedMobileText;
   onClose: () => void;
   onCopy: () => void;
+  onView: () => void;
   onSelectText: () => void;
   onQuote: () => void;
   onRetry: () => void;
@@ -4784,6 +5302,10 @@ function MessageActionSheet(props: {
           <button onClick={props.onCopy}>
             <CopyIcon />
             <span>{props.text.common.copy}</span>
+          </button>
+          <button onClick={props.onView}>
+            <MaxIcon />
+            <span>{props.text.chat.viewFullText}</span>
           </button>
           <button onClick={props.onSelectText}>
             <AddIcon />
@@ -5170,11 +5692,7 @@ function AndroidChat() {
   const hasChatGroup = Boolean(chatGroup);
   const [preferredChatGroupId, setPreferredChatGroupId] = useState<
     number | undefined
-  >(
-    () =>
-      Number(readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId) ||
-      undefined,
-  );
+  >(() => storedChatPreferenceGroupID() || undefined);
   const currentSession =
     mobileStore.chatSessions.find(
       (session) => session.id === mobileStore.currentChatId,
@@ -5184,14 +5702,11 @@ function AndroidChat() {
     preferredChatGroupId,
   );
   const [draftGroupId, setDraftGroupId] = useState<number | undefined>(
-    () =>
-      Number(readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId) ||
-      undefined,
+    () => storedChatPreferenceGroupID() || undefined,
   );
-  const currentSessionChatGroupId = preferredChatGroupID(
-    workspace,
-    currentSession?.groupId,
-  );
+  const currentSessionChatGroupId = currentSession
+    ? preferredChatGroupID(workspace, currentSession.groupId)
+    : undefined;
   const draftChatGroupId = preferredChatGroupID(workspace, draftGroupId);
   const effectiveChatGroupId =
     currentSessionChatGroupId ||
@@ -5253,13 +5768,16 @@ function AndroidChat() {
   const listRef = useRef<HTMLDivElement | null>(null);
   const autoFollowRef = useRef(true);
   const lastScrolledSessionRef = useRef("");
-  const lastTapRef = useRef<{ id: string; at: number }>({ id: "", at: 0 });
+  const autoRetryKeyRef = useRef("");
 
   async function addMaterialDraft(input: {
     blob: Blob;
     name: string;
     kind: string;
     previewUrl?: string;
+    localText?: string;
+    localOnly?: boolean;
+    unsupported?: boolean;
     source?: "camera" | "gallery" | "share" | "upload";
   }) {
     const localId = clientRequestID("material");
@@ -5267,10 +5785,17 @@ function AndroidChat() {
       localId,
       name: input.name,
       kind: input.kind,
-      state: "uploading",
+      state: input.localOnly
+        ? "local"
+        : input.unsupported
+        ? "failed"
+        : "uploading",
       previewUrl: input.previewUrl,
+      localText: input.localText,
+      error: input.unsupported ? text.platform.localFileUnsupported : undefined,
     };
     setSharedMaterials((items) => [...items, draft].slice(-8));
+    if (input.localOnly || input.unsupported) return;
     try {
       const asset = await uploadMaterial(
         input.blob,
@@ -5283,16 +5808,19 @@ function AndroidChat() {
         ),
       );
     } catch (error) {
+      const canSendLocally =
+        input.kind === "image" || Boolean(input.localText?.trim());
       setSharedMaterials((items) =>
         items.map((item) =>
           item.localId === localId
             ? {
                 ...item,
-                state: "failed",
-                error:
-                  error instanceof Error
-                    ? localizeManagedMobileError({ message: error.message })
-                    : text.platform.uploadFailedHint,
+                state: canSendLocally ? "local" : "failed",
+                error: canSendLocally
+                  ? ""
+                  : error instanceof Error
+                  ? localizeManagedMobileError({ message: error.message })
+                  : text.platform.localFileUnsupported,
               }
             : item,
         ),
@@ -5353,6 +5881,8 @@ function AndroidChat() {
                 name: file.name || `shared-${Date.now()}`,
                 kind: file.kind || (isImage ? "image" : "other"),
                 previewUrl: isImage ? dataUrl : undefined,
+                localOnly: isImage,
+                unsupported: !isImage,
                 source: "share",
               });
             }),
@@ -5412,16 +5942,66 @@ function AndroidChat() {
   }, [chatGroup?.id, preferredChatGroupId]);
 
   useEffect(() => {
+    const retryAfterNetworkRestore = () => {
+      if (running || !currentSession?.id) return;
+      const latest = useManagedMobileAppStore
+        .getState()
+        .chatSessions.find((session) => session.id === currentSession.id);
+      const failedAssistant = latest?.messages
+        .slice()
+        .reverse()
+        .find(
+          (message) =>
+            message.role === "assistant" && message.status === "error",
+        );
+      if (
+        !failedAssistant ||
+        !/offline|network|timeout|connection|离线|网络|超时|连接/i.test(
+          failedAssistant.error || "",
+        )
+      ) {
+        return;
+      }
+      const retryKey = `${latest?.id}:${failedAssistant.id}`;
+      if (autoRetryKeyRef.current === retryKey) return;
+      const lastUser = latest?.messages
+        .slice()
+        .reverse()
+        .find((message) => message.role === "user");
+      if (!lastUser) return;
+      autoRetryKeyRef.current = retryKey;
+      void sendChat(
+        lastUser.content,
+        lastUser.imageUrls || [],
+        false,
+        failedAssistant.requestId || "",
+      );
+    };
+    window.addEventListener("online", retryAfterNetworkRestore);
+    window.addEventListener(
+      "jisudeng-network-restored",
+      retryAfterNetworkRestore,
+    );
+    return () => {
+      window.removeEventListener("online", retryAfterNetworkRestore);
+      window.removeEventListener(
+        "jisudeng-network-restored",
+        retryAfterNetworkRestore,
+      );
+    };
+    // sendChat reads the active session and current model from this render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSession?.id, running]);
+
+  useEffect(() => {
     if (!currentSession && !draftGroupId && defaultChatGroupId) {
       setDraftGroupId(defaultChatGroupId);
     }
   }, [currentSession, defaultChatGroupId, draftGroupId]);
 
   useEffect(() => {
-    writeStoredJSON(CHAT_PREF_STORAGE_KEY, {
-      groupId: effectiveChatGroupId || 0,
-      model: selectedModel || "",
-    });
+    if (!effectiveChatGroupId) return;
+    persistChatPreference(effectiveChatGroupId, selectedModel || "");
   }, [effectiveChatGroupId, selectedModel]);
 
   useEffect(() => {
@@ -5556,28 +6136,43 @@ function AndroidChat() {
     const files = input.files;
     if (!files?.length) return;
     try {
-      const selectedFiles = Array.from(files).slice(0, 6);
+      let imageCount = 0;
+      const selectedFiles = Array.from(files)
+        .slice(0, 6)
+        .filter((file) => !/^image\//i.test(file.type) || ++imageCount <= 4);
       const imageFiles = selectedFiles.filter((file) =>
         /^image\//i.test(file.type),
       );
       const urls = await readImageFiles(imageFiles, 4);
       setAttachments((items) => [...items, ...urls].slice(0, 4));
+      let imageIndex = 0;
       await Promise.allSettled(
-        selectedFiles.map((file, index) =>
-          addMaterialDraft({
+        selectedFiles.map(async (file) => {
+          const isImage = /^image\//i.test(file.type);
+          const isPlainText =
+            /^text\//i.test(file.type) ||
+            /\.(txt|md|csv|json|log)$/i.test(file.name);
+          const previewUrl = isImage ? urls[imageIndex++] : undefined;
+          const localText = isPlainText
+            ? (await blobToText(file)).slice(0, 120_000)
+            : "";
+          return addMaterialDraft({
             blob: file,
             name: file.name,
-            kind: /^image\//i.test(file.type)
+            kind: isImage
               ? "image"
               : /^audio\//i.test(file.type)
               ? "audio"
               : file.type === "application/pdf"
               ? "document"
               : "other",
-            previewUrl: /^image\//i.test(file.type) ? urls[index] : undefined,
+            previewUrl,
+            localText,
+            localOnly: isImage || isPlainText,
+            unsupported: !isImage && !isPlainText,
             source: "upload",
-          }),
-        ),
+          });
+        }),
       );
     } catch (err) {
       setChatError(err instanceof Error ? err.message : text.errors.saveFailed);
@@ -5604,6 +6199,7 @@ function AndroidChat() {
         name: `camera-${Date.now()}.jpg`,
         kind: "image",
         previewUrl: result.dataUrl,
+        localOnly: true,
         source: "camera",
       });
     } catch (err) {
@@ -5816,6 +6412,7 @@ function AndroidChat() {
     content = input,
     imageUrls = attachments,
     appendUser = true,
+    retryRequestId = "",
   ) {
     const rawPrompt = content.trim();
     const prompt =
@@ -5829,7 +6426,19 @@ function AndroidChat() {
             .filter(Boolean)
             .join("\n\n")
         : rawPrompt;
-    if (!prompt && imageUrls.length === 0) {
+    const readyMaterials = sharedMaterials.filter(
+      (item) => item.state === "ready" && item.asset?.id,
+    );
+    const readyAssetIds = readyMaterials.map((item) => String(item.asset?.id));
+    const localTextMaterials = sharedMaterials.filter(
+      (item) => item.state === "local" && item.localText?.trim(),
+    );
+    if (
+      !prompt &&
+      imageUrls.length === 0 &&
+      readyAssetIds.length === 0 &&
+      localTextMaterials.length === 0
+    ) {
       setChatError(text.errors.emptyMessage);
       return;
     }
@@ -5844,6 +6453,8 @@ function AndroidChat() {
     }
     const requestGroupId =
       currentSession?.groupId || draftChatGroupId || effectiveChatGroupId;
+    const gatewayRequestId =
+      retryRequestId || clientRequestID("chat-completion");
     const existingSessionId = currentSession?.id || "";
     const sessionId = mobileStore.ensureChatSession(model, requestGroupId);
     const skillForRequest = existingSessionId
@@ -5863,22 +6474,57 @@ function AndroidChat() {
         });
       }
     }
-    const readyAssetIds = sharedMaterials
-      .filter((item) => item.state === "ready" && item.asset?.id)
-      .map((item) => String(item.asset?.id));
+    const materialSummary = [...readyMaterials, ...localTextMaterials]
+      .map((item) => item.name)
+      .join("、");
+    const localTextContent = localTextMaterials
+      .map((item) => `[${item.name}]\n${item.localText?.trim() || ""}`)
+      .join("\n\n");
+    const userContent =
+      [
+        prompt || (materialSummary ? `附件：${materialSummary}` : ""),
+        localTextContent,
+      ]
+        .filter(Boolean)
+        .join("\n\n") || text.chat.imageMessage;
     if (appendUser) {
       mobileStore.addChatMessage(sessionId, {
         role: "user",
-        content: prompt,
+        content: userContent,
         imageUrls,
         status: "done",
       });
     }
-    const assistantId = mobileStore.addChatMessage(sessionId, {
-      role: "assistant",
-      content: "",
-      status: "streaming",
-    });
+    const retryAssistant = retryRequestId
+      ? useManagedMobileAppStore
+          .getState()
+          .chatSessions.find((session) => session.id === sessionId)
+          ?.messages.slice()
+          .reverse()
+          .find(
+            (message) =>
+              message.role === "assistant" &&
+              message.status === "error" &&
+              message.requestId === retryRequestId,
+          )
+      : undefined;
+    const assistantId =
+      retryAssistant?.id ||
+      mobileStore.addChatMessage(sessionId, {
+        role: "assistant",
+        content: "",
+        requestId: gatewayRequestId,
+        status: "streaming",
+      });
+    if (retryAssistant) {
+      mobileStore.updateChatMessage(sessionId, assistantId, {
+        content: "",
+        error: undefined,
+        requestId: gatewayRequestId,
+        status: "streaming",
+      });
+    }
+    mobileStore.clearChatError(sessionId);
     mobileStore.updateChatSession(sessionId, { model });
     setDraftModel("");
     setDraftAgentId("");
@@ -5903,8 +6549,8 @@ function AndroidChat() {
         const task = await client.tasks.create({
           kind: "chat",
           operation: "chat.completions",
-          client_request_id: clientRequestID("chat"),
-          title_zh: prompt.slice(0, 80) || text.chat.imageMessage,
+          client_request_id: gatewayRequestId,
+          title_zh: userContent.slice(0, 80),
           model,
           group_id: requestGroupId,
           asset_ids: readyAssetIds,
@@ -5930,6 +6576,16 @@ function AndroidChat() {
       }
     })();
     let contentBuffer = "";
+    let lastStreamPersistAt = 0;
+    const persistStreamCheckpoint = () => {
+      const now = Date.now();
+      if (now - lastStreamPersistAt < 200) return;
+      lastStreamPersistAt = now;
+      mobileStore.updateChatMessage(sessionId, assistantId, {
+        content: contentBuffer,
+        status: "streaming",
+      });
+    };
     const path = "/v1/chat/completions";
     try {
       let activeManaged = useManagedNextChatStore.getState();
@@ -5955,11 +6611,6 @@ function AndroidChat() {
         stream: true,
         messages: makeGatewayMessages(sessionId, assistantId, skillForRequest),
       });
-      const nonStreamingPayload = JSON.stringify({
-        model,
-        stream: false,
-        messages: makeGatewayMessages(sessionId, assistantId, skillForRequest),
-      });
       const runNonStreamingChatFallback = async (reason: unknown) => {
         const fallbackTransport = isDirectNativeStreamAvailable()
           ? "native"
@@ -5977,9 +6628,11 @@ function AndroidChat() {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Accept: "application/json",
+                Accept: "text/event-stream, application/json",
+                "Idempotency-Key": gatewayRequestId,
+                "X-Request-ID": gatewayRequestId,
               },
-              body: nonStreamingPayload,
+              body: payload,
               signal: controller.signal,
             },
             activeManaged.session?.api_key || "",
@@ -6002,15 +6655,17 @@ function AndroidChat() {
         });
         if (!fallback.ok) {
           throw new Error(
-            parseOpenAIError(fallback.text, fallback.status, path),
+            parseOpenAIError(
+              fallback.text,
+              fallback.status,
+              path,
+              fallback.requestId || gatewayRequestId,
+            ),
           );
         }
         readGatewayTextResponse(fallback.text, (delta) => {
           contentBuffer += delta;
-          mobileStore.updateChatMessage(sessionId, assistantId, {
-            content: contentBuffer,
-            status: "streaming",
-          });
+          persistStreamCheckpoint();
         });
       };
       if (isDirectNativeStreamAvailable()) {
@@ -6027,6 +6682,8 @@ function AndroidChat() {
               "Content-Type": "application/json",
               Accept: "text/event-stream, application/json",
               Authorization: `Bearer ${activeManaged.session?.api_key || ""}`,
+              "Idempotency-Key": gatewayRequestId,
+              "X-Request-ID": gatewayRequestId,
             },
             body: payload,
             connectTimeout: 15000,
@@ -6041,10 +6698,7 @@ function AndroidChat() {
               if (line.trim() !== "") return;
               readGatewayTextResponse(eventBuffer, (delta) => {
                 contentBuffer += delta;
-                mobileStore.updateChatMessage(sessionId, assistantId, {
-                  content: contentBuffer,
-                  status: "streaming",
-                });
+                persistStreamCheckpoint();
               });
               eventBuffer = "";
             },
@@ -6096,10 +6750,7 @@ function AndroidChat() {
         if (!recoveredWithFallback && eventBuffer.trim()) {
           readGatewayTextResponse(eventBuffer, (delta) => {
             contentBuffer += delta;
-            mobileStore.updateChatMessage(sessionId, assistantId, {
-              content: contentBuffer,
-              status: "streaming",
-            });
+            persistStreamCheckpoint();
           });
         }
         if (
@@ -6115,7 +6766,9 @@ function AndroidChat() {
           if (!contentBuffer) {
             await runNonStreamingChatFallback(new Error(`HTTP ${status}`));
           } else {
-            throw new Error(parseOpenAIError(contentBuffer, status, path));
+            throw new Error(
+              parseOpenAIError(contentBuffer, status, path, gatewayRequestId),
+            );
           }
         }
       } else {
@@ -6130,6 +6783,8 @@ function AndroidChat() {
                 "Content-Type": "application/json",
                 Accept: "text/event-stream, application/json",
                 Authorization: `Bearer ${activeManaged.session?.api_key || ""}`,
+                "Idempotency-Key": gatewayRequestId,
+                "X-Request-ID": gatewayRequestId,
               },
               body: payload,
               signal: controller.signal,
@@ -6152,16 +6807,18 @@ function AndroidChat() {
               );
             } else {
               throw new Error(
-                parseOpenAIError(bodyText, response.status, path),
+                parseOpenAIError(
+                  bodyText,
+                  response.status,
+                  path,
+                  gatewayRequestId,
+                ),
               );
             }
           } else {
             await readStreamingResponse(response, (delta) => {
               contentBuffer += delta;
-              mobileStore.updateChatMessage(sessionId, assistantId, {
-                content: contentBuffer,
-                status: "streaming",
-              });
+              persistStreamCheckpoint();
             });
           }
         } catch (streamError) {
@@ -6192,6 +6849,8 @@ function AndroidChat() {
       const aborted = controller.signal.aborted;
       const message = aborted
         ? text.errors.requestCancelled
+        : err instanceof ManagedTransportError
+        ? err.message
         : err instanceof Error
         ? localizeManagedMobileError({ message: err.message, path })
         : text.errors.networkFailed;
@@ -6250,7 +6909,18 @@ function AndroidChat() {
       .reverse()
       .find((message) => message.role === "user");
     if (!lastUser) return;
-    sendChat(lastUser.content, lastUser.imageUrls || [], false);
+    const failedAssistant = currentSession.messages
+      .slice()
+      .reverse()
+      .find(
+        (message) => message.role === "assistant" && message.status === "error",
+      );
+    sendChat(
+      lastUser.content,
+      lastUser.imageUrls || [],
+      false,
+      failedAssistant?.requestId || "",
+    );
   }
 
   function openMessageActions(
@@ -6444,9 +7114,12 @@ function AndroidChat() {
         setChatError(text.errors.noModel);
         return;
       }
-      await managed.switchGroup(groupID);
-      const latestWorkspace =
-        useManagedNextChatStore.getState().workspace || workspace;
+      if (currentSession?.id) {
+        await managed.switchGroup(groupID);
+      }
+      const latestWorkspace = currentSession?.id
+        ? useManagedNextChatStore.getState().workspace || workspace
+        : workspace;
       const latestModels = chatModelsForGroup(latestWorkspace, groupID);
       const sessionModelStillAvailable = latestModels.some(
         (model) => modelValue(model) === selectedModel,
@@ -6455,6 +7128,7 @@ function AndroidChat() {
         (sessionModelStillAvailable
           ? selectedModel
           : modelValue(latestModels[0])) || nextModel;
+      persistChatPreference(groupID, confirmedModel);
       setPreferredChatGroupId(groupID);
       if (currentSession?.id) {
         mobileStore.updateChatSession(currentSession.id, {
@@ -6611,6 +7285,7 @@ function AndroidChat() {
         <div className={styles["chat-controls"]}>
           <button
             type="button"
+            aria-label="chat-group-selector"
             onClick={() => setGroupSheetOpen(true)}
             disabled={groupSwitching}
           >
@@ -6676,67 +7351,22 @@ function AndroidChat() {
           onScroll={handleMessageListScroll}
         >
           {!currentSession?.messages.length && (
-            <div className={styles["chat-empty"]}>
+            <div
+              className={styles["chat-empty"]}
+              aria-label={
+                currentSession ? "chat-session-empty" : "chat-draft-no-session"
+              }
+            >
               <ChatIcon />
               <h2>{text.chat.emptyTitle}</h2>
               <p>{text.chat.emptyDesc}</p>
             </div>
           )}
-          {currentSession?.messages.map((message) => (
+          {currentSession?.messages.map((message, messageIndex) => (
             <article
               key={message.id}
+              aria-label={`chat-message-${message.role}-${messageIndex + 1}`}
               className={clsx(styles["message"], styles[message.role])}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                if (currentSession?.id) {
-                  openMessageActions(currentSession.id, message);
-                }
-              }}
-              onDoubleClick={() => {
-                if (currentSession?.id) {
-                  setMessageViewerTarget({
-                    sessionId: currentSession.id,
-                    message,
-                  });
-                }
-              }}
-              onTouchStart={(event) => {
-                const target = event.currentTarget;
-                const timer = window.setTimeout(() => {
-                  if (currentSession?.id) {
-                    openMessageActions(currentSession.id, message);
-                  }
-                }, 520);
-                target.dataset.longPressTimer = String(timer);
-              }}
-              onTouchMove={(event) => {
-                const timer = Number(
-                  event.currentTarget.dataset.longPressTimer || 0,
-                );
-                if (timer) window.clearTimeout(timer);
-                delete event.currentTarget.dataset.longPressTimer;
-              }}
-              onTouchEnd={(event) => {
-                const timer = Number(
-                  event.currentTarget.dataset.longPressTimer || 0,
-                );
-                if (timer) window.clearTimeout(timer);
-                delete event.currentTarget.dataset.longPressTimer;
-                if (!currentSession?.id) return;
-                const now = Date.now();
-                if (
-                  lastTapRef.current.id === message.id &&
-                  now - lastTapRef.current.at < 320
-                ) {
-                  setMessageViewerTarget({
-                    sessionId: currentSession.id,
-                    message,
-                  });
-                  lastTapRef.current = { id: "", at: 0 };
-                  return;
-                }
-                lastTapRef.current = { id: message.id, at: now };
-              }}
             >
               {message.imageUrls?.length ? (
                 <div className={styles["message-images"]}>
@@ -6753,12 +7383,26 @@ function AndroidChat() {
               {message.error && (
                 <div className={styles["inline-error"]}>{message.error}</div>
               )}
-              <small className={styles["message-meta"]}>
-                {formatSyncTime(message.updatedAt || message.createdAt, text)}
-                {message.status && message.status !== "done"
-                  ? ` · ${text.chat.messageStatus(message.status)}`
-                  : ""}
-              </small>
+              <div className={styles["message-footer"]}>
+                <small className={styles["message-meta"]}>
+                  {formatSyncTime(message.updatedAt || message.createdAt, text)}
+                  {message.status && message.status !== "done"
+                    ? ` · ${text.chat.messageStatus(message.status)}`
+                    : ""}
+                </small>
+                <button
+                  type="button"
+                  className={styles["message-actions-trigger"]}
+                  aria-label={text.chat.messageActions}
+                  onClick={() => {
+                    if (currentSession?.id) {
+                      openMessageActions(currentSession.id, message);
+                    }
+                  }}
+                >
+                  ...
+                </button>
+              </div>
             </article>
           ))}
         </div>
@@ -6816,6 +7460,7 @@ function AndroidChat() {
                   className={clsx(styles["material-upload-chip"], {
                     [styles["failed"]]: material.state === "failed",
                     [styles["uploading"]]: material.state === "uploading",
+                    [styles["local"]]: material.state === "local",
                   })}
                   title={material.error || material.name}
                 >
@@ -6831,6 +7476,8 @@ function AndroidChat() {
                         ? text.platform.uploadWaiting
                         : material.state === "ready"
                         ? text.platform.uploadReady
+                        : material.state === "local"
+                        ? text.platform.uploadLocalReady
                         : text.platform.uploadFailed}
                     </small>
                   </span>
@@ -6869,7 +7516,7 @@ function AndroidChat() {
             <div className={styles["composer-tools"]}>
               <button type="button" onClick={() => fileRef.current?.click()}>
                 <UploadIcon />
-                <span>{text.chat.uploadImage}</span>
+                <span>{text.chat.attachFile}</span>
               </button>
               <button type="button" onClick={capturePhoto} disabled={capturing}>
                 <ImageIcon />
@@ -6922,6 +7569,7 @@ function AndroidChat() {
               </button>
             ) : (
               <textarea
+                aria-label="chat-composer"
                 value={input}
                 onChange={(event) => setInput(event.currentTarget.value)}
                 placeholder={text.chat.inputPlaceholder}
@@ -6934,9 +7582,17 @@ function AndroidChat() {
               </IconButton>
             ) : (
               <IconButton
-                label={text.login.submit}
+                label="chat-send"
                 type="submit"
-                disabled={!input.trim() && attachments.length === 0}
+                disabled={
+                  !input.trim() &&
+                  attachments.length === 0 &&
+                  !sharedMaterials.some(
+                    (item) =>
+                      item.state === "ready" ||
+                      (item.state === "local" && item.localText?.trim()),
+                  )
+                }
                 active
               >
                 <SendIcon />
@@ -7050,6 +7706,10 @@ function AndroidChat() {
             text={text}
             onClose={() => setMessageActionTarget(null)}
             onCopy={() => copyMessage(messageActionTarget.message)}
+            onView={() => {
+              setMessageViewerTarget(messageActionTarget);
+              setMessageActionTarget(null);
+            }}
             onSelectText={() => selectMessageText(messageActionTarget.message)}
             onQuote={() => quoteMessage(messageActionTarget.message)}
             onRetry={() => retryMessage(messageActionTarget.message)}
@@ -7068,6 +7728,1928 @@ function AndroidChat() {
         )}
       </section>
     </main>
+  );
+}
+
+function AndroidContentKit() {
+  const managed = useManagedNextChatStore();
+  const mobileStore = useManagedMobileAppStore();
+  const text = useMobileText();
+  const navigate = useNavigate();
+  const workspace = managed.workspace
+    ? {
+        ...managed.workspace,
+        models:
+          managed.workspace.workspaces?.image?.models ||
+          managed.workspace.models,
+      }
+    : null;
+  const imageGroup = bestImageGroup(workspace);
+  const imageModels = imageModelsForGroup(workspace, imageGroup?.id);
+  const chatModel = modelValue(currentChatModels(managed.workspace)[0]);
+  const [productName, setProductName] = useState("");
+  const [sellingPoints, setSellingPoints] = useState("");
+  const [audience, setAudience] = useState("");
+  const [platform, setPlatform] = useState("");
+  const [tone, setTone] = useState("");
+  const [lockProduct, setLockProduct] = useState(true);
+  const [lockColor, setLockColor] = useState(true);
+  const [lockLogo, setLockLogo] = useState(false);
+  const [composition, setComposition] = useState<
+    "center" | "left" | "right" | "closeup"
+  >("center");
+  const [safeArea, setSafeArea] = useState<
+    "none" | "top" | "bottom" | "left" | "right"
+  >("none");
+  const [videoIntent, setVideoIntent] = useState(false);
+  const [model, setModel] = useState(() => modelValue(imageModels[0]));
+  const [references, setReferences] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [showComposer, setShowComposer] = useState(false);
+  const [showAdvancedFields, setShowAdvancedFields] = useState(false);
+  const [presetId, setPresetId] = useState("ecommerce");
+  const [customShots, setCustomShots] = useState<ContentKitShotPlan[]>(() => [
+    {
+      id: "main",
+      kind: "main",
+      label: text.platform.contentKit.main,
+      size: "1024x1024",
+      count: 2,
+    },
+    {
+      id: "lifestyle",
+      kind: "lifestyle",
+      label: text.platform.contentKit.lifestyle,
+      size: "1024x1536",
+      count: 2,
+    },
+    {
+      id: "vertical",
+      kind: "vertical",
+      label: text.platform.contentKit.vertical,
+      size: "1024x1536",
+      count: 2,
+    },
+  ]);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const queueRef = useRef(new Set<string>());
+  const recoveredQueuesRef = useRef(false);
+  const [batchEstimate, setBatchEstimate] = useState<ContentKitBatchEstimate>();
+  const [estimateLoading, setEstimateLoading] = useState(false);
+  const [estimateUnavailable, setEstimateUnavailable] = useState(false);
+  const [assetTagFilter, setAssetTagFilter] = useState<
+    "all" | ContentKitAssetTag
+  >("all");
+  const [previewAssetId, setPreviewAssetId] = useState("");
+  const [viewRunId, setViewRunId] = useState("");
+
+  useEffect(() => {
+    if (!imageModels.some((item) => modelValue(item) === model)) {
+      setModel(modelValue(imageModels[0]));
+    }
+  }, [imageModels, model]);
+
+  const selectedModel = imageModels.find((item) => modelValue(item) === model);
+
+  const presetOptions = [
+    {
+      id: "custom",
+      title: text.platform.contentKit.presetCustom,
+      hint: text.platform.contentKit.presetCustomHint,
+      shots: [] as const,
+    },
+    {
+      id: "quick",
+      title: text.platform.contentKit.presetQuick,
+      hint: text.platform.contentKit.presetQuickHint,
+      shots: [
+        ["main", text.platform.contentKit.main, "1024x1024", 2],
+        ["vertical", text.platform.contentKit.vertical, "1024x1536", 2],
+        ["banner", text.platform.contentKit.banner, "1536x1024", 2],
+      ],
+    },
+    {
+      id: "ecommerce",
+      title: text.platform.contentKit.presetEcommerce,
+      hint: text.platform.contentKit.presetEcommerceHint,
+      shots: [
+        ["main", text.platform.contentKit.main, "1024x1024", 3],
+        ["detail", text.platform.contentKit.detail, "1024x1024", 4],
+        ["lifestyle", text.platform.contentKit.lifestyle, "1024x1536", 4],
+        ["vertical", text.platform.contentKit.vertical, "1024x1536", 3],
+        ["banner", text.platform.contentKit.banner, "1536x1024", 2],
+      ],
+    },
+    {
+      id: "campaign",
+      title: text.platform.contentKit.presetCampaign,
+      hint: text.platform.contentKit.presetCampaignHint,
+      shots: [
+        ["main", text.platform.contentKit.main, "1024x1024", 4],
+        ["lifestyle", text.platform.contentKit.lifestyle, "1024x1536", 6],
+        ["poster", text.platform.contentKit.poster, "1024x1536", 6],
+        ["vertical", text.platform.contentKit.vertical, "1024x1536", 4],
+        ["banner", text.platform.contentKit.banner, "1536x1024", 4],
+      ],
+    },
+  ] as const;
+  const selectedPreset =
+    presetOptions.find((item) => item.id === presetId) ||
+    presetOptions.find((item) => item.id === "ecommerce") ||
+    presetOptions[0];
+  const modelCapabilities = selectedModel?.image_capabilities;
+  const maxOutputsPerRun = Math.max(
+    1,
+    Math.min(
+      CONTENT_KIT_MAX_OUTPUTS_PER_RUN,
+      Number(
+        modelCapabilities?.max_queued_outputs ||
+          CONTENT_KIT_MAX_OUTPUTS_PER_RUN,
+      ),
+    ),
+  );
+  const recommendedParallelism = Math.max(
+    1,
+    Math.min(
+      CONTENT_KIT_GLOBAL_CONCURRENCY,
+      Number(
+        modelCapabilities?.recommended_parallelism ||
+          CONTENT_KIT_GLOBAL_CONCURRENCY,
+      ),
+    ),
+  );
+  const referenceLimit = contentKitReferenceLimit(selectedModel);
+  const supportedContentKitSizes = modelCapabilities?.supported_sizes?.length
+    ? modelCapabilities.supported_sizes
+    : ["1024x1024", "1024x1536", "1536x1024"];
+
+  const selectedPlanShots: ContentKitShotPlan[] =
+    presetId === "custom"
+      ? customShots
+      : selectedPreset.shots.map(([kind, label, size, count]) => ({
+          id: kind,
+          kind,
+          label,
+          size,
+          count,
+        }));
+  const selectedPlanCount = selectedPlanShots.reduce(
+    (total, shot) => total + shot.count,
+    0,
+  );
+  const planSignature = selectedPlanShots
+    .map((shot) => `${shot.id}:${shot.size}:${shot.count}`)
+    .join("|");
+  const customShotOptions: ContentKitShotPlan[] = [
+    {
+      id: "main",
+      kind: "main",
+      label: text.platform.contentKit.main,
+      size: "1024x1024",
+      count: 1,
+    },
+    {
+      id: "detail",
+      kind: "detail",
+      label: text.platform.contentKit.detail,
+      size: "1024x1024",
+      count: 1,
+    },
+    {
+      id: "lifestyle",
+      kind: "lifestyle",
+      label: text.platform.contentKit.lifestyle,
+      size: "1024x1536",
+      count: 1,
+    },
+    {
+      id: "poster",
+      kind: "poster",
+      label: text.platform.contentKit.poster,
+      size: "1024x1536",
+      count: 1,
+    },
+    {
+      id: "vertical",
+      kind: "vertical",
+      label: text.platform.contentKit.vertical,
+      size: "1024x1536",
+      count: 1,
+    },
+    {
+      id: "banner",
+      kind: "banner",
+      label: text.platform.contentKit.banner,
+      size: "1536x1024",
+      count: 1,
+    },
+  ];
+
+  function assetSpecs(
+    runId: string,
+    plan = selectedPlanShots,
+  ): Omit<ManagedMobileContentKitAsset, "status" | "updatedAt">[] {
+    const product = productName.trim();
+    const details = [
+      sellingPoints.trim(),
+      audience.trim(),
+      platform.trim(),
+      tone.trim(),
+    ]
+      .filter(Boolean)
+      .join("; ");
+    const controls = [
+      lockProduct && "keep the product shape and packaging consistent",
+      lockColor && "keep the product colors consistent",
+      lockLogo && "preserve visible product branding without invented text",
+      `composition: ${composition}`,
+      safeArea !== "none" &&
+        `leave clean headline safe area on the ${safeArea}`,
+      videoIntent &&
+        "compose this as a clean source visual suitable for video motion editing",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    const prompts: Record<string, string> = {
+      main: `${product} product hero image, premium commercial product photography, centered composition, clean background`,
+      detail: `${product} material and selling-point close-up, sharp product detail, clean e-commerce layout`,
+      lifestyle: `${product} lifestyle scene for social media, product clearly visible, authentic commercial photography`,
+      poster: `${product} promotional poster visual, clear product, leave clean space for later headline overlay`,
+      vertical: `${product} vertical promotional visual for mobile social media, product clearly visible, room for headline`,
+      banner: `${product} horizontal marketing banner, product and selling-point composition, clean commercial layout`,
+    };
+    return plan.flatMap((shot) =>
+      Array.from({ length: shot.count }, (_, index) => ({
+        id: `${runId}-${shot.id}-${index + 1}`,
+        runId,
+        shotId: shot.id,
+        kind: shot.kind,
+        label: shot.label,
+        size: shot.size,
+        variant: index + 1,
+        requestId: clientRequestID("content-kit-output"),
+        tags: [],
+        prompt: `${
+          prompts[shot.kind] || prompts.main
+        }. ${details}. ${controls}`,
+      })),
+    );
+  }
+
+  useEffect(() => {
+    if (!managed.accessToken || !model || !selectedPlanCount) {
+      setBatchEstimate(undefined);
+      setEstimateLoading(false);
+      setEstimateUnavailable(false);
+      return;
+    }
+    let cancelled = false;
+    setBatchEstimate(undefined);
+    setEstimateUnavailable(false);
+    const timer = window.setTimeout(() => {
+      setEstimateLoading(true);
+      const sampleAssets = assetSpecs("content-kit-estimate");
+      const batches = Array.from(
+        {
+          length: Math.ceil(sampleAssets.length / maxOutputsPerRun),
+        },
+        (_, index) =>
+          sampleAssets.slice(
+            index * maxOutputsPerRun,
+            (index + 1) * maxOutputsPerRun,
+          ),
+      );
+      void Promise.all(
+        batches.map((items) =>
+          managedAuthenticatedJsonRequest<ContentKitBatchEstimate>(
+            "/api/v1/nextchat/image-studio/estimate-batch",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                items: items.map((asset) => ({
+                  id: asset.id,
+                  template_id: "free-create",
+                  size: asset.size,
+                  model,
+                })),
+              }),
+            },
+          ),
+        ),
+      )
+        .then((estimates) => {
+          if (cancelled) return;
+          setBatchEstimate({
+            estimated_cost: estimates.reduce(
+              (total, estimate) => total + Number(estimate.estimated_cost || 0),
+              0,
+            ),
+            balance: Number(estimates[0]?.balance || 0),
+            sufficient: estimates.every((estimate) => estimate.sufficient),
+          });
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setBatchEstimate(undefined);
+            setEstimateUnavailable(true);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setEstimateLoading(false);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // assetSpecs captures the current brief; the signature covers every factor used by this estimate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    managed.accessToken,
+    maxOutputsPerRun,
+    model,
+    planSignature,
+    selectedPlanCount,
+  ]);
+
+  async function attachReferences(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    if (!input.files?.length) return;
+    try {
+      if (!referenceLimit) {
+        setError(text.platform.contentKit.referenceUnsupported);
+        return;
+      }
+      const images = await readImageFiles(
+        Array.from(input.files),
+        referenceLimit,
+      );
+      setReferences((current) =>
+        [...current, ...images].slice(0, referenceLimit),
+      );
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : text.errors.saveFailed);
+    } finally {
+      input.value = "";
+    }
+  }
+
+  function patchAsset(
+    projectId: string,
+    assetId: string,
+    patch: Partial<ManagedMobileContentKitAsset>,
+  ) {
+    const current = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === projectId);
+    if (!current) return;
+    mobileStore.updateContentKit(projectId, {
+      assets: current.assets.map((asset) =>
+        asset.id === assetId
+          ? { ...asset, ...patch, updatedAt: Date.now() }
+          : asset,
+      ),
+    });
+  }
+
+  async function hydrateAssetBilling(
+    projectId: string,
+    assetId: string,
+    requestId: string,
+  ) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const page = await managedAuthenticatedJsonRequest<ContentKitUsagePage>(
+          `/api/v1/usage?page=1&page_size=1&client_request_id=${encodeURIComponent(
+            requestId,
+          )}`,
+        );
+        const record = page.items?.find(
+          (item) => item.request_id === `client:${requestId}`,
+        );
+        if (record) {
+          patchAsset(projectId, assetId, {
+            actualCost: Number(record.actual_cost || 0),
+            billingRecordId: String(record.id),
+            billingStatus: "captured",
+          });
+          return;
+        }
+      } catch {
+        return;
+      }
+      if (attempt < 2) await sleep(500 * (attempt + 1));
+    }
+  }
+
+  async function generateAsset(
+    project: ManagedMobileContentKit,
+    asset: ManagedMobileContentKitAsset,
+  ) {
+    if (
+      project.referenceImages.length &&
+      !imageModelSupportsReferences(project.model, imageModels, false)
+    ) {
+      patchAsset(project.id, asset.id, {
+        status: "failed",
+        error: text.platform.contentKit.referenceUnsupported,
+      });
+      setError(text.platform.contentKit.referenceUnsupported);
+      return;
+    }
+    if (!managed.imageSession) {
+      patchAsset(project.id, asset.id, {
+        status: "failed",
+        error: text.errors.loginRequired,
+      });
+      return;
+    }
+    // Persist before the first request. A restart or timeout must replay the
+    // same key so the gateway can return the original job instead of billing a
+    // second generation.
+    const localTaskId =
+      asset.requestId || clientRequestID(`content-kit-output-${asset.id}`);
+    patchAsset(project.id, asset.id, {
+      status: "running",
+      error: "",
+      taskId: localTaskId,
+      requestId: localTaskId,
+      billingStatus: "pending",
+    });
+    let platformTask: MobileTask | null = null;
+    try {
+      const client = await mobilePlatformClient();
+      platformTask = await client.tasks.create({
+        kind: "image",
+        operation: project.referenceImages.length
+          ? "images.edits"
+          : "images.generations",
+        client_request_id: localTaskId,
+        title: asset.label,
+        title_zh: asset.label,
+        model: project.model,
+        group_id: imageGroup?.id,
+        parameters: {
+          size: asset.size,
+          content_kit: project.id,
+          asset: asset.shotId,
+          output_id: asset.id,
+          variant: asset.variant,
+        },
+        locale: text.dateLocale,
+      });
+      patchAsset(project.id, asset.id, { taskId: platformTask.id });
+      await client.tasks.status(platformTask.id, { status: "running" });
+    } catch {
+      // The local project remains usable when optional task history is unavailable.
+    }
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "Idempotency-Key": localTaskId,
+        "X-Request-ID": localTaskId,
+        "X-Client-Request-ID": localTaskId,
+      };
+      let body: BodyInit;
+      const payload = {
+        model: project.model,
+        prompt: asset.prompt,
+        size: asset.size,
+        n: 1,
+        response_format: "b64_json",
+      };
+      const endpoint = project.referenceImages.length
+        ? "/images/edits"
+        : "/images/generations";
+      if (project.referenceImages.length) {
+        const form = new FormData();
+        Object.entries(payload).forEach(([key, value]) =>
+          form.append(key, String(value)),
+        );
+        project.referenceImages.forEach((image, index) =>
+          form.append(
+            "image",
+            dataUrlToBlob(image),
+            `reference-${index + 1}.png`,
+          ),
+        );
+        body = form;
+      } else {
+        headers["Content-Type"] = "application/json";
+        body = JSON.stringify(payload);
+      }
+      const response = await managedGatewayRequestText(
+        managed.backendBaseUrl,
+        `/v1${endpoint}`,
+        { method: "POST", headers, body },
+        managed.imageSession.api_key || "",
+        text,
+      );
+      const json = response.text ? JSON.parse(response.text) : null;
+      if (!response.ok || json?.error) {
+        throw new Error(
+          parseOpenAIError(
+            response.text,
+            response.status,
+            `/v1${endpoint}`,
+            response.requestId || localTaskId,
+          ),
+        );
+      }
+      const image = openAIImageData(json)[0];
+      const saved = await persistContentKitImageResult(image, {
+        taskId: localTaskId,
+        prompt: asset.prompt,
+        model: project.model,
+        ownerUserId: String(managed.user?.id || managed.session?.user_id || ""),
+      });
+      patchAsset(project.id, asset.id, {
+        status: "completed",
+        imageUrl: saved.url,
+        fileName: saved.fileName,
+        error: "",
+      });
+      void hydrateAssetBilling(project.id, asset.id, localTaskId);
+      if (platformTask) {
+        const client = await mobilePlatformClient().catch(() => null);
+        await client?.tasks
+          .status(platformTask.id, { status: "completed", progress: 100 })
+          .catch(() => {});
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : text.platform.contentKit.failed;
+      patchAsset(project.id, asset.id, { status: "failed", error: message });
+      void hydrateAssetBilling(project.id, asset.id, localTaskId);
+      if (platformTask) {
+        const client = await mobilePlatformClient().catch(() => null);
+        await client?.tasks
+          .status(platformTask.id, {
+            status: "failed",
+            error: {
+              code: "content_kit_image_failed",
+              message,
+              retryable: true,
+            },
+          })
+          .catch(() => {});
+      }
+    }
+  }
+
+  async function generateCopy(project: ManagedMobileContentKit) {
+    if (!chatModel) {
+      mobileStore.updateContentKit(project.id, {
+        copyStatus: "failed",
+        copyError: text.platform.contentKit.noChatModel,
+      });
+      return;
+    }
+    const requestId = clientRequestID("content-kit-copy");
+    mobileStore.updateContentKit(project.id, {
+      copyStatus: "running",
+      copyError: "",
+      copyTaskId: requestId,
+    });
+    try {
+      const payload = JSON.stringify({
+        model: chatModel,
+        stream: false,
+        messages: [
+          {
+            role: "user",
+            content: `Create product promotion copy for ${
+              project.productName
+            }. Selling points: ${project.sellingPoints}. Audience: ${
+              project.audience || "general"
+            }. Platform: ${project.platform || "general"}. Tone: ${
+              project.tone || "clear"
+            }. Return a product title, 3-5 selling points, and one ready-to-publish post. Use the user's language.`,
+          },
+        ],
+      });
+      const response = await managedGatewayRequestText(
+        managed.backendBaseUrl,
+        "/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": requestId,
+            "X-Request-ID": requestId,
+          },
+          body: payload,
+        },
+        managed.session?.api_key || "",
+        text,
+      );
+      if (!response.ok)
+        throw new Error(
+          parseOpenAIError(
+            response.text,
+            response.status,
+            "/v1/chat/completions",
+            response.requestId || requestId,
+          ),
+        );
+      const json = JSON.parse(response.text || "{}");
+      const copy =
+        json?.choices?.[0]?.message?.content || json?.output_text || "";
+      if (!String(copy).trim())
+        throw new Error(text.platform.contentKit.failed);
+      mobileStore.updateContentKit(project.id, {
+        copyStatus: "completed",
+        copy: String(copy),
+        copyError: "",
+      });
+    } catch (err) {
+      mobileStore.updateContentKit(project.id, {
+        copyStatus: "failed",
+        copyError:
+          err instanceof Error ? err.message : text.platform.contentKit.failed,
+      });
+    }
+  }
+
+  function updateRun(
+    projectId: string,
+    runId: string,
+    status:
+      | "queued"
+      | "running"
+      | "paused"
+      | "completed"
+      | "partial"
+      | "cancelled",
+  ) {
+    const project = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === projectId);
+    if (!project) return;
+    mobileStore.updateContentKit(projectId, {
+      runs: (project.runs || []).map((run) =>
+        run.id === runId ? { ...run, status, updatedAt: Date.now() } : run,
+      ),
+    });
+  }
+
+  async function runProjectQueue(projectId: string) {
+    if (queueRef.current.has(projectId)) return;
+    queueRef.current.add(projectId);
+    try {
+      while (true) {
+        const project = useManagedMobileAppStore
+          .getState()
+          .contentKits.find((item) => item.id === projectId);
+        const runId = project?.activeRunId;
+        const run = project?.runs?.find((item) => item.id === runId);
+        if (
+          !project ||
+          !runId ||
+          !run ||
+          run.status === "paused" ||
+          run.status === "cancelled"
+        ) {
+          return;
+        }
+        if (run.status !== "running") updateRun(projectId, runId, "running");
+        const queued = project.assets.filter(
+          (asset) =>
+            asset.runId === runId &&
+            (asset.status === "queued" || asset.status === "idle"),
+        );
+        if (!queued.length) {
+          const outputs = project.assets.filter(
+            (asset) => asset.runId === runId,
+          );
+          const finalStatus = outputs.some(
+            (asset) =>
+              asset.status === "failed" || asset.status === "cancelled",
+          )
+            ? "partial"
+            : "completed";
+          updateRun(projectId, runId, finalStatus);
+          const nextRun = project.runs
+            ?.filter((item) => item.id !== runId && item.status === "queued")
+            .sort((left, right) => left.createdAt - right.createdAt)[0];
+          if (!nextRun) return;
+          mobileStore.updateContentKit(projectId, {
+            activeRunId: nextRun.id,
+          });
+          continue;
+        }
+        await Promise.all(
+          queued.slice(0, recommendedParallelism).map(async (asset) => {
+            while (activeContentKitOutputs.size >= recommendedParallelism) {
+              await sleep(80);
+            }
+            activeContentKitOutputs.add(asset.id);
+            try {
+              await generateAsset(project, asset);
+            } finally {
+              activeContentKitOutputs.delete(asset.id);
+            }
+          }),
+        );
+      }
+    } finally {
+      queueRef.current.delete(projectId);
+    }
+  }
+
+  function pauseProjectQueue(project: ManagedMobileContentKit) {
+    if (!project.activeRunId) return;
+    updateRun(project.id, project.activeRunId, "paused");
+  }
+
+  function cancelProjectQueue(project: ManagedMobileContentKit) {
+    const runId = project.activeRunId;
+    if (!runId) return;
+    mobileStore.updateContentKit(project.id, {
+      assets: project.assets.map((asset) =>
+        asset.runId === runId &&
+        (asset.status === "idle" || asset.status === "queued")
+          ? { ...asset, status: "cancelled", updatedAt: Date.now() }
+          : asset,
+      ),
+    });
+    updateRun(project.id, runId, "cancelled");
+  }
+
+  function retryFailedAssets(project: ManagedMobileContentKit) {
+    const runId = project.activeRunId;
+    if (!runId) return;
+    mobileStore.updateContentKit(project.id, {
+      assets: project.assets.map((asset) =>
+        asset.runId === runId && asset.status === "failed"
+          ? { ...asset, status: "queued", error: "", updatedAt: Date.now() }
+          : asset,
+      ),
+    });
+    updateRun(project.id, runId, "queued");
+    void runProjectQueue(project.id);
+  }
+
+  function createNextRun(project: ManagedMobileContentKit) {
+    const plan = project.shotPlan?.filter((shot) => shot.count > 0) || [];
+    const outputCount = plan.reduce((total, shot) => total + shot.count, 0);
+    if (
+      !outputCount ||
+      project.assets.length + outputCount > CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT
+    ) {
+      setError(text.platform.contentKit.projectLimit);
+      return;
+    }
+    const runId = clientRequestID("content-kit-run");
+    const sourceByShot = new Map<string, ManagedMobileContentKitAsset>();
+    project.assets.forEach((asset) => {
+      if (!sourceByShot.has(asset.shotId))
+        sourceByShot.set(asset.shotId, asset);
+    });
+    const assets = plan.flatMap((shot) =>
+      Array.from({ length: shot.count }, (_, index) => {
+        const source = sourceByShot.get(shot.id);
+        return {
+          id: `${runId}-${shot.id}-${index + 1}`,
+          runId,
+          shotId: shot.id,
+          kind: shot.kind,
+          label: shot.label,
+          prompt:
+            source?.prompt ||
+            `${project.productName}. ${project.sellingPoints}`,
+          size: shot.size,
+          variant: index + 1,
+          requestId: clientRequestID("content-kit-output"),
+          tags: [],
+          status: "queued" as const,
+          updatedAt: Date.now(),
+        };
+      }),
+    );
+    mobileStore.updateContentKit(project.id, {
+      activeRunId: runId,
+      runs: [
+        ...(project.runs || []),
+        {
+          id: runId,
+          presetId: project.presetId || "custom",
+          status: "queued",
+          total: assets.length,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+      assets: [...project.assets, ...assets],
+    });
+    setViewRunId(runId);
+    setError("");
+    void runProjectQueue(project.id);
+  }
+
+  async function createProject() {
+    if (!productName.trim() || !sellingPoints.trim())
+      return setError(text.platform.contentKit.requiredProduct);
+    if (!model || !imageModels.length)
+      return setError(text.platform.contentKit.noImageModel);
+    if (
+      selectedPlanShots.some(
+        (shot) => !contentKitModelSupportsSize(selectedModel, shot.size),
+      )
+    ) {
+      return setError(text.platform.contentKit.unsupportedSize);
+    }
+    if (!batchEstimate || estimateLoading || estimateUnavailable) {
+      return setError(text.platform.contentKit.estimateRequired);
+    }
+    if (!batchEstimate.sufficient) {
+      return setError(text.platform.contentKit.insufficientBalance);
+    }
+    if (
+      references.length &&
+      !imageModelSupportsReferences(selectedModel || model, [], false)
+    ) {
+      return setError(text.platform.contentKit.referenceUnsupported);
+    }
+    if (
+      !selectedPlanCount ||
+      selectedPlanCount > CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT
+    ) {
+      return setError(text.platform.contentKit.planLimit);
+    }
+    const rawAssets = assetSpecs("content-kit-pending");
+    const runs = Array.from(
+      { length: Math.ceil(rawAssets.length / maxOutputsPerRun) },
+      (_, index) => {
+        const runId = clientRequestID("content-kit-run");
+        const start = index * maxOutputsPerRun;
+        const outputCount = Math.min(
+          maxOutputsPerRun,
+          rawAssets.length - start,
+        );
+        return {
+          id: runId,
+          presetId: selectedPreset.id,
+          status: "queued" as const,
+          total: outputCount,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+      },
+    );
+    const assets = rawAssets.map((asset, index) => {
+      const run = runs[Math.floor(index / maxOutputsPerRun)];
+      const variant =
+        rawAssets.slice(0, index).filter((item) => item.shotId === asset.shotId)
+          .length + 1;
+      return {
+        ...asset,
+        id: `${run.id}-${asset.shotId}-${variant}`,
+        runId: run.id,
+        variant,
+        status: "queued" as const,
+        updatedAt: Date.now(),
+      };
+    });
+    const projectId = mobileStore.createContentKit({
+      productName: productName.trim(),
+      sellingPoints: sellingPoints.trim(),
+      audience: audience.trim(),
+      platform: platform.trim(),
+      tone: tone.trim(),
+      brandControls: {
+        lockProduct,
+        lockColor,
+        lockLogo,
+        composition,
+        safeArea,
+        videoIntent,
+      },
+      model,
+      referenceImages: references,
+      presetId: selectedPreset.id,
+      shotPlan: selectedPlanShots,
+      activeRunId: runs[0]?.id,
+      runs,
+      assets,
+      copyStatus: "idle",
+    });
+    const project = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === projectId);
+    if (!project) return;
+    setError("");
+    setShowComposer(false);
+    setSelectedProjectId(projectId);
+    void runProjectQueue(projectId);
+    void generateCopy(project);
+  }
+
+  const projects = [...mobileStore.contentKits].sort(
+    (left, right) => right.updatedAt - left.updatedAt,
+  );
+  const selectedProject = projects.find(
+    (item) => item.id === selectedProjectId,
+  );
+
+  useEffect(() => {
+    if (!managed.imageSession) return;
+    if (!recoveredQueuesRef.current) {
+      recoveredQueuesRef.current = true;
+      projects.forEach((project) => {
+        const hasUnconfirmedOutput = project.assets.some(
+          (asset) => asset.status === "running",
+        );
+        const activeRun = project.runs?.find(
+          (run) => run.id === project.activeRunId,
+        );
+        if (hasUnconfirmedOutput) {
+          mobileStore.updateContentKit(project.id, {
+            assets: project.assets.map((asset) =>
+              asset.status === "running"
+                ? { ...asset, status: "queued", updatedAt: Date.now() }
+                : asset,
+            ),
+          });
+        }
+        if (activeRun?.status === "running") {
+          updateRun(project.id, activeRun.id, "queued");
+        }
+      });
+    }
+    projects.forEach((project) => {
+      const run = project.runs?.find((item) => item.id === project.activeRunId);
+      if (run?.status === "queued" || run?.status === "running") {
+        void runProjectQueue(project.id);
+      }
+    });
+    // Queue membership prevents duplicate workers; resume after local-store hydration or app restart.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managed.imageSession, mobileStore.contentKits]);
+
+  function taskStatusLabel(status: ManagedMobileContentKitAsset["status"]) {
+    if (status === "completed") return text.platform.contentKit.completed;
+    if (status === "running") return text.platform.contentKit.generating;
+    if (status === "failed") return text.platform.contentKit.failed;
+    return text.platform.contentKit.waiting;
+  }
+
+  function runStatusLabel(status: string) {
+    if (status === "partial") return text.platform.contentKit.partial;
+    if (status === "cancelled") return text.platform.contentKit.failed;
+    return taskStatusLabel(status as ManagedMobileContentKitAsset["status"]);
+  }
+
+  function projectStatus(project: ManagedMobileContentKit) {
+    const statuses = [
+      ...project.assets.map((item) => item.status),
+      project.copyStatus,
+    ];
+    if (statuses.every((status) => status === "completed")) {
+      return text.platform.contentKit.completed;
+    }
+    if (
+      statuses.some(
+        (status) =>
+          status === "running" || status === "idle" || status === "queued",
+      )
+    ) {
+      return text.platform.contentKit.generating;
+    }
+    if (statuses.some((status) => status === "completed")) {
+      return text.platform.contentKit.partial;
+    }
+    return text.platform.contentKit.failed;
+  }
+
+  function toggleAssetSelection(
+    project: ManagedMobileContentKit,
+    assetId: string,
+  ) {
+    mobileStore.updateContentKit(project.id, {
+      assets: project.assets.map((asset) =>
+        asset.id === assetId
+          ? { ...asset, selected: !asset.selected, updatedAt: Date.now() }
+          : asset,
+      ),
+    });
+  }
+
+  function toggleAssetTag(
+    project: ManagedMobileContentKit,
+    assetId: string,
+    tag: ContentKitAssetTag,
+  ) {
+    mobileStore.updateContentKit(project.id, {
+      assets: project.assets.map((asset) => {
+        if (asset.id !== assetId) return asset;
+        const tags = new Set(asset.tags || []);
+        if (tags.has(tag)) tags.delete(tag);
+        else tags.add(tag);
+        return { ...asset, tags: [...tags], updatedAt: Date.now() };
+      }),
+    });
+  }
+
+  async function saveSelectedAssets(project: ManagedMobileContentKit) {
+    const selected = project.assets.filter(
+      (asset) => asset.selected && asset.imageUrl,
+    );
+    if (!selected.length)
+      return setError(text.platform.contentKit.noSelectedOutputs);
+    try {
+      for (const asset of selected) {
+        await saveImageToGallery(
+          asset.imageUrl!,
+          asset.fileName || makeImageFileName("content-kit", asset.id),
+        );
+      }
+    } catch {
+      setError(text.errors.saveFailed);
+    }
+  }
+
+  async function shareSelectedAssets(project: ManagedMobileContentKit) {
+    const selected = project.assets.filter(
+      (asset) => asset.selected && asset.imageUrl,
+    );
+    if (!selected.length)
+      return setError(text.platform.contentKit.noSelectedOutputs);
+    try {
+      await shareImages(
+        selected.map((asset) => ({
+          url: asset.imageUrl!,
+          fileName:
+            asset.fileName || makeImageFileName("content-kit", asset.id),
+        })),
+        selected.length === 1 ? selected[0].prompt : project.productName,
+      );
+    } catch {
+      setError(text.errors.saveFailed);
+    }
+  }
+
+  async function removeProject(project: ManagedMobileContentKit) {
+    if (
+      !window.confirm(
+        text.platform.contentKit.removeConfirm(project.productName),
+      )
+    ) {
+      return;
+    }
+    const localFileNames = project.assets
+      .map((asset) => asset.fileName)
+      .filter((fileName): fileName is string => Boolean(fileName));
+    try {
+      await deleteAppImages(localFileNames);
+    } catch {
+      setError(text.platform.contentKit.removeLocalFailed);
+    }
+    mobileStore.removeContentKit(project.id);
+    setSelectedProjectId("");
+  }
+
+  if (selectedProject) {
+    const activeRunId = selectedProject.activeRunId;
+    const displayedRunId = selectedProject.runs?.some(
+      (run) => run.id === viewRunId,
+    )
+      ? viewRunId
+      : activeRunId;
+    const runAssets = selectedProject.assets.filter(
+      (asset) => !displayedRunId || asset.runId === displayedRunId,
+    );
+    const completedCount = runAssets.filter(
+      (asset) => asset.status === "completed",
+    ).length;
+    const selectedCount = runAssets.filter((asset) => asset.selected).length;
+    const activeRun = selectedProject.runs?.find(
+      (run) => run.id === activeRunId,
+    );
+    const previewAsset = selectedProject.assets.find(
+      (asset) => asset.id === previewAssetId,
+    );
+    const tagOptions: Array<{ id: ContentKitAssetTag; label: string }> = [
+      { id: "keep", label: text.platform.contentKit.tagKeep },
+      { id: "review", label: text.platform.contentKit.tagReview },
+      { id: "reject", label: text.platform.contentKit.tagReject },
+      { id: "video", label: text.platform.contentKit.tagVideo },
+    ];
+    const groupedAssets = Array.from(
+      runAssets.reduce((groups, asset) => {
+        if (assetTagFilter !== "all" && !asset.tags?.includes(assetTagFilter)) {
+          return groups;
+        }
+        const group = groups.get(asset.shotId) || [];
+        group.push(asset);
+        groups.set(asset.shotId, group);
+        return groups;
+      }, new Map<string, ManagedMobileContentKitAsset[]>()),
+    );
+    return (
+      <AndroidAppShell active="image" text={text}>
+        <header className={styles["detail-header"]}>
+          <IconButton
+            label={text.common.back}
+            onClick={() => setSelectedProjectId("")}
+          >
+            <LeftIcon />
+          </IconButton>
+          <div>
+            <h1>{selectedProject.productName}</h1>
+            <p>{formatDateTime(selectedProject.updatedAt, text)}</p>
+          </div>
+          <IconButton
+            label={text.platform.contentKit.removeProject}
+            onClick={() => void removeProject(selectedProject)}
+          >
+            <DeleteIcon />
+          </IconButton>
+        </header>
+        <section className={styles["content-kit-summary"]}>
+          <div>
+            <span>{text.platform.contentKit.projectProgress}</span>
+            <strong>{`${completedCount}/${runAssets.length}`}</strong>
+          </div>
+          <div>
+            <span>{text.platform.contentKit.copy}</span>
+            <strong>{taskStatusLabel(selectedProject.copyStatus)}</strong>
+          </div>
+          <small>{projectStatus(selectedProject)}</small>
+        </section>
+        <section className={styles["content-kit-queue-actions"]}>
+          <span>
+            {activeRun?.status === "paused"
+              ? text.platform.contentKit.queuePaused
+              : activeRun?.status === "running" ||
+                activeRun?.status === "queued"
+              ? text.platform.contentKit.queueRunning
+              : projectStatus(selectedProject)}
+          </span>
+          {activeRun?.status === "running" || activeRun?.status === "queued" ? (
+            <button
+              type="button"
+              onClick={() => pauseProjectQueue(selectedProject)}
+            >
+              {text.platform.contentKit.pauseQueue}
+            </button>
+          ) : activeRun?.status === "paused" ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (!activeRunId) return;
+                updateRun(selectedProject.id, activeRunId, "queued");
+                void runProjectQueue(selectedProject.id);
+              }}
+            >
+              {text.platform.contentKit.resumeQueue}
+            </button>
+          ) : null}
+          {(activeRun?.status === "running" ||
+            activeRun?.status === "queued" ||
+            activeRun?.status === "paused") && (
+            <button
+              type="button"
+              onClick={() => cancelProjectQueue(selectedProject)}
+            >
+              {text.platform.contentKit.cancelQueue}
+            </button>
+          )}
+          {runAssets.some((asset) => asset.status === "failed") && (
+            <button
+              type="button"
+              onClick={() => retryFailedAssets(selectedProject)}
+            >
+              {text.platform.contentKit.retryFailed}
+            </button>
+          )}
+          {activeRun &&
+            ["completed", "partial", "cancelled"].includes(
+              activeRun.status,
+            ) && (
+              <button
+                type="button"
+                onClick={() => createNextRun(selectedProject)}
+              >
+                <AddIcon />
+                {text.platform.contentKit.newVersion}
+              </button>
+            )}
+        </section>
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.platform.contentKit.outputGroups}</h2>
+            <span>
+              {text.platform.contentKit.selectedOutputs(selectedCount)}
+            </span>
+          </div>
+          {(selectedProject.runs || []).length > 1 && (
+            <div className={styles["content-kit-run-tabs"]}>
+              {(selectedProject.runs || []).map((run, index) => (
+                <button
+                  key={run.id}
+                  type="button"
+                  className={clsx({
+                    [styles["active"]]: run.id === displayedRunId,
+                  })}
+                  onClick={() => setViewRunId(run.id)}
+                >
+                  {`${index + 1} · ${runStatusLabel(run.status)}`}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className={styles["content-kit-selection-actions"]}>
+            <button
+              type="button"
+              onClick={() => void saveSelectedAssets(selectedProject)}
+            >
+              <DownloadIcon />
+              <span>{text.platform.contentKit.saveSelected}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void shareSelectedAssets(selectedProject)}
+            >
+              <ShareIcon />
+              <span>{text.platform.contentKit.shareSelected}</span>
+            </button>
+          </div>
+          <div className={styles["content-kit-tag-filters"]}>
+            <button
+              type="button"
+              className={clsx({ [styles["active"]]: assetTagFilter === "all" })}
+              onClick={() => setAssetTagFilter("all")}
+            >
+              {text.platform.contentKit.filterAll}
+            </button>
+            {tagOptions.map((tag) => (
+              <button
+                key={tag.id}
+                type="button"
+                className={clsx({
+                  [styles["active"]]: assetTagFilter === tag.id,
+                })}
+                onClick={() => setAssetTagFilter(tag.id)}
+              >
+                {tag.label}
+              </button>
+            ))}
+          </div>
+          <div className={styles["content-kit-assets"]}>
+            {groupedAssets.map(([shotId, assets], groupIndex) => (
+              <details
+                key={shotId}
+                open={groupIndex === 0}
+                className={styles["content-kit-shot-group"]}
+              >
+                <summary>
+                  <strong>{assets[0]?.label || shotId}</strong>
+                  <span>{`${
+                    assets.filter((asset) => asset.status === "completed")
+                      .length
+                  }/${assets.length}`}</span>
+                </summary>
+                <div className={styles["content-kit-output-grid"]}>
+                  {assets.map((asset) => (
+                    <article
+                      key={asset.id}
+                      className={clsx(styles["content-kit-asset"], {
+                        [styles["selected"]]: asset.selected,
+                      })}
+                    >
+                      <button
+                        type="button"
+                        className={styles["content-kit-output-preview"]}
+                        onClick={() =>
+                          asset.imageUrl && setPreviewAssetId(asset.id)
+                        }
+                        aria-label={text.platform.contentKit.previewOutput}
+                      >
+                        {asset.imageUrl ? (
+                          <img src={asset.imageUrl} alt={asset.label} />
+                        ) : (
+                          <ImageIcon />
+                        )}
+                      </button>
+                      <span>{`${asset.variant} · ${taskStatusLabel(
+                        asset.status,
+                      )}`}</span>
+                      {asset.imageUrl && (
+                        <button
+                          type="button"
+                          aria-label={text.platform.contentKit.selectOutput}
+                          onClick={() =>
+                            toggleAssetSelection(selectedProject, asset.id)
+                          }
+                        >
+                          {asset.selected ? "✓" : "+"}
+                        </button>
+                      )}
+                      {asset.imageUrl && (
+                        <div className={styles["content-kit-asset-tags"]}>
+                          {tagOptions.map((tag) => (
+                            <button
+                              key={tag.id}
+                              type="button"
+                              className={clsx({
+                                [styles["active"]]: asset.tags?.includes(
+                                  tag.id,
+                                ),
+                              })}
+                              onClick={() =>
+                                toggleAssetTag(
+                                  selectedProject,
+                                  asset.id,
+                                  tag.id,
+                                )
+                              }
+                            >
+                              {tag.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {asset.status === "failed" && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            patchAsset(selectedProject.id, asset.id, {
+                              status: "queued",
+                              error: "",
+                            });
+                            void runProjectQueue(selectedProject.id);
+                          }}
+                        >
+                          <ReloadIcon />
+                        </button>
+                      )}
+                      {asset.error && <small>{asset.error}</small>}
+                      {asset.billingStatus === "captured" && (
+                        <small className={styles["content-kit-billing"]}>
+                          {text.platform.contentKit.actualCost(
+                            Number(asset.actualCost || 0),
+                          )}
+                        </small>
+                      )}
+                      {asset.billingStatus === "pending" &&
+                        asset.status !== "queued" &&
+                        asset.status !== "idle" && (
+                          <small className={styles["content-kit-billing"]}>
+                            {text.platform.contentKit.billingPending}
+                          </small>
+                        )}
+                    </article>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </div>
+        </section>
+        {previewAsset?.imageUrl && (
+          <div
+            className={styles["content-kit-preview-modal"]}
+            role="dialog"
+            aria-modal="true"
+            aria-label={text.platform.contentKit.previewOutput}
+            onClick={() => setPreviewAssetId("")}
+          >
+            <div onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                aria-label={text.platform.contentKit.closePreview}
+                onClick={() => setPreviewAssetId("")}
+              >
+                ×
+              </button>
+              <img src={previewAsset.imageUrl} alt={previewAsset.label} />
+              <p>{`${previewAsset.label} · ${previewAsset.variant}`}</p>
+            </div>
+          </div>
+        )}
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.platform.contentKit.copy}</h2>
+            <span>{taskStatusLabel(selectedProject.copyStatus)}</span>
+          </div>
+          <article className={styles["content-kit-copy-card"]}>
+            {selectedProject.copy ? (
+              <p>{selectedProject.copy}</p>
+            ) : (
+              <span>
+                {selectedProject.copyError || text.platform.contentKit.waiting}
+              </span>
+            )}
+            <div className={styles["content-kit-actions"]}>
+              {selectedProject.copyStatus === "failed" && (
+                <button
+                  type="button"
+                  onClick={() => void generateCopy(selectedProject)}
+                >
+                  <ReloadIcon />
+                  <span>{text.platform.contentKit.retryItem}</span>
+                </button>
+              )}
+              {selectedProject.copy && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigator.clipboard
+                        ?.writeText(selectedProject.copy || "")
+                        .catch(() => setError(text.errors.copyFailed))
+                    }
+                  >
+                    <CopyIcon />
+                    <span>{text.platform.contentKit.copyResult}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      shareText(
+                        selectedProject.copy || "",
+                        selectedProject.productName,
+                      )
+                    }
+                  >
+                    <ShareIcon />
+                    <span>{text.platform.contentKit.shareResult}</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </article>
+        </section>
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.platform.contentKit.brief}</h2>
+          </div>
+          <div className={styles["content-kit-brief"]}>
+            <span>{text.platform.contentKit.sellingPoints}</span>
+            <p>{selectedProject.sellingPoints}</p>
+            {selectedProject.audience && (
+              <>
+                <span>{text.platform.contentKit.audience}</span>
+                <p>{selectedProject.audience}</p>
+              </>
+            )}
+            {selectedProject.platform && (
+              <>
+                <span>{text.platform.contentKit.platform}</span>
+                <p>{selectedProject.platform}</p>
+              </>
+            )}
+            {selectedProject.tone && (
+              <>
+                <span>{text.platform.contentKit.tone}</span>
+                <p>{selectedProject.tone}</p>
+              </>
+            )}
+            <span>{text.platform.contentKit.chooseModel}</span>
+            <p>{selectedProject.model}</p>
+          </div>
+        </section>
+      </AndroidAppShell>
+    );
+  }
+
+  return (
+    <AndroidAppShell active="image" text={text}>
+      <header className={styles["detail-header"]}>
+        <IconButton
+          label={text.common.back}
+          onClick={() => navigate(Path.Home)}
+        >
+          <LeftIcon />
+        </IconButton>
+        <div>
+          <h1>{text.platform.contentKit.title}</h1>
+          <p>{text.platform.contentKit.hint}</p>
+        </div>
+      </header>
+      {!showComposer && (
+        <section className={styles["section"]}>
+          <button
+            type="button"
+            className={styles["primary-action"]}
+            onClick={() => setShowComposer(true)}
+          >
+            <AddIcon />
+            {text.platform.contentKit.newProject}
+          </button>
+        </section>
+      )}
+      {showComposer && (
+        <section
+          className={clsx(styles["section"], styles["content-kit-form"])}
+        >
+          <div className={styles["content-kit-fields"]}>
+            <label>
+              <span>{text.platform.contentKit.projectName}</span>
+              <input
+                aria-label="content-kit-product"
+                placeholder={text.platform.contentKit.productPlaceholder}
+                value={productName}
+                onChange={(event) => setProductName(event.currentTarget.value)}
+              />
+            </label>
+            <label>
+              <span>{text.platform.contentKit.sellingPoints}</span>
+              <textarea
+                aria-label="content-kit-selling-points"
+                placeholder={text.platform.contentKit.sellingPointsPlaceholder}
+                value={sellingPoints}
+                onChange={(event) =>
+                  setSellingPoints(event.currentTarget.value)
+                }
+              />
+            </label>
+            <label>
+              <span>{text.platform.contentKit.chooseModel}</span>
+              <select
+                aria-label="content-kit-model"
+                value={model}
+                onChange={(event) => setModel(event.currentTarget.value)}
+              >
+                {imageModels.map((item) => (
+                  <option key={modelValue(item)} value={modelValue(item)}>
+                    {modelLabel(item)}
+                  </option>
+                ))}
+              </select>
+              {selectedModel && <small>{modelValue(selectedModel)}</small>}
+            </label>
+          </div>
+          <div className={styles["content-kit-plan-picker"]}>
+            <span>{text.platform.contentKit.outputPlan}</span>
+            <div>
+              {presetOptions.map((preset) => {
+                const count = preset.shots.reduce(
+                  (total, shot) => total + shot[3],
+                  0,
+                );
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    aria-label={`content-kit-preset-${preset.id}`}
+                    className={clsx({
+                      [styles["active"]]: preset.id === selectedPreset.id,
+                    })}
+                    onClick={() => setPresetId(preset.id)}
+                  >
+                    <strong>{preset.title}</strong>
+                    <small>{preset.hint}</small>
+                    <em>{text.platform.contentKit.plannedImages(count)}</em>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {presetId === "custom" && (
+            <div className={styles["content-kit-custom-plan"]}>
+              {customShots.map((shot) => (
+                <div key={shot.id}>
+                  <span>
+                    <strong>{shot.label}</strong>
+                    <small>{shot.size}</small>
+                  </span>
+                  <div>
+                    <button
+                      type="button"
+                      aria-label={`${shot.label} -`}
+                      disabled={shot.count <= 1}
+                      onClick={() =>
+                        setCustomShots((items) =>
+                          items.map((item) =>
+                            item.id === shot.id
+                              ? { ...item, count: Math.max(1, item.count - 1) }
+                              : item,
+                          ),
+                        )
+                      }
+                    >
+                      -
+                    </button>
+                    <strong>{shot.count}</strong>
+                    <button
+                      type="button"
+                      aria-label={`${shot.label} +`}
+                      disabled={shot.count >= 6 || selectedPlanCount >= 48}
+                      onClick={() =>
+                        setCustomShots((items) =>
+                          items.map((item) =>
+                            item.id === shot.id
+                              ? { ...item, count: Math.min(6, item.count + 1) }
+                              : item,
+                          ),
+                        )
+                      }
+                    >
+                      +
+                    </button>
+                  </div>
+                  <select
+                    aria-label={`${shot.label} size`}
+                    value={shot.size}
+                    onChange={(event) =>
+                      setCustomShots((items) =>
+                        items.map((item) =>
+                          item.id === shot.id
+                            ? { ...item, size: event.currentTarget.value }
+                            : item,
+                        ),
+                      )
+                    }
+                  >
+                    {supportedContentKitSizes.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    aria-label={`${text.platform.contentKit.removeShot} ${shot.label}`}
+                    onClick={() =>
+                      setCustomShots((items) =>
+                        items.filter((item) => item.id !== shot.id),
+                      )
+                    }
+                  >
+                    <DeleteIcon />
+                  </button>
+                </div>
+              ))}
+              <div className={styles["content-kit-add-shots"]}>
+                {customShotOptions
+                  .filter(
+                    (option) =>
+                      !customShots.some((shot) => shot.id === option.id),
+                  )
+                  .map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() =>
+                        setCustomShots((items) => [...items, option])
+                      }
+                    >
+                      <AddIcon />
+                      <span>{option.label}</span>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            className={styles["content-kit-more-settings"]}
+            aria-expanded={showAdvancedFields}
+            onClick={() => setShowAdvancedFields((value) => !value)}
+          >
+            {showAdvancedFields
+              ? text.platform.contentKit.hideMoreSettings
+              : text.platform.contentKit.moreSettings}
+          </button>
+          {showAdvancedFields && (
+            <>
+              <div className={styles["content-kit-fields"]}>
+                <label>
+                  <span>{text.platform.contentKit.audience}</span>
+                  <input
+                    placeholder={text.platform.contentKit.audiencePlaceholder}
+                    value={audience}
+                    onChange={(event) => setAudience(event.currentTarget.value)}
+                  />
+                </label>
+                <label>
+                  <span>{text.platform.contentKit.platform}</span>
+                  <input
+                    placeholder={text.platform.contentKit.platformPlaceholder}
+                    value={platform}
+                    onChange={(event) => setPlatform(event.currentTarget.value)}
+                  />
+                </label>
+                <label>
+                  <span>{text.platform.contentKit.tone}</span>
+                  <input
+                    placeholder={text.platform.contentKit.tonePlaceholder}
+                    value={tone}
+                    onChange={(event) => setTone(event.currentTarget.value)}
+                  />
+                </label>
+              </div>
+              <fieldset className={styles["content-kit-consistency"]}>
+                <legend>{text.platform.contentKit.consistency}</legend>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={lockProduct}
+                    onChange={(event) =>
+                      setLockProduct(event.currentTarget.checked)
+                    }
+                  />
+                  <span>{text.platform.contentKit.lockProduct}</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={lockColor}
+                    onChange={(event) =>
+                      setLockColor(event.currentTarget.checked)
+                    }
+                  />
+                  <span>{text.platform.contentKit.lockColor}</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={lockLogo}
+                    onChange={(event) =>
+                      setLockLogo(event.currentTarget.checked)
+                    }
+                  />
+                  <span>{text.platform.contentKit.lockLogo}</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={videoIntent}
+                    onChange={(event) =>
+                      setVideoIntent(event.currentTarget.checked)
+                    }
+                  />
+                  <span>{text.platform.contentKit.videoIntent}</span>
+                </label>
+                <label>
+                  <span>{text.platform.contentKit.composition}</span>
+                  <select
+                    value={composition}
+                    onChange={(event) =>
+                      setComposition(
+                        event.currentTarget.value as typeof composition,
+                      )
+                    }
+                  >
+                    <option value="center">
+                      {text.platform.contentKit.compositionCenter}
+                    </option>
+                    <option value="left">
+                      {text.platform.contentKit.compositionLeft}
+                    </option>
+                    <option value="right">
+                      {text.platform.contentKit.compositionRight}
+                    </option>
+                    <option value="closeup">
+                      {text.platform.contentKit.compositionCloseup}
+                    </option>
+                  </select>
+                </label>
+                <label>
+                  <span>{text.platform.contentKit.safeArea}</span>
+                  <select
+                    value={safeArea}
+                    onChange={(event) =>
+                      setSafeArea(event.currentTarget.value as typeof safeArea)
+                    }
+                  >
+                    <option value="none">
+                      {text.platform.contentKit.safeAreaNone}
+                    </option>
+                    <option value="top">
+                      {text.platform.contentKit.safeAreaTop}
+                    </option>
+                    <option value="bottom">
+                      {text.platform.contentKit.safeAreaBottom}
+                    </option>
+                    <option value="left">
+                      {text.platform.contentKit.safeAreaLeft}
+                    </option>
+                    <option value="right">
+                      {text.platform.contentKit.safeAreaRight}
+                    </option>
+                  </select>
+                </label>
+              </fieldset>
+            </>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={attachReferences}
+          />
+          <button
+            type="button"
+            aria-label="content-kit-add-reference"
+            disabled={!referenceLimit}
+            onClick={() => fileRef.current?.click()}
+          >
+            {text.platform.contentKit.references}
+            {references.length ? ` (${references.length})` : ""}
+          </button>
+          {references.length > 0 && (
+            <div className={styles["content-kit-references"]}>
+              {references.map((image, index) => (
+                <img key={`${index}-${image.slice(-12)}`} src={image} alt="" />
+              ))}
+            </div>
+          )}
+          {error && <div className={styles["form-error"]}>{error}</div>}
+          <div className={styles["content-kit-preflight"]}>
+            <div>
+              <span>
+                {text.platform.contentKit.plannedImages(selectedPlanCount)}
+              </span>
+              <small>{model || text.platform.contentKit.noImageModel}</small>
+            </div>
+            {estimateLoading ? (
+              <small>{text.platform.contentKit.estimateLoading}</small>
+            ) : batchEstimate ? (
+              <small
+                className={clsx({
+                  [styles["insufficient"]]: !batchEstimate.sufficient,
+                })}
+              >{`${text.platform.contentKit.estimatedCost} ${batchEstimate.estimated_cost} · ${text.platform.contentKit.availableBalance} ${batchEstimate.balance}`}</small>
+            ) : estimateUnavailable ? (
+              <small>{text.platform.contentKit.estimateUnavailable}</small>
+            ) : (
+              <small>{text.platform.contentKit.estimateLoading}</small>
+            )}
+          </div>
+          {referenceLimit > 0 && (
+            <small className={styles["content-kit-reference-limit"]}>
+              {text.platform.contentKit.referenceLimit(referenceLimit)}
+            </small>
+          )}
+          <button
+            type="button"
+            className={styles["primary-action"]}
+            aria-label="content-kit-generate"
+            disabled={
+              estimateLoading ||
+              estimateUnavailable ||
+              !batchEstimate ||
+              !batchEstimate.sufficient
+            }
+            onClick={() => void createProject()}
+          >
+            {text.platform.contentKit.create}
+          </button>
+        </section>
+      )}
+      <section className={styles["section"]}>
+        <div className={styles["section-head"]}>
+          <h2>{text.platform.contentKit.projects}</h2>
+          <span>{text.shortCount(projects.length)}</span>
+        </div>
+        {mobileStore.contentKits.length === 0 && (
+          <p className={styles["empty-copy"]}>
+            {text.platform.contentKit.noProjects}
+          </p>
+        )}
+        <div className={styles["content-kit-project-list"]}>
+          {projects.map((project) => {
+            const cover = project.assets.find((asset) => asset.imageUrl)
+              ?.imageUrl;
+            const completed = project.assets.filter(
+              (asset) => asset.status === "completed",
+            ).length;
+            return (
+              <button
+                type="button"
+                key={project.id}
+                className={styles["content-kit-project"]}
+                onClick={() => setSelectedProjectId(project.id)}
+              >
+                {cover ? (
+                  <img src={cover} alt="" />
+                ) : (
+                  <i>
+                    <ImageIcon />
+                  </i>
+                )}
+                <span>
+                  <strong>{project.productName}</strong>
+                  <small>{formatDateTime(project.updatedAt, text)}</small>
+                  <em>{`${
+                    text.platform.contentKit.projectProgress
+                  } ${completed}/${project.assets.length} · ${projectStatus(
+                    project,
+                  )}`}</em>
+                </span>
+                <b>{text.common.open}</b>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    </AndroidAppShell>
   );
 }
 
@@ -7105,6 +9687,8 @@ function AndroidImageStudio() {
     workspace,
     effectiveImageGroupId,
   );
+  const allowLegacyImageCapabilityFallback =
+    !workspace?.models?.image_capabilities_version;
   const fallbackModel = imageModelOptions[0];
   const [selectedModel, setSelectedModel] = useState(
     String(imagePrefs.model || modelValue(fallbackModel)),
@@ -7117,9 +9701,6 @@ function AndroidImageStudio() {
     Math.max(1, Math.min(4, Number(imagePrefs.count || 1))),
   );
   const [references, setReferences] = useState<string[]>([]);
-  const [referenceMaterials, setReferenceMaterials] = useState<MaterialDraft[]>(
-    [],
-  );
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<any>(null);
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
@@ -7244,7 +9825,7 @@ function AndroidImageStudio() {
       if (!item || item.status !== "running") return;
       const next = Math.min(92, Number(item.progress || 12) + 4);
       updateTask(id, { progress: next });
-    }, 900);
+    }, 2000);
   }
 
   function stopProgress() {
@@ -7315,6 +9896,7 @@ function AndroidImageStudio() {
         prompt: context.prompt,
         model: context.model,
         taskId: context.taskId,
+        ownerUserId: String(managed.user?.id || managed.session?.user_id || ""),
       },
     );
     return {
@@ -7331,47 +9913,22 @@ function AndroidImageStudio() {
       const selectedFiles = Array.from(files).slice(0, 6);
       const urls = await readImageFiles(selectedFiles, 6);
       setReferences((items) => [...items, ...urls].slice(0, 6));
-      selectedFiles.forEach((file, index) => {
-        const localId = clientRequestID("reference");
-        setReferenceMaterials((items) =>
-          [
-            ...items,
-            {
-              localId,
-              name: file.name,
-              kind: "image",
-              state: "uploading" as const,
-              previewUrl: urls[index],
-            },
-          ].slice(-6),
-        );
-        void uploadMaterial(file, file.name, "gallery")
-          .then((asset) =>
-            setReferenceMaterials((items) =>
-              items.map((item) =>
-                item.localId === localId
-                  ? { ...item, state: "ready", asset }
-                  : item,
-              ),
-            ),
+      if (
+        !imageModelSupportsReferences(
+          selectedModel,
+          imageModelOptions,
+          allowLegacyImageCapabilityFallback,
+        )
+      ) {
+        setError(
+          firstReferenceImageModel(
+            imageModelOptions,
+            allowLegacyImageCapabilityFallback,
           )
-          .catch((uploadError) =>
-            setReferenceMaterials((items) =>
-              items.map((item) =>
-                item.localId === localId
-                  ? {
-                      ...item,
-                      state: "failed",
-                      error:
-                        uploadError instanceof Error
-                          ? uploadError.message
-                          : text.platform.uploadFailedHint,
-                    }
-                  : item,
-              ),
-            ),
-          );
-      });
+            ? text.image.referenceModelUnsupported(selectedModel)
+            : text.image.noReferenceModel,
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : text.errors.saveFailed);
     } finally {
@@ -7387,11 +9944,21 @@ function AndroidImageStudio() {
     void managed
       .switchImageGroup(groupID)
       .then(() => {
-        const nextModel = imageModelsForGroup(workspace, groupID)[0];
+        const nextModels = imageModelsForGroup(workspace, groupID);
+        const nextModel = nextModels[0];
         setSelectedImageGroupId(groupID);
         setSelectedModel(modelValue(nextModel));
         if (!nextModel) {
           setError(text.errors.noImageModelsInCurrentGroup);
+        } else if (
+          references.length &&
+          !imageModelSupportsReferences(
+            nextModel,
+            [],
+            allowLegacyImageCapabilityFallback,
+          )
+        ) {
+          setError(text.image.referenceModelUnsupported(modelValue(nextModel)));
         }
       })
       .catch((err) => {
@@ -7413,8 +9980,7 @@ function AndroidImageStudio() {
 
   async function runImageTask(overrides?: Partial<any>) {
     const promptText = (overrides?.prompt || prompt).trim();
-    const model =
-      overrides?.model || selectedModel || modelValue(fallbackModel);
+    let model = overrides?.model || selectedModel || modelValue(fallbackModel);
     const taskGroupId = effectiveImageGroupId;
     const taskSize = overrides?.size || size;
     const taskQuality = overrides?.quality || quality;
@@ -7424,6 +9990,29 @@ function AndroidImageStudio() {
       Math.min(4, Number(overrides?.n || count || 1)),
     );
     const taskReferences = overrides?.referenceImages || references;
+    const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
+      image502ThenSuccess: false,
+    }));
+    const useLocalImageFixture = e2eFixture.image502ThenSuccess === true;
+
+    if (
+      taskReferences.length &&
+      !imageModelSupportsReferences(
+        model,
+        imageModelOptions,
+        allowLegacyImageCapabilityFallback,
+      )
+    ) {
+      setError(
+        firstReferenceImageModel(
+          imageModelOptions,
+          allowLegacyImageCapabilityFallback,
+        )
+          ? text.image.referenceModelUnsupported(model)
+          : text.image.noReferenceModel,
+      );
+      return;
+    }
 
     if (!promptText) {
       setError(text.errors.emptyPrompt);
@@ -7478,32 +10067,31 @@ function AndroidImageStudio() {
     });
 
     let projectedTask: MobileTask | null = null;
-    try {
-      const client = await mobilePlatformClient();
-      projectedTask = await client.tasks.create({
-        kind: "image",
-        operation: taskReferences.length
-          ? "images.edits"
-          : "images.generations",
-        client_request_id: clientRequestID("image"),
-        title_zh: promptText.slice(0, 80),
-        model,
-        group_id: taskGroupId,
-        asset_ids: referenceMaterials
-          .filter((item) => item.state === "ready" && item.asset?.id)
-          .map((item) => String(item.asset?.id)),
-        parameters: {
-          size: taskSize,
-          quality: taskQuality,
-          style: taskStyle,
-          count: taskCount,
-        },
-        locale: text.dateLocale,
-      });
-      platformTaskRef.current = projectedTask;
-      await client.tasks.status(projectedTask.id, { status: "running" });
-    } catch {
-      projectedTask = null;
+    if (!useLocalImageFixture) {
+      try {
+        const client = await mobilePlatformClient();
+        projectedTask = await client.tasks.create({
+          kind: "image",
+          operation: taskReferences.length
+            ? "images.edits"
+            : "images.generations",
+          client_request_id: clientRequestID("image"),
+          title_zh: promptText.slice(0, 80),
+          model,
+          group_id: taskGroupId,
+          parameters: {
+            size: taskSize,
+            quality: taskQuality,
+            style: taskStyle,
+            count: taskCount,
+          },
+          locale: text.dateLocale,
+        });
+        platformTaskRef.current = projectedTask;
+        await client.tasks.status(projectedTask.id, { status: "running" });
+      } catch {
+        projectedTask = null;
+      }
     }
 
     const controller = new AbortController();
@@ -7537,12 +10125,15 @@ function AndroidImageStudio() {
     if (taskReferences.length) basePayload.input_fidelity = "high";
 
     function buildImageRequest(
+      requestIndex: number,
       imageApiKey = managed.imageSession?.api_key || "",
     ) {
       const payload: Record<string, any> = { ...basePayload, n: 1 };
       const headers: Record<string, string> = {
         Accept: "application/json",
         Authorization: `Bearer ${imageApiKey}`,
+        "Idempotency-Key": `android-image-${id}-${requestIndex + 1}`,
+        "X-Request-ID": `android-image-${id}-${requestIndex + 1}`,
       };
       let body: BodyInit;
       if (taskReferences.length) {
@@ -7565,66 +10156,28 @@ function AndroidImageStudio() {
       return { headers, body };
     }
 
-    const requestImageText = async () => {
+    const requestImageText = async (requestIndex: number) => {
       let authAttempt = 0;
-      let networkAttempt = 0;
       let lastError: unknown = null;
-      while (authAttempt <= 1 && networkAttempt <= 2) {
+      while (authAttempt <= 1) {
         const latestManaged = useManagedNextChatStore.getState();
         const request = buildImageRequest(
+          requestIndex,
           latestManaged.imageSession?.api_key || "",
         );
         try {
-          const response =
-            request.body instanceof FormData
-              ? await fetch(
-                  `${managedGatewayBaseUrl(
-                    latestManaged.backendBaseUrl,
-                  )}${endpoint}`,
-                  {
-                    method: "POST",
-                    headers: request.headers,
-                    body: request.body,
-                    signal: controller.signal,
-                  },
-                )
-                  .then(async (res) => {
-                    if (controller.signal.aborted) {
-                      throw new DOMException("Aborted", "AbortError");
-                    }
-                    if (!res.ok) {
-                      recordGatewayDiagnostic(`/v1${endpoint}`, {
-                        method: "POST",
-                        transport: "web",
-                        status: res.status,
-                      });
-                    }
-                    return {
-                      ok: res.ok,
-                      status: res.status,
-                      text: await res.text().catch(() => ""),
-                    };
-                  })
-                  .catch((error) => {
-                    recordGatewayDiagnostic(`/v1${endpoint}`, {
-                      method: "POST",
-                      transport: "web",
-                      error,
-                    });
-                    throw error;
-                  })
-              : await managedGatewayRequestText(
-                  latestManaged.backendBaseUrl,
-                  `/v1${endpoint}`,
-                  {
-                    method: "POST",
-                    headers: request.headers,
-                    body: request.body,
-                    signal: controller.signal,
-                  },
-                  latestManaged.imageSession?.api_key || "",
-                  text,
-                );
+          const response = await managedGatewayRequestText(
+            latestManaged.backendBaseUrl,
+            `/v1${endpoint}`,
+            {
+              method: "POST",
+              headers: request.headers,
+              body: request.body,
+              signal: controller.signal,
+            },
+            latestManaged.imageSession?.api_key || "",
+            text,
+          );
           if (
             (response.status === 401 || response.status === 403) &&
             authAttempt < 1
@@ -7636,15 +10189,7 @@ function AndroidImageStudio() {
           return response;
         } catch (error) {
           lastError = error;
-          if (
-            controller.signal.aborted ||
-            !isManagedNetworkLikeError(error) ||
-            networkAttempt >= 2
-          ) {
-            throw error;
-          }
-          networkAttempt += 1;
-          await sleep(350 * networkAttempt);
+          throw error;
         }
       }
       throw lastError;
@@ -7663,6 +10208,7 @@ function AndroidImageStudio() {
     try {
       let activeManaged = useManagedNextChatStore.getState();
       if (
+        !useLocalImageFixture &&
         taskGroupId &&
         currentGroupID(activeManaged.workspace) !== taskGroupId
       ) {
@@ -7685,7 +10231,7 @@ function AndroidImageStudio() {
           result_items: [...resultItems],
         });
         try {
-          const response = await requestImageText();
+          const response = await requestImageText(requestIndex);
           if (controller.signal.aborted) {
             throw new DOMException("Aborted", "AbortError");
           }
@@ -7710,14 +10256,20 @@ function AndroidImageStudio() {
               responseText,
               res.status,
               `/v1${endpoint}`,
+              response.requestId || `android-image-${id}-${requestIndex + 1}`,
             );
-            const message = describeImageError(raw || localized, {
+            const described = describeImageError(raw || localized, {
               text,
               selectedModel: model,
               imageModelCount: imageModelOptions.length,
               hasImageGroup,
               status: res.status,
             });
+            const diagnostics = localized.match(/\(HTTP [^)]+\)$/)?.[0] || "";
+            const message =
+              diagnostics && !described.includes(diagnostics)
+                ? `${described} ${diagnostics}`
+                : described;
             if (
               res.status === 401 ||
               res.status === 402 ||
@@ -7844,13 +10396,14 @@ function AndroidImageStudio() {
       }
       if (partialMessage) setError(partialMessage);
       setReferences([]);
-      setReferenceMaterials([]);
       await showNativeNotification(text.image.title, text.image.savedToDevice);
       await managed.bootstrap({ silent: true }).catch(() => {});
     } catch (err) {
       const aborted = controller.signal.aborted;
       const message = aborted
         ? text.errors.requestCancelled
+        : err instanceof ManagedTransportError
+        ? err.message
         : err instanceof Error
         ? describeImageError(err.message, {
             text,
@@ -8158,6 +10711,7 @@ function AndroidImageStudio() {
           </button>
         </div>
         <textarea
+          aria-label="image-prompt"
           value={prompt}
           onChange={(event) => setPrompt(event.currentTarget.value)}
           placeholder={text.image.promptPlaceholder}
@@ -8165,6 +10719,7 @@ function AndroidImageStudio() {
         <div className={styles["form-grid"]}>
           <button
             type="button"
+            aria-label="image-group-selector"
             onClick={() => setGroupSheetOpen(true)}
             disabled={groupSwitching}
           >
@@ -8229,17 +10784,55 @@ function AndroidImageStudio() {
           </div>
           <input
             ref={fileRef}
+            aria-label="image-reference-input"
             hidden
             type="file"
             accept="image/*"
             multiple
             onChange={attachReferences}
           />
-          <button onClick={() => fileRef.current?.click()}>
+          <button
+            aria-label="image-add-reference"
+            onClick={() => fileRef.current?.click()}
+          >
             <UploadIcon />
             <span>{text.image.addReference}</span>
           </button>
         </div>
+        {references.length > 0 &&
+          !imageModelSupportsReferences(
+            selectedModel,
+            imageModelOptions,
+            allowLegacyImageCapabilityFallback,
+          ) && (
+            <div className={styles["reference-model-picker"]}>
+              <strong>
+                {text.image.referenceModelUnsupported(selectedModel)}
+              </strong>
+              <div>
+                {imageModelOptions
+                  .filter((model) =>
+                    imageModelSupportsReferences(
+                      model,
+                      [],
+                      allowLegacyImageCapabilityFallback,
+                    ),
+                  )
+                  .map((model) => (
+                    <button
+                      key={modelValue(model)}
+                      type="button"
+                      onClick={() => {
+                        setSelectedModel(modelValue(model));
+                        setError("");
+                      }}
+                    >
+                      {modelLabel(model)}
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
         {references.length > 0 && (
           <div className={styles["reference-list"]}>
             {references.map((url, index) => (
@@ -8247,9 +10840,6 @@ function AndroidImageStudio() {
                 key={url}
                 onClick={() => {
                   setReferences((items) =>
-                    items.filter((_, itemIndex) => itemIndex !== index),
-                  );
-                  setReferenceMaterials((items) =>
                     items.filter((_, itemIndex) => itemIndex !== index),
                   );
                 }}
@@ -8261,30 +10851,10 @@ function AndroidImageStudio() {
             <button
               onClick={() => {
                 setReferences([]);
-                setReferenceMaterials([]);
               }}
             >
               {text.image.clearReferences}
             </button>
-          </div>
-        )}
-        {referenceMaterials.length > 0 && (
-          <div className={styles["upload-status-row"]}>
-            {referenceMaterials.map((item) => (
-              <span
-                key={item.localId}
-                className={clsx({
-                  [styles["failed"]]: item.state === "failed",
-                })}
-              >
-                {item.name} ·{" "}
-                {item.state === "uploading"
-                  ? text.platform.uploadWaiting
-                  : item.state === "ready"
-                  ? text.platform.uploadReady
-                  : text.platform.uploadFailed}
-              </span>
-            ))}
           </div>
         )}
 
@@ -8309,6 +10879,7 @@ function AndroidImageStudio() {
         {error && <div className={styles["form-error"]}>{error}</div>}
         <button
           className={styles["primary-action"]}
+          aria-label="image-generate"
           onClick={() => runImageTask()}
           disabled={
             Boolean(activeTask) ||
@@ -8343,65 +10914,49 @@ function AndroidImageStudio() {
               .filter(Boolean)
               .join(" · ");
             return (
-              <button
+              <article
                 key={item.id}
-                className={styles["image-task-card"]}
-                onClick={() => setPreview(item)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setImageActionTarget(item);
-                }}
-                onTouchStart={(event) => {
-                  const target = event.currentTarget;
-                  const timer = window.setTimeout(() => {
-                    setImageActionTarget(item);
-                  }, 520);
-                  target.dataset.longPressTimer = String(timer);
-                }}
-                onTouchMove={(event) => {
-                  const timer = Number(
-                    event.currentTarget.dataset.longPressTimer || 0,
-                  );
-                  if (timer) window.clearTimeout(timer);
-                  delete event.currentTarget.dataset.longPressTimer;
-                }}
-                onTouchEnd={(event) => {
-                  const timer = Number(
-                    event.currentTarget.dataset.longPressTimer || 0,
-                  );
-                  if (timer) window.clearTimeout(timer);
-                  delete event.currentTarget.dataset.longPressTimer;
-                }}
+                className={clsx(
+                  styles["image-task-card"],
+                  styles["image-task-card-with-actions"],
+                )}
               >
-                <i>
-                  {urls[0] ? (
-                    <img
-                      src={urls[0]}
-                      alt={item.params?.prompt || item.model_name}
-                    />
-                  ) : (
-                    <ImageIcon />
-                  )}
-                </i>
-                <span>
-                  <strong>{item.params?.prompt || item.model_name}</strong>
-                  <small>{status}</small>
-                </span>
+                <button
+                  type="button"
+                  className={styles["image-task-main"]}
+                  onClick={() => setPreview(item)}
+                >
+                  <i>
+                    {urls[0] ? (
+                      <img
+                        src={urls[0]}
+                        alt={item.params?.prompt || item.model_name}
+                      />
+                    ) : (
+                      <ImageIcon />
+                    )}
+                  </i>
+                  <span>
+                    <strong>{item.params?.prompt || item.model_name}</strong>
+                    <small>{status}</small>
+                  </span>
+                </button>
                 <div className={styles["image-task-actions"]}>
                   {(item.status === "error" ||
                     item.status === "cancelled" ||
                     item.status === "partial") && (
-                    <em
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        retryTask(item);
-                      }}
-                    >
+                    <button type="button" onClick={() => retryTask(item)}>
                       {text.image.retryTask}
-                    </em>
+                    </button>
                   )}
+                  <IconButton
+                    label={text.image.details}
+                    onClick={() => setImageActionTarget(item)}
+                  >
+                    <ThreeDotsIcon />
+                  </IconButton>
                 </div>
-              </button>
+              </article>
             );
           })}
         </div>
@@ -8529,12 +11084,22 @@ function AndroidImageStudio() {
         open={modelSheetOpen}
         title={text.image.model}
         text={text}
-        items={imageModelOptions.map((model) => ({
-          id: modelValue(model),
-          title: modelLabel(model),
-          detail: model.use_case || text.image.title,
-          active: modelValue(model) === selectedModel,
-        }))}
+        items={imageModelOptions
+          .filter(
+            (model) =>
+              !references.length ||
+              imageModelSupportsReferences(
+                model,
+                [],
+                allowLegacyImageCapabilityFallback,
+              ),
+          )
+          .map((model) => ({
+            id: modelValue(model),
+            title: modelLabel(model),
+            detail: model.use_case || text.image.title,
+            active: modelValue(model) === selectedModel,
+          }))}
         onClose={() => setModelSheetOpen(false)}
         onSelect={(id) => {
           setModelSheetOpen(false);
@@ -8647,7 +11212,11 @@ function AndroidGallery() {
 
   async function refreshNativeImages() {
     try {
-      setNativeImages(await listAppImages());
+      setNativeImages(
+        await listAppImages(
+          String(managed.user?.id || managed.session?.user_id || ""),
+        ),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : text.errors.syncFailed);
     }
@@ -9063,7 +11632,10 @@ function AndroidGallery() {
             </button>
           </div>
         )}
-        <div className={styles["local-gallery"]}>
+        <div
+          className={styles["local-gallery"]}
+          aria-label={`local-gallery-count-${gallery.length}`}
+        >
           {gallery.length === 0 && (
             <p className={styles["empty-copy"]}>{text.image.noGallery}</p>
           )}
@@ -9077,6 +11649,7 @@ function AndroidGallery() {
             return (
               <button
                 key={item.id}
+                aria-label={`local-gallery-item-${index + 1}`}
                 className={clsx({
                   [styles["selected"]]: selectedIds.includes(item.id),
                   [styles["tall"]]: index % 3 === 0,
@@ -9302,94 +11875,76 @@ function transactionPrimaryId(item: any) {
   );
 }
 
-function firstNumberField(record: any, fields: string[]) {
-  for (const field of fields) {
-    const value = Number(record?.[field]);
-    if (Number.isFinite(value)) return value;
-  }
-  return undefined;
+function localizedSubscriptionStatus(status: string, text: ManagedMobileText) {
+  const key = String(status || "")
+    .trim()
+    .toLowerCase();
+  const zh = text.dateLocale.toLowerCase().startsWith("zh");
+  const labels: Record<string, string> = zh
+    ? {
+        active: "生效中",
+        pending: "待生效",
+        queued: "待生效",
+        exhausted: "额度已用完",
+        expired: "已过期",
+        revoked: "已撤销",
+        cancelled: "已取消",
+        canceled: "已取消",
+      }
+    : {
+        active: "Active",
+        pending: "Pending activation",
+        queued: "Queued",
+        exhausted: "Quota exhausted",
+        expired: "Expired",
+        revoked: "Revoked",
+        cancelled: "Cancelled",
+        canceled: "Cancelled",
+      };
+  return labels[key] || (zh ? "状态未知" : "Status unavailable");
 }
 
-function firstStringField(record: any, fields: string[]) {
-  for (const field of fields) {
-    const value = record?.[field];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
-function planGroupValue(plan: any) {
-  return String(
-    plan?.group_id ||
-      plan?.target_group_id ||
-      plan?.group?.id ||
-      plan?.target_group?.id ||
-      plan?.group_name ||
-      plan?.target_group_name ||
-      "",
+function SubscriptionUsageRows(props: {
+  subscription: any;
+  text: ManagedMobileText;
+}) {
+  const periods = subscriptionUsagePeriods(
+    props.subscription,
+    props.text.account,
   );
-}
-
-function matchingSubscription(plan: any, subscriptions: any[] = []) {
-  const planId = String(plan?.id || plan?.plan_id || plan?.product_id || "");
-  const groupValue = planGroupValue(plan);
-  return subscriptions.find((item) => {
-    const itemPlanId = String(
-      item?.plan_id || item?.product_id || item?.plan?.id || "",
+  if (!periods.length) {
+    return (
+      <small className={styles["usage-unlimited"]}>
+        {props.text.account.unlimitedUsage}
+      </small>
     );
-    if (planId && itemPlanId && planId === itemPlanId) return true;
-    const itemGroup = String(
-      item?.group_id ||
-        item?.group?.id ||
-        item?.group_name ||
-        item?.group?.name ||
-        "",
-    );
-    return Boolean(groupValue && itemGroup && groupValue === itemGroup);
-  });
-}
-
-function planUsageInfo(plan: any, subscriptions: any[] = []) {
-  const subscription = matchingSubscription(plan, subscriptions);
-  const source = subscription || plan || {};
-  const total =
-    firstNumberField(source, [
-      "quota_total",
-      "quotaTotal",
-      "included_quota",
-      "includedQuota",
-      "usage_limit",
-      "usageLimit",
-      "included_balance",
-      "includedBalance",
-      "grant_amount",
-      "grantAmount",
-    ]) ??
-    firstNumberField(plan, ["quota_total", "included_balance", "grant_amount"]);
-  const used = firstNumberField(source, [
-    "quota_used",
-    "quotaUsed",
-    "used_quota",
-    "usedQuota",
-    "used",
-  ]);
-  const remaining = firstNumberField(source, [
-    "quota_remaining",
-    "quotaRemaining",
-    "remaining_quota",
-    "remainingQuota",
-    "remaining",
-  ]);
-  const unit =
-    firstStringField(source, ["quota_unit", "quotaUnit", "unit", "currency"]) ||
-    firstStringField(plan, ["quota_unit", "quotaUnit", "unit", "currency"]);
-  return { subscription, total, used, remaining, unit };
+  }
+  return (
+    <div className={styles["subscription-usage-list"]}>
+      {periods.map((period) => {
+        const progress = Math.min(100, (period.used / period.limit) * 100);
+        return (
+          <div key={period.label} className={styles["subscription-usage"]}>
+            <span>{period.label}</span>
+            <strong>{`${formatUsageUSD(period.used)} / ${formatUsageUSD(
+              period.limit,
+            )}`}</strong>
+            <progress value={progress} max={100} />
+            <small>{`${props.text.account.remaining} ${formatUsageUSD(
+              period.remaining,
+            )}`}</small>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function formatQuota(value: number | undefined, unit: string | undefined) {
   if (!Number.isFinite(Number(value))) return "";
   const normalized = String(unit || "").toLowerCase();
   if (/cny|rmb|balance|money|¥/.test(normalized)) return formatMoney(value);
+  if (/usd|\$/.test(normalized)) return formatUsageUSD(Number(value));
   return [Number(value).toLocaleString(), unit || ""].filter(Boolean).join(" ");
 }
 
@@ -9501,6 +12056,7 @@ function AndroidDetailShell(props: {
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  useNativeDocumentScroll();
   useNativeBackHandler(true, () => {
     if (props.onBack) {
       props.onBack();
@@ -9509,7 +12065,7 @@ function AndroidDetailShell(props: {
     navigateBack(navigate, props.fallback || Path.Settings);
   });
   return (
-    <main className={styles["mobile-app"]}>
+    <main className={clsx(styles["mobile-app"], styles["native-page"])}>
       <section className={styles["app-shell"]}>
         <div className={clsx(styles["app-scroll"], styles["detail-scroll"])}>
           <header className={styles["app-header"]}>
@@ -9707,6 +12263,8 @@ function AccountDataNotice(props: {
 
 function AndroidAccountSettings() {
   const managed = useManagedNextChatStore();
+  const mobileStore = useManagedMobileAppStore();
+  const sdStore = useSdStore();
   const text = useMobileText();
   const workspace = managed.workspace;
   const location = useLocation();
@@ -9721,6 +12279,14 @@ function AndroidAccountSettings() {
   const [paymentMethod, setPaymentMethod] = useState("");
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [coupons, setCoupons] = useState<UserCoupon[]>([]);
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponStatus, setCouponStatus] = useState("available");
+  const [selectedCouponID, setSelectedCouponID] = useState<number | null>(null);
+  const [couponQuote, setCouponQuote] = useState<CouponPaymentQuote | null>(
+    null,
+  );
+  const [couponError, setCouponError] = useState("");
   const [rechargeAmount, setRechargeAmount] = useState("50");
   const [redeemCode, setRedeemCode] = useState("");
   const [redeemBusy, setRedeemBusy] = useState(false);
@@ -9795,6 +12361,41 @@ function AndroidAccountSettings() {
   const [supportReply, setSupportReply] = useState("");
   const [supportBusy, setSupportBusy] = useState(false);
   const [supportError, setSupportError] = useState("");
+
+  async function signOut(clearAll: boolean) {
+    setShowLogoutConfirm(false);
+    const userId = String(
+      managed.user?.id ||
+        managed.workspace?.user?.id ||
+        managed.session?.user_id ||
+        "",
+    );
+    if (clearAll) {
+      await clearLoginCredentials().catch(() => undefined);
+      if (userId) {
+        const localImages = await listAppImages(userId).catch(() => []);
+        const fileNames = localImages
+          .map((item) => item.fileName || "")
+          .filter(Boolean);
+        if (fileNames.length) {
+          await deleteAppImages(fileNames).catch(() => undefined);
+        }
+        const suffix = `:user:${userId}`;
+        Object.keys(localStorage).forEach((key) => {
+          if (key.endsWith(suffix)) localStorage.removeItem(key);
+        });
+      }
+      mobileStore.clearActiveAccount();
+      sdStore.clearActiveAccount();
+    }
+    const installationId = mobileInstallationId();
+    if (installationId) {
+      await mobilePlatformClient()
+        .then((client) => client.devices.delete(installationId))
+        .catch(() => undefined);
+    }
+    await managed.logout();
+  }
   const downloadPollRef = useRef<number | null>(null);
   const paymentFeedbackRef = useRef<HTMLDivElement | null>(null);
   const feedbackFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -9834,7 +12435,6 @@ function AndroidAccountSettings() {
   const accountGroupName = stableChatGroupName(workspace, text);
   const route = location.pathname;
   const isAdmin = isManagedAdminWorkspace(workspace);
-
   const inviteRegisterUrl = useMemo(() => {
     if (!inviteSummary?.aff_code && !inviteSummary?.attribution_token)
       return "";
@@ -10568,6 +13168,65 @@ function AndroidAccountSettings() {
     }
   }
 
+  async function refreshCoupons(status = couponStatus) {
+    if (!managed.accessToken) return;
+    setCouponLoading(true);
+    try {
+      const response = await managedAuthenticatedJsonRequest<any>(
+        `/api/v1/coupons/me?status=${encodeURIComponent(
+          status,
+        )}&page=1&page_size=100`,
+      );
+      setCoupons(arrayPayload(response) as UserCoupon[]);
+      setCouponError("");
+    } catch (error) {
+      setCouponError(
+        error instanceof Error ? error.message : text.errors.syncFailed,
+      );
+    } finally {
+      setCouponLoading(false);
+    }
+  }
+
+  async function selectPaymentCoupon(
+    couponID: number | null,
+    orderType: "balance" | "subscription",
+    plan?: any,
+  ) {
+    setSelectedCouponID(couponID);
+    setCouponQuote(null);
+    setCouponError("");
+    if (!couponID) return;
+    const amount =
+      orderType === "subscription"
+        ? Number(plan?.price || plan?.amount || 0)
+        : Number(rechargeAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    try {
+      const method = await ensurePaymentMethod();
+      const quote = await managedAuthenticatedJsonRequest<CouponPaymentQuote>(
+        "/api/v1/payment/coupons/quote",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            coupon_id: couponID,
+            amount,
+            payment_type: method,
+            order_type: orderType,
+            plan_id: orderType === "subscription" ? Number(plan?.id || 0) : 0,
+          }),
+        },
+      );
+      setCouponQuote(quote);
+    } catch (error) {
+      setSelectedCouponID(null);
+      setCouponError(
+        error instanceof Error ? error.message : text.errors.syncFailed,
+      );
+    }
+  }
+
   async function ensurePaymentMethod() {
     let methods = paymentMethods;
     if (!methods.length) {
@@ -10636,7 +13295,11 @@ function AndroidAccountSettings() {
       if (!result.id) {
         setDownloadProgress(100);
         setDownloadStatus(text.account.installingApk);
-        await installDownloadedApk(undefined, result.path).catch((error) => {
+        await installDownloadedApk(
+          undefined,
+          result.path,
+          updateState.manifest?.sha256,
+        ).catch((error) => {
           setDownloadStatus(
             error instanceof Error && /install permission/i.test(error.message)
               ? text.account.installPermissionRequired
@@ -10666,6 +13329,7 @@ function AndroidAccountSettings() {
             await installDownloadedApk(
               String(result.id),
               status.localUri,
+              updateState.manifest?.sha256,
             ).catch((error) => {
               setDownloadStatus(
                 error instanceof Error &&
@@ -10721,7 +13385,9 @@ function AndroidAccountSettings() {
           message: item.message,
         })),
       )}`,
-      `crashLog=${localStorage.getItem("nextchat-mobile-crash-log") || ""}`,
+      `crashLog=${
+        localStorage.getItem(accountStorageKey(CRASH_LOG_STORAGE_KEY)) || ""
+      }`,
     ]
       .map((line) => sanitizeDiagnosticText(line))
       .join("\n");
@@ -10845,7 +13511,7 @@ function AndroidAccountSettings() {
       form.append(
         "crash_log",
         sanitizeDiagnosticText(
-          localStorage.getItem("nextchat-mobile-crash-log") || "",
+          localStorage.getItem(accountStorageKey(CRASH_LOG_STORAGE_KEY)) || "",
         ),
       );
       form.append(
@@ -11007,23 +13673,25 @@ function AndroidAccountSettings() {
         throw new Error(text.errors.balancePaymentDisabled);
       }
       const method = await ensurePaymentMethod();
-      const result =
-        await managedAuthenticatedJsonRequest<PaymentOrderCreateResult>(
-          "/api/v1/payment/orders",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              amount,
-              payment_type: method,
-              order_type: orderType,
-              plan_id: orderType === "subscription" ? Number(plan?.id || 0) : 0,
-              is_mobile: true,
-              payment_source: "android_app",
-              return_url: resolvePaymentReturnUrl(clientConfig),
-            }),
-          },
-        );
-      setCreatedOrder({ ...result, order_type: orderType });
+      const client = await mobilePlatformClient();
+      const result = normalizeMobilePaymentOrder(
+        await client.payments.create({
+          provider: method,
+          payment_type: method,
+          amount,
+          order_type: orderType,
+          plan_id: orderType === "subscription" ? Number(plan?.id || 0) : 0,
+          is_mobile: true,
+          payment_source: "android_app",
+          coupon_id: selectedCouponID || undefined,
+          return_url: resolvePaymentReturnUrl(clientConfig),
+          client_request_id: clientRequestID("payment"),
+          locale: text.dateLocale,
+        }),
+        orderType,
+      );
+      setCreatedOrder(result);
+      await refreshCoupons().catch(() => {});
       setOrderDetail(null);
       const payUrl = primaryPaymentUrl(result);
       if (payUrl) {
@@ -11072,6 +13740,61 @@ function AndroidAccountSettings() {
   }
 
   async function verifyCreatedOrderOnce() {
+    const mobileOrderId = createdOrder?.order_id || createdOrder?.id;
+    if (mobileOrderId) {
+      let shouldTryLegacyPaymentVerify = false;
+      setPaymentBusy(true);
+      setPaymentError("");
+      try {
+        const client = await mobilePlatformClient();
+        const detail = normalizeMobilePaymentOrder(
+          await client.payments.sync(mobileOrderId, {
+            client_request_id: clientRequestID("payment-sync"),
+          }),
+          createdOrder?.order_type,
+        );
+        setCreatedOrder((order) =>
+          order
+            ? {
+                ...order,
+                ...detail,
+                pay_url: detail.pay_url || order.pay_url,
+                payment_url: detail.payment_url || order.payment_url,
+                checkout_url: detail.checkout_url || order.checkout_url,
+                h5_url: detail.h5_url || order.h5_url,
+                mweb_url: detail.mweb_url || order.mweb_url,
+                deeplink: detail.deeplink || order.deeplink,
+                deep_link: detail.deep_link || order.deep_link,
+                scheme_url: detail.scheme_url || order.scheme_url,
+                app_url: detail.app_url || order.app_url,
+                url: detail.url || order.url,
+                qr_code: detail.qr_code || order.qr_code,
+                code_url: detail.code_url || order.code_url,
+              }
+            : detail,
+        );
+        setOrderDetail(detail.order || detail);
+        await managed.bootstrap({ silent: true }).catch(() => {});
+        await refreshAccountData().catch(() => {});
+        return;
+      } catch (error) {
+        if (
+          error instanceof ManagedApiError &&
+          [404, 405, 501].includes(error.status || 0)
+        ) {
+          shouldTryLegacyPaymentVerify = true;
+        } else {
+          setPaymentError(
+            error instanceof Error
+              ? error.message
+              : text.errors.orderVerifyFailed,
+          );
+        }
+      } finally {
+        setPaymentBusy(false);
+      }
+      if (!shouldTryLegacyPaymentVerify) return;
+    }
     if (createdOrder?.resume_token) {
       setPaymentBusy(true);
       setPaymentError("");
@@ -11103,14 +13826,12 @@ function AndroidAccountSettings() {
         setPaymentBusy(false);
       }
     }
-    if (!createdOrder?.out_trade_no) {
-      const id = createdOrder?.order_id || createdOrder?.id;
-      if (!id) return;
+    if (mobileOrderId && !createdOrder?.out_trade_no) {
       setPaymentBusy(true);
       setPaymentError("");
       try {
         const detail = await managedAuthenticatedJsonRequest<any>(
-          `/api/v1/payment/orders/${id}`,
+          `/api/v1/payment/orders/${mobileOrderId}`,
         );
         setCreatedOrder((order) =>
           order
@@ -11147,6 +13868,7 @@ function AndroidAccountSettings() {
       }
       return;
     }
+    if (!createdOrder?.out_trade_no) return;
     setPaymentBusy(true);
     setPaymentError("");
     try {
@@ -11204,6 +13926,7 @@ function AndroidAccountSettings() {
         order ? { ...order, status: "cancelled" } : order,
       );
       await refreshAccountData().catch(() => {});
+      await refreshCoupons().catch(() => {});
     } catch (error) {
       setPaymentError(
         error instanceof Error ? error.message : text.errors.requestCancelled,
@@ -11217,14 +13940,34 @@ function AndroidAccountSettings() {
     if (!id || !managed.accessToken) return;
     setOrderDetail(null);
     try {
-      const detail = await managedAuthenticatedJsonRequest<any>(
-        `/api/v1/payment/orders/${id}`,
+      const client = await mobilePlatformClient();
+      const detail = normalizeMobilePaymentOrder(
+        await client.payments.detail(id),
       );
-      setOrderDetail(detail);
+      setOrderDetail(detail.order || detail);
+      setPaymentError("");
     } catch (error) {
-      setPaymentError(
-        error instanceof Error ? error.message : text.errors.syncFailed,
-      );
+      if (
+        !(error instanceof ManagedApiError) ||
+        ![404, 405, 501].includes(error.status || 0)
+      ) {
+        setPaymentError(
+          error instanceof Error ? error.message : text.errors.syncFailed,
+        );
+        return;
+      }
+      try {
+        const detail = await managedAuthenticatedJsonRequest<any>(
+          `/api/v1/payment/orders/${id}`,
+        );
+        setOrderDetail(detail);
+      } catch (legacyError) {
+        setPaymentError(
+          legacyError instanceof Error
+            ? legacyError.message
+            : text.errors.syncFailed,
+        );
+      }
     }
   }
 
@@ -11261,12 +14004,30 @@ function AndroidAccountSettings() {
       });
     });
     refreshCheckoutInfo().catch(() => {});
+    refreshCoupons().catch(() => {});
     return () => {
       if (downloadPollRef.current)
         window.clearInterval(downloadPollRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setCoupons([]);
+    setSelectedCouponID(null);
+    setCouponQuote(null);
+    setCouponStatus("available");
+    refreshCoupons("available").catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managed.session?.user_id]);
+
+  useEffect(() => {
+    if (route === Path.AccountRecharge || route === Path.AccountPlans) {
+      setCouponStatus("available");
+      refreshCoupons("available").catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route]);
 
   useEffect(() => {
     persistPendingPaymentOrder(createdOrder);
@@ -11324,7 +14085,11 @@ function AndroidAccountSettings() {
 
   useEffect(() => {
     if (
-      !createdOrder?.out_trade_no ||
+      !(
+        createdOrder?.order_id ||
+        createdOrder?.id ||
+        createdOrder?.out_trade_no
+      ) ||
       !isPendingOrderStatus(createdOrder.status)
     ) {
       return;
@@ -11334,7 +14099,12 @@ function AndroidAccountSettings() {
     }, 6000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createdOrder?.out_trade_no, createdOrder?.status]);
+  }, [
+    createdOrder?.order_id,
+    createdOrder?.id,
+    createdOrder?.out_trade_no,
+    createdOrder?.status,
+  ]);
 
   useNativeBackHandler(route === Path.Settings, () => {
     if (showLogoutConfirm) {
@@ -11528,6 +14298,66 @@ function AndroidAccountSettings() {
     );
   }
 
+  if (route === Path.AccountCoupons) {
+    const statuses = ["available", "locked", "used", "expired"];
+    const statusTitles: Record<string, string> = {
+      available: text.account.couponAvailable,
+      locked: text.account.couponLocked,
+      used: text.account.couponUsed,
+      expired: text.account.couponExpired,
+    };
+    return (
+      <AndroidDetailShell
+        title={text.account.coupons}
+        subtitle={text.account.chooseCoupon}
+        text={text}
+        onRefresh={() => refreshCoupons()}
+      >
+        <div className={styles["payment-method-list"]}>
+          {statuses.map((status) => (
+            <button
+              key={status}
+              className={clsx({
+                [styles["selected"]]: couponStatus === status,
+              })}
+              onClick={() => {
+                setCouponStatus(status);
+                refreshCoupons(status).catch(() => {});
+              }}
+            >
+              <strong>{statusTitles[status]}</strong>
+            </button>
+          ))}
+        </div>
+        {couponError && (
+          <div className={styles["form-error"]}>{couponError}</div>
+        )}
+        <div className={styles["compact-list"]}>
+          {couponLoading && (
+            <p className={styles["empty-copy"]}>{text.loading}</p>
+          )}
+          {!couponLoading && !coupons.length && (
+            <p className={styles["empty-copy"]}>{text.account.noCoupons}</p>
+          )}
+          {coupons.map((coupon) => (
+            <button key={coupon.id}>
+              <span>{coupon.template_name || `#${coupon.id}`}</span>
+              <strong>
+                {statusTitles[coupon.status || ""] || text.notSynced}
+              </strong>
+              <small>
+                {coupon.terms_snapshot?.benefit_value || "-"} ·{" "}
+                {coupon.expires_at
+                  ? formatDateTime(coupon.expires_at, text)
+                  : "-"}
+              </small>
+            </button>
+          ))}
+        </div>
+      </AndroidDetailShell>
+    );
+  }
+
   if (route === Path.AccountRecharge) {
     return (
       <AndroidDetailShell
@@ -11549,7 +14379,10 @@ function AndroidAccountSettings() {
                 className={clsx({
                   [styles["active"]]: Number(rechargeAmount) === amount,
                 })}
-                onClick={() => setRechargeAmount(String(amount))}
+                onClick={() => {
+                  setRechargeAmount(String(amount));
+                  setCouponQuote(null);
+                }}
               >
                 {formatMoney(amount)}
               </button>
@@ -11560,9 +14393,62 @@ function AndroidAccountSettings() {
             <input
               value={rechargeAmount}
               inputMode="decimal"
-              onChange={(event) => setRechargeAmount(event.currentTarget.value)}
+              onChange={(event) => {
+                setRechargeAmount(event.currentTarget.value);
+                setCouponQuote(null);
+              }}
             />
           </label>
+        </section>
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.chooseCoupon}</h2>
+            <span>
+              {couponLoading ? text.loading : text.shortCount(coupons.length)}
+            </span>
+          </div>
+          <div className={styles["payment-method-list"]}>
+            <button
+              className={clsx({
+                [styles["selected"]]: selectedCouponID === null,
+              })}
+              onClick={() => selectPaymentCoupon(null, "balance")}
+            >
+              <strong>{text.account.noCoupon}</strong>
+            </button>
+            {coupons
+              .filter((coupon) => coupon.status === "available")
+              .map((coupon) => (
+                <button
+                  key={coupon.id}
+                  className={clsx({
+                    [styles["selected"]]: selectedCouponID === coupon.id,
+                  })}
+                  onClick={() => selectPaymentCoupon(coupon.id, "balance")}
+                >
+                  <strong>{coupon.template_name || `#${coupon.id}`}</strong>
+                  <small>
+                    {coupon.terms_snapshot?.benefit_value || "-"} ·{" "}
+                    {coupon.expires_at
+                      ? formatDateTime(coupon.expires_at, text)
+                      : "-"}
+                  </small>
+                </button>
+              ))}
+          </div>
+          {couponQuote && (
+            <div className={styles["meta-row"]}>
+              <span>{text.account.couponDiscount}</span>
+              <strong>
+                -{formatMoney(couponQuote.discount_amount || 0)} ·{" "}
+                {text.account.couponFinalAmount}{" "}
+                {formatMoney(couponQuote.pay_amount || 0)}
+              </strong>
+            </div>
+          )}
+          {couponError && (
+            <div className={styles["form-error"]}>{couponError}</div>
+          )}
         </section>
         <section className={styles["section"]}>
           <div className={styles["section-head"]}>
@@ -11585,7 +14471,10 @@ function AndroidAccountSettings() {
                 className={clsx({
                   [styles["selected"]]: method.payment_type === paymentMethod,
                 })}
-                onClick={() => setPaymentMethod(method.payment_type || "")}
+                onClick={() => {
+                  setPaymentMethod(method.payment_type || "");
+                  setCouponQuote(null);
+                }}
               >
                 <strong>{paymentMethodLabel(method, text)}</strong>
                 <small>
@@ -11692,23 +14581,34 @@ function AndroidAccountSettings() {
               </strong>
             </div>
             {selectedPlan.description && <p>{selectedPlan.description}</p>}
-            <div>
-              <span>{text.account.includedBalance}</span>
-              <strong>
-                {formatQuota(usage.total, usage.unit) ||
-                  text.account.actualUsageHint}
-              </strong>
-            </div>
-            <div>
-              <span>{text.account.usageProgress}</span>
-              <strong>
-                {formatQuota(usage.remaining, usage.unit) ||
-                  formatQuota(usage.used, usage.unit) ||
-                  text.account.noAccurateUsage}
-              </strong>
-            </div>
-            {progress > 0 && <progress value={progress} max={100} />}
-            <small>{text.account.actualUsageHint}</small>
+            {usage.subscription ? (
+              <div className={styles["plan-usage"]}>
+                <span>{text.account.usageProgress}</span>
+                <SubscriptionUsageRows
+                  subscription={usage.subscription}
+                  text={text}
+                />
+              </div>
+            ) : (
+              <>
+                <div>
+                  <span>{text.account.includedBalance}</span>
+                  <strong>
+                    {formatQuota(usage.total, usage.unit) ||
+                      text.account.unavailableUsage}
+                  </strong>
+                </div>
+                <div>
+                  <span>{text.account.usageProgress}</span>
+                  <strong>
+                    {formatQuota(usage.remaining, usage.unit) ||
+                      formatQuota(usage.used, usage.unit) ||
+                      text.account.unavailableUsage}
+                  </strong>
+                </div>
+                {progress > 0 && <progress value={progress} max={100} />}
+              </>
+            )}
             {Array.isArray(selectedPlan.features) &&
               selectedPlan.features.length > 0 && (
                 <ul>
@@ -11735,13 +14635,71 @@ function AndroidAccountSettings() {
                   className={clsx({
                     [styles["selected"]]: method.payment_type === paymentMethod,
                   })}
-                  onClick={() => setPaymentMethod(method.payment_type || "")}
+                  onClick={() => {
+                    setPaymentMethod(method.payment_type || "");
+                    setCouponQuote(null);
+                  }}
                 >
                   <strong>{paymentMethodLabel(method, text)}</strong>
                   <small>{method.currency || "CNY"}</small>
                 </button>
               ))}
             </div>
+            <div className={styles["section-head"]}>
+              <h2>{text.account.chooseCoupon}</h2>
+              <span>
+                {couponLoading ? text.loading : text.shortCount(coupons.length)}
+              </span>
+            </div>
+            <div className={styles["payment-method-list"]}>
+              <button
+                className={clsx({
+                  [styles["selected"]]: selectedCouponID === null,
+                })}
+                onClick={() =>
+                  selectPaymentCoupon(null, "subscription", selectedPlan)
+                }
+              >
+                <strong>{text.account.noCoupon}</strong>
+              </button>
+              {coupons
+                .filter((coupon) => coupon.status === "available")
+                .map((coupon) => (
+                  <button
+                    key={coupon.id}
+                    className={clsx({
+                      [styles["selected"]]: selectedCouponID === coupon.id,
+                    })}
+                    onClick={() =>
+                      selectPaymentCoupon(
+                        coupon.id,
+                        "subscription",
+                        selectedPlan,
+                      )
+                    }
+                  >
+                    <strong>{coupon.template_name || `#${coupon.id}`}</strong>
+                    <small>
+                      {coupon.expires_at
+                        ? formatDateTime(coupon.expires_at, text)
+                        : "-"}
+                    </small>
+                  </button>
+                ))}
+            </div>
+            {couponQuote && (
+              <div className={styles["meta-row"]}>
+                <span>{text.account.couponDiscount}</span>
+                <strong>
+                  -{formatMoney(couponQuote.discount_amount || 0)} ·{" "}
+                  {text.account.couponFinalAmount}{" "}
+                  {formatMoney(couponQuote.pay_amount || 0)}
+                </strong>
+              </div>
+            )}
+            {couponError && (
+              <div className={styles["form-error"]}>{couponError}</div>
+            )}
             <button
               className={styles["primary-action"]}
               onClick={() => createPaymentOrder("subscription", selectedPlan)}
@@ -11802,8 +14760,10 @@ function AndroidAccountSettings() {
                       text,
                     ),
                   )
-                : accountData.subscriptions?.[0]?.status ||
-                  text.account.noSubscriptions}
+                : localizedSubscriptionStatus(
+                    accountData.subscriptions?.[0]?.status || "",
+                    text,
+                  )}
             </strong>
           </div>
         </section>
@@ -12128,17 +15088,27 @@ function AndroidAccountSettings() {
             </p>
           )}
           {accountData.subscriptions?.map((item: any) => (
-            <button key={item.id || item.group_name}>
-              <span>{item.group_name || item.group?.name || item.status}</span>
-              <strong>{item.status || text.account.synced}</strong>
-              <small>
-                {item.expires_at
-                  ? text.account.activeUntil(
-                      formatDateTime(item.expires_at, text),
-                    )
-                  : accountGroupName}
-              </small>
-            </button>
+            <article
+              key={item.id || item.group_name}
+              className={styles["subscription-card"]}
+            >
+              <div>
+                <span>
+                  {item.group_name || item.group?.name || accountGroupName}
+                </span>
+                <strong>
+                  {localizedSubscriptionStatus(item.status, text)}
+                </strong>
+                <small>
+                  {item.expires_at
+                    ? text.account.activeUntil(
+                        formatDateTime(item.expires_at, text),
+                      )
+                    : accountGroupName}
+                </small>
+              </div>
+              <SubscriptionUsageRows subscription={item} text={text} />
+            </article>
           ))}
         </div>
       </AndroidDetailShell>
@@ -12163,13 +15133,13 @@ function AndroidAccountSettings() {
               <div className={styles["section-head"]}>
                 <div>
                   <h2>
-                    {supportTicket.title_zh ||
-                      supportTicket.title ||
-                      `#${supportTicket.number || supportTicket.id}`}
+                    {localizedMobileDisplay(supportTicket, {
+                      fallback: `#${supportTicket.number || supportTicket.id}`,
+                    })}
                   </h2>
                   <span>
                     {text.platform.supportStatuses[supportTicket.status] ||
-                      supportTicket.status}
+                      text.notSynced}
                   </span>
                 </div>
                 {!(["closed", "resolved"] as string[]).includes(
@@ -12196,7 +15166,11 @@ function AndroidAccountSettings() {
                         ? text.platform.supportMessage
                         : text.platform.systemMessage}
                     </strong>
-                    <p>{message.content_zh || message.content}</p>
+                    <p>
+                      {localizedMobileDisplay(message as any, {
+                        defaultFields: ["content"],
+                      })}
+                    </p>
                     <small>{formatDateTime(message.created_at, text)}</small>
                   </article>
                 ))}
@@ -12247,9 +15221,9 @@ function AndroidAccountSettings() {
                   >
                     <span>
                       <strong>
-                        {ticket.title_zh ||
-                          ticket.title ||
-                          `#${ticket.number || ticket.id}`}
+                        {localizedMobileDisplay(ticket, {
+                          fallback: `#${ticket.number || ticket.id}`,
+                        })}
                       </strong>
                       <small>
                         {formatDateTime(
@@ -12260,7 +15234,7 @@ function AndroidAccountSettings() {
                     </span>
                     <em>
                       {text.platform.supportStatuses[ticket.status] ||
-                        ticket.status}
+                        text.notSynced}
                     </em>
                   </button>
                 ))}
@@ -12857,14 +15831,18 @@ function AndroidAccountSettings() {
                     {formatDateTime(pendingTeamApplication.expires_at, text)}
                   </small>
                 </div>
-              ) : !team && teamAdmission?.cooldown_active ? (
+              ) : !team &&
+                (!teamAdmission ||
+                  !teamAdmission.enabled ||
+                  !teamAdmission.can_apply_or_join ||
+                  teamAdmission.cooldown_active) ? (
                 <div className={styles["welfare-team-status"]}>
                   <strong>
                     {text.account.welfareTeamAdmissionUnavailable}
                   </strong>
                   <span>
                     {text.account.welfareTeamCooldownUntil(
-                      teamAdmission.cooldown_ends_at
+                      teamAdmission?.cooldown_ends_at
                         ? formatDateTime(teamAdmission.cooldown_ends_at, text)
                         : text.notSynced,
                     )}
@@ -12913,11 +15891,21 @@ function AndroidAccountSettings() {
               {welfareData?.teamDirectory?.rows?.length ? (
                 <div className={styles["welfare-team-directory"]}>
                   {welfareData.teamDirectory.rows.map((entry) => {
+                    const teamFull =
+                      entry.member_count >= entry.member_capacity;
                     const canApply =
                       !team &&
                       !!teamAdmission?.can_apply_or_join &&
                       !pendingTeamApplication &&
-                      entry.accepting_applications;
+                      entry.accepting_applications &&
+                      !teamFull;
+                    const applicationLabel = !entry.accepting_applications
+                      ? text.account.welfareTeamNotRecruiting
+                      : teamFull
+                      ? text.account.welfareTeamFull
+                      : !teamAdmission?.can_apply_or_join
+                      ? text.account.welfareTeamAdmissionUnavailable
+                      : text.account.welfareTeamApply;
                     return (
                       <article key={entry.team_id}>
                         <div>
@@ -12941,9 +15929,7 @@ function AndroidAccountSettings() {
                             onClick={() => setTeamApplicationTarget(entry)}
                             disabled={!canApply || teamActionBusy !== null}
                           >
-                            {entry.accepting_applications
-                              ? text.account.welfareTeamApply
-                              : text.account.welfareTeamNotRecruiting}
+                            {applicationLabel}
                           </button>
                         ) : null}
                       </article>
@@ -13044,6 +16030,10 @@ function AndroidAccountSettings() {
                       {text.account.welfareTeamNoApplications}
                     </p>
                   )}
+                </div>
+              ) : team?.is_captain ? (
+                <div className={styles["welfare-team-status"]}>
+                  {text.account.welfareTeamCaptainAccessUnavailable}
                 </div>
               ) : null}
             </section>
@@ -13549,6 +16539,16 @@ function AndroidAccountSettings() {
             onClick={() => navigate(Path.AccountWallet)}
           />
           <AccountMenuItem
+            icon={<FavoriteIcon />}
+            title={text.account.coupons}
+            detail={text.account.couponAvailable}
+            onClick={() => {
+              setCouponStatus("available");
+              refreshCoupons("available").catch(() => {});
+              navigate(Path.AccountCoupons);
+            }}
+          />
+          <AccountMenuItem
             icon={<SettingsIcon />}
             title={text.account.subscriptions}
             detail={accountGroupName}
@@ -13608,6 +16608,7 @@ function AndroidAccountSettings() {
 
       <button
         className={styles["danger-action"]}
+        aria-label="account-logout"
         onClick={() => setShowLogoutConfirm(true)}
         disabled={managed.loading}
       >
@@ -13619,18 +16620,23 @@ function AndroidAccountSettings() {
           <div className={styles["confirm-dialog"]}>
             <h2>{text.account.logoutConfirmTitle}</h2>
             <p>{text.account.logoutConfirmBody}</p>
+            <p>{text.account.keepSavedAccount}</p>
             <div className={styles["inline-actions"]}>
               <button onClick={() => setShowLogoutConfirm(false)}>
                 {text.account.logoutCancel}
               </button>
               <button
-                className={styles["danger-inline"]}
-                onClick={() => {
-                  setShowLogoutConfirm(false);
-                  managed.logout();
-                }}
+                aria-label="logout-keep-account"
+                onClick={() => void signOut(false)}
               >
-                {text.account.logoutConfirm}
+                {text.account.logoutKeepAccount}
+              </button>
+              <button
+                aria-label="logout-clear-all"
+                className={styles["danger-inline"]}
+                onClick={() => void signOut(true)}
+              >
+                {text.account.logoutClearAll}
               </button>
             </div>
           </div>
@@ -13648,9 +16654,10 @@ function useMobileCrashLog() {
         type,
         detail: detail instanceof Error ? detail.message : String(detail),
       });
-      const previous = localStorage.getItem("nextchat-mobile-crash-log") || "";
+      const key = accountStorageKey(CRASH_LOG_STORAGE_KEY);
+      const previous = localStorage.getItem(key) || "";
       localStorage.setItem(
-        "nextchat-mobile-crash-log",
+        key,
         [line, previous].filter(Boolean).join("\n").slice(0, 6000),
       );
     }
@@ -13667,11 +16674,204 @@ function useMobileCrashLog() {
   }, []);
 }
 
+function AndroidGlobalUpdatePrompt() {
+  const text = useMobileText();
+  const clientConfig = useMemo(() => getClientConfig(), []);
+  const [manifest, setManifest] = useState<AndroidUpdateManifest>();
+  const [visible, setVisible] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+  const pollRef = useRef<number | null>(null);
+  const currentVersion =
+    clientConfig?.androidVersion || clientConfig?.version || "0.0.0";
+  const latestVersion =
+    manifest?.latestVersion ||
+    manifest?.version ||
+    manifest?.androidVersion ||
+    "";
+  const required = Boolean(
+    manifest?.minSupportedVersion &&
+      compareVersions(currentVersion, manifest.minSupportedVersion) < 0,
+  );
+  const hasUpdate = Boolean(
+    latestVersion && compareVersions(latestVersion, currentVersion) > 0,
+  );
+  const apkUrl = resolveAndroidUrl(
+    manifest?.apkUrl || manifest?.androidApkUrl || manifest?.url || "",
+    clientConfig,
+  );
+
+  useEffect(() => {
+    const check = async () => {
+      const now = Date.now();
+      const checkedAt = Number(
+        localStorage.getItem(UPDATE_CHECKED_AT_STORAGE_KEY) || 0,
+      );
+      if (now - checkedAt < UPDATE_CHECK_INTERVAL_MS) return;
+      const url = getAndroidManifestUrl(clientConfig);
+      if (!url || navigator.onLine === false) return;
+      try {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(url, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        window.clearTimeout(timeout);
+        if (!response.ok) return;
+        const nextManifest = (await response.json()) as AndroidUpdateManifest;
+        localStorage.setItem(UPDATE_CHECKED_AT_STORAGE_KEY, String(now));
+        const nextVersion =
+          nextManifest.latestVersion ||
+          nextManifest.version ||
+          nextManifest.androidVersion ||
+          "";
+        const mandatory = Boolean(
+          nextManifest.minSupportedVersion &&
+            compareVersions(currentVersion, nextManifest.minSupportedVersion) <
+              0,
+        );
+        const available = Boolean(
+          nextVersion && compareVersions(nextVersion, currentVersion) > 0,
+        );
+        if (!available && !mandatory) return;
+        setManifest(nextManifest);
+        const dismissed = localStorage.getItem(
+          UPDATE_DISMISSED_VERSION_STORAGE_KEY,
+        );
+        if (mandatory || dismissed !== nextVersion) {
+          window.setTimeout(() => setVisible(true), 1200);
+        }
+      } catch {
+        // A background update probe must never interrupt the current task.
+      }
+    };
+    void check();
+    const onResume = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    document.addEventListener("visibilitychange", onResume);
+    window.addEventListener("jisudeng-native-resume", onResume);
+    return () => {
+      document.removeEventListener("visibilitychange", onResume);
+      window.removeEventListener("jisudeng-native-resume", onResume);
+    };
+  }, [clientConfig, currentVersion]);
+
+  useEffect(
+    () => () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+    },
+    [],
+  );
+
+  async function downloadUpdate() {
+    if (!apkUrl || downloading) return;
+    setDownloading(true);
+    setDownloadError("");
+    try {
+      const result = await startNativeDownload(
+        apkUrl,
+        "jisudengchat-android.apk",
+        "JisudengChat Android",
+      );
+      if (!result.id) {
+        await installDownloadedApk(undefined, result.path, manifest?.sha256);
+        setDownloading(false);
+        return;
+      }
+      pollRef.current = window.setInterval(async () => {
+        const status = await getNativeDownloadStatus(String(result.id));
+        if (status.status !== "success" && status.status !== "failed") return;
+        if (pollRef.current) window.clearInterval(pollRef.current);
+        pollRef.current = null;
+        setDownloading(false);
+        if (status.status === "success") {
+          await installDownloadedApk(
+            String(result.id),
+            status.localUri,
+            manifest?.sha256,
+          ).catch((error) => {
+            setDownloadError(
+              error instanceof Error && error.message
+                ? error.message
+                : text.errors.downloadFailed,
+            );
+          });
+        } else {
+          setDownloadError(text.errors.downloadFailed);
+        }
+      }, 1000);
+    } catch (error) {
+      setDownloading(false);
+      setDownloadError(
+        error instanceof Error && error.message
+          ? error.message
+          : text.errors.downloadFailed,
+      );
+    }
+  }
+
+  if (!visible || (!hasUpdate && !required)) return null;
+  return (
+    <div className={styles["sheet-mask"]} role="dialog" aria-modal="true">
+      <div className={styles["confirm-dialog"]}>
+        <h2>{text.account.updateFound}</h2>
+        <p>{`${text.account.installed} ${currentVersion} · ${text.account.latestVersion} ${latestVersion}`}</p>
+        {manifestNotes(manifest).length > 0 && (
+          <ul>
+            {manifestNotes(manifest)
+              .slice(0, 4)
+              .map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+          </ul>
+        )}
+        {downloadError && (
+          <div className={styles["form-error"]}>{downloadError}</div>
+        )}
+        <div className={styles["inline-actions"]}>
+          {!required && (
+            <button
+              type="button"
+              onClick={() => {
+                localStorage.setItem(
+                  UPDATE_DISMISSED_VERSION_STORAGE_KEY,
+                  latestVersion,
+                );
+                setVisible(false);
+              }}
+            >
+              {text.common.cancel}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void downloadUpdate()}
+            disabled={!apkUrl || downloading}
+          >
+            <DownloadIcon />
+            <span>
+              {downloading
+                ? text.account.downloading(0)
+                : text.account.downloadUpdate}
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AndroidManagedGate(props: { children: ReactNode }) {
   const managed = useManagedNextChatStore();
+  const mobileStore = useManagedMobileAppStore();
   const location = useLocation();
   const navigate = useNavigate();
   const text = useMobileText();
+  const [secureRestoreDone, setSecureRestoreDone] = useState(false);
+  const secureRestoreStartedRef = useRef(false);
+  const billingRefreshRef = useRef(new Set<string>());
   const clientConfig = useMemo(() => getClientConfig(), []);
   const backendBaseUrl = useMemo(
     () => fixedManagedBackendBaseUrl(clientConfig),
@@ -13770,6 +16970,89 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
   }, [backendBaseUrl, clientConfig]);
 
   useEffect(() => {
+    if (!managed.imageSession) return;
+    const hydrate = async (
+      projectId: string,
+      assetId: string,
+      requestId: string,
+    ) => {
+      try {
+        const page = await managedAuthenticatedJsonRequest<ContentKitUsagePage>(
+          `/api/v1/usage?page=1&page_size=1&client_request_id=${encodeURIComponent(
+            requestId,
+          )}`,
+        );
+        const record = page.items?.find(
+          (item) => item.request_id === `client:${requestId}`,
+        );
+        if (!record) return;
+        const project = useManagedMobileAppStore
+          .getState()
+          .contentKits.find((item) => item.id === projectId);
+        if (!project) return;
+        mobileStore.updateContentKit(projectId, {
+          assets: project.assets.map((asset) =>
+            asset.id === assetId
+              ? {
+                  ...asset,
+                  actualCost: Number(record.actual_cost || 0),
+                  billingRecordId: String(record.id),
+                  billingStatus: "captured",
+                  updatedAt: Date.now(),
+                }
+              : asset,
+          ),
+        });
+      } catch {
+        // Keep pending: a transient failed lookup must never be treated as a release.
+      }
+    };
+    const refresh = () => {
+      useManagedMobileAppStore.getState().contentKits.forEach((project) => {
+        project.assets.forEach((asset) => {
+          if (
+            !asset.requestId ||
+            asset.billingStatus !== "pending" ||
+            (asset.status !== "completed" && asset.status !== "failed")
+          ) {
+            return;
+          }
+          const key = `${project.id}:${asset.id}`;
+          if (billingRefreshRef.current.has(key)) return;
+          billingRefreshRef.current.add(key);
+          void hydrate(project.id, asset.id, asset.requestId).finally(() =>
+            billingRefreshRef.current.delete(key),
+          );
+        });
+      });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 15_000);
+    window.addEventListener("online", refresh);
+    window.addEventListener("jisudeng-network-restored", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("jisudeng-network-restored", refresh);
+    };
+    // The persisted account-specific project store is queried at refresh time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managed.imageSession, mobileStore.contentKits]);
+
+  useEffect(() => {
+    if (
+      !managed._hasHydrated ||
+      secureRestoreDone ||
+      secureRestoreStartedRef.current
+    )
+      return;
+    secureRestoreStartedRef.current = true;
+    void managed.restoreSecureSession().finally(() => {
+      setSecureRestoreDone(true);
+    });
+  }, [managed, managed._hasHydrated, secureRestoreDone]);
+
+  useEffect(() => {
     function onNativeShare(event: Event) {
       const detail = (event as CustomEvent).detail || {};
       const files = Array.isArray(detail.files) ? detail.files : [];
@@ -13803,6 +17086,62 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managed._hasHydrated, managed.backendBaseUrl, backendBaseUrl]);
+
+  useEffect(() => {
+    if (!managed._hasHydrated || !backendBaseUrl) return;
+    const appVersion = clientConfig?.androidVersion || clientConfig?.version;
+    const reportOpen = () => {
+      void reportMobileAttributionEvent({
+        baseUrl: backendBaseUrl,
+        eventType: "open",
+        appVersion,
+        locale: text.dateLocale,
+        metadata: { surface: "android_app" },
+      });
+    };
+    reportOpen();
+    const onResume = () => {
+      if (document.visibilityState === "visible") reportOpen();
+    };
+    document.addEventListener("visibilitychange", onResume);
+    window.addEventListener("jisudeng-native-resume", reportOpen);
+    return () => {
+      document.removeEventListener("visibilitychange", onResume);
+      window.removeEventListener("jisudeng-native-resume", reportOpen);
+    };
+  }, [managed._hasHydrated, backendBaseUrl, clientConfig, text.dateLocale]);
+
+  useEffect(() => {
+    if (!managed.accessToken || !managed.backendBaseUrl) return;
+    const appVersion = clientConfig?.androidVersion || clientConfig?.version;
+    const userScope = managed.user?.id || managed.session?.user_id;
+    if (!userScope) return;
+    void reportMobileAttributionEvent({
+      baseUrl: managed.backendBaseUrl,
+      eventType: "login",
+      appVersion,
+      locale: text.dateLocale,
+      accessToken: managed.accessToken,
+      userScope,
+      metadata: { surface: "android_app", event_name: "login" },
+    });
+    void reportMobileAttributionEvent({
+      baseUrl: managed.backendBaseUrl,
+      eventType: "active",
+      appVersion,
+      locale: text.dateLocale,
+      accessToken: managed.accessToken,
+      userScope,
+      metadata: { surface: "android_app", event_name: "active" },
+    });
+  }, [
+    clientConfig,
+    managed.accessToken,
+    managed.backendBaseUrl,
+    managed.session?.user_id,
+    managed.user?.id,
+    text.dateLocale,
+  ]);
 
   useEffect(() => {
     if (
@@ -13874,7 +17213,7 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
 
   useEffect(() => {
     if (!managed.accessToken || !managed.backendBaseUrl) return;
-    const sentKey = "jisudengchat-diagnostics-last-sent-v1";
+    const sentKey = accountStorageKey(DIAGNOSTICS_CURSOR_STORAGE_KEY);
     let disposed = false;
     const submitDiagnostics = async () => {
       const diagnostics = getManagedRequestDiagnostics(24)
@@ -13972,7 +17311,7 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
     };
   }, [clientConfig, managed.accessToken, managed.backendBaseUrl]);
 
-  if (!managed._hasHydrated) {
+  if (!managed._hasHydrated || !secureRestoreDone) {
     return <MobileLoading />;
   }
 
@@ -13989,27 +17328,66 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
   }
 
   if (location.pathname === Path.Home) {
-    return <AndroidDashboard />;
+    return (
+      <>
+        <AndroidDashboard />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
   }
 
   if (location.pathname === Path.Chat) {
-    return <AndroidChat />;
+    return (
+      <>
+        <AndroidChat />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
   }
 
   if (location.pathname === Path.Sd || location.pathname === Path.SdNew) {
-    return <AndroidImageStudio />;
+    return (
+      <>
+        <AndroidImageStudio />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
   }
 
   if (location.pathname === Path.Gallery) {
-    return <AndroidGallery />;
+    return (
+      <>
+        <AndroidGallery />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
+  }
+
+  if (location.pathname === Path.ContentKit) {
+    return (
+      <>
+        <AndroidContentKit />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
   }
 
   if (
     location.pathname === Path.Settings ||
     location.pathname.startsWith("/account/")
   ) {
-    return <AndroidAccountSettings />;
+    return (
+      <>
+        <AndroidAccountSettings />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
   }
 
-  return <>{props.children}</>;
+  return (
+    <>
+      {props.children}
+      <AndroidGlobalUpdatePrompt />
+    </>
+  );
 }

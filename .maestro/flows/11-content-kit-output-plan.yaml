@@ -1,0 +1,25 @@
+appId: com.jisudeng.chat
+name: Content kit exposes production output plans before generating
+tags:
+  - core
+---
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "open-content-kit"
+- tapOn: "New kit|新建套件"
+- assertVisible: "16 images planned in this run|本批计划 16 张"
+- tapOn: "content-kit-preset-campaign"
+- assertVisible: "24 images planned in this run|本批计划 24 张"
+- tapOn: "content-kit-preset-custom"
+- assertVisible: "content-kit-preset-custom"
+- scrollUntilVisible:
+    element: "More settings|更多设置"
+    direction: DOWN
+    timeout: 10000
+- tapOn: "More settings|更多设置"
+- scrollUntilVisible:
+    element: "Product consistency|商品一致性"
+    direction: DOWN
+    timeout: 10000
+- assertVisible: "Product consistency|商品一致性"

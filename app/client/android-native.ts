@@ -43,6 +43,7 @@ export interface NativeAppImage {
   size?: number;
   createdAt?: number;
   updatedAt?: number;
+  ownerUserId?: string;
 }
 
 export interface NativeDeviceInfo {
@@ -56,6 +57,28 @@ export interface NativeDeviceInfo {
   sdkInt?: number;
   appVersionName?: string;
   appVersionCode?: number;
+}
+
+export interface NativeLoginCredentials {
+  saved: boolean;
+  email?: string;
+  password?: string;
+}
+
+export interface NativeManagedSessionSecrets {
+  saved?: boolean;
+  backendBaseUrl?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  tokenType?: string;
+  accessTokenExpiresAt?: string;
+  user?: object | null;
+  session?: object | null;
+  imageSession?: object | null;
+}
+
+export interface NativeE2EFixtureFlags {
+  image502ThenSuccess?: boolean;
 }
 
 export interface NativeOpenUrlResult {
@@ -128,14 +151,22 @@ interface NextChatNativePlugin {
     prompt?: string;
     model?: string;
     taskId?: string;
+    ownerUserId?: string;
   }): Promise<NativeAppImage>;
-  listAppImages?(): Promise<{ items?: NativeAppImage[] }>;
+  listAppImages?(options?: {
+    ownerUserId?: string;
+  }): Promise<{ items?: NativeAppImage[] }>;
   deleteAppImages?(options: {
     fileNames: string[];
   }): Promise<{ deleted?: number }>;
   shareImage(options: {
     dataUrl: string;
     fileName?: string;
+    title?: string;
+    text?: string;
+  }): Promise<void>;
+  shareImages?(options: {
+    items: Array<{ dataUrl: string; fileName?: string }>;
     title?: string;
     text?: string;
   }): Promise<void>;
@@ -147,7 +178,11 @@ interface NextChatNativePlugin {
     title?: string;
   }): Promise<NativeDownloadResult>;
   getDownloadStatus(options: { id: string }): Promise<NativeDownloadStatus>;
-  installApk?(options: { id?: string; uri?: string }): Promise<void>;
+  installApk?(options: {
+    id?: string;
+    uri?: string;
+    sha256?: string;
+  }): Promise<void>;
   openUrl(options: { url: string }): Promise<NativeOpenUrlResult | void>;
   openAppSettings?(): Promise<void>;
   getDeviceInfo?(): Promise<NativeDeviceInfo>;
@@ -168,8 +203,14 @@ declare global {
     __jisudengNativeStream?: (
       id: string,
       type: "status" | "data" | "done" | "error",
-      payload?: { status?: number; line?: string; message?: string },
+      payload?: {
+        status?: number;
+        line?: string;
+        continued?: boolean;
+        message?: string;
+      },
     ) => void;
+    __jisudengNativeBridgeToken?: string;
   }
 }
 
@@ -186,6 +227,7 @@ const pendingNativeStreams = new Map<
   {
     onStatus?: (status: number) => void;
     onLine: (line: string) => void;
+    partialLine: string;
     resolve: () => void;
     reject: (reason?: unknown) => void;
   }
@@ -222,11 +264,16 @@ function ensureDirectNativeCallbacks() {
       return;
     }
     if (type === "data") {
-      pending.onLine(String(payload?.line ?? ""));
+      pending.partialLine += String(payload?.line ?? "");
+      if (!payload?.continued) {
+        pending.onLine(pending.partialLine);
+        pending.partialLine = "";
+      }
       return;
     }
     pendingNativeStreams.delete(id);
     if (type === "done") {
+      if (pending.partialLine) pending.onLine(pending.partialLine);
       pending.resolve();
       return;
     }
@@ -256,10 +303,17 @@ function callDirectNative<T>(method: string, options?: unknown) {
       : "";
   const id =
     explicitId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const bridgeToken =
+    window.__jisudengNativeBridgeToken ||
+    new URLSearchParams(window.location.search).get("nativeBridgeToken") ||
+    "";
+  window.__jisudengNativeBridgeToken = bridgeToken;
   return new Promise<T>((resolve, reject) => {
     pendingDirectNativeRequests.set(id, { resolve, reject });
     try {
-      bridge.request(JSON.stringify({ id, method, options: options ?? {} }));
+      bridge.request(
+        JSON.stringify({ id, method, options: options ?? {}, bridgeToken }),
+      );
     } catch (error) {
       pendingDirectNativeRequests.delete(id);
       reject(error);
@@ -271,12 +325,20 @@ export function isDirectNativeStreamAvailable() {
   return isDirectNativeBridgeAvailable();
 }
 
+export async function getNativeE2EFixtureFlags() {
+  if (!isDirectNativeBridgeAvailable()) {
+    return {} as NativeE2EFixtureFlags;
+  }
+  return callDirectNative<NativeE2EFixtureFlags>("getE2EFixtureFlags");
+}
+
 export async function startDirectNativeStreamRequest(
   options: {
     url: string;
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    bodyBase64?: string;
     connectTimeout?: number;
     readTimeout?: number;
   },
@@ -290,6 +352,7 @@ export async function startDirectNativeStreamRequest(
   const done = new Promise<void>((resolve, reject) => {
     pendingNativeStreams.set(id, {
       ...callbacks,
+      partialLine: "",
       resolve,
       reject,
     });
@@ -323,6 +386,46 @@ export function isNativeAndroid() {
   return (
     Capacitor.getPlatform() === "android" || isDirectNativeBridgeAvailable()
   );
+}
+
+export async function loadLoginCredentials(): Promise<NativeLoginCredentials> {
+  if (!isDirectNativeBridgeAvailable()) return { saved: false };
+  return callDirectNative<NativeLoginCredentials>("loadLoginCredentials");
+}
+
+export async function saveLoginCredentials(email: string, password: string) {
+  if (!isDirectNativeBridgeAvailable()) return { saved: false };
+  return callDirectNative<NativeLoginCredentials>("saveLoginCredentials", {
+    email,
+    password,
+  });
+}
+
+export async function clearLoginCredentials() {
+  if (!isDirectNativeBridgeAvailable()) return;
+  await callDirectNative<void>("clearLoginCredentials");
+}
+
+export async function loadManagedSessionSecrets(): Promise<NativeManagedSessionSecrets> {
+  if (!isDirectNativeBridgeAvailable()) return { saved: false };
+  return callDirectNative<NativeManagedSessionSecrets>(
+    "loadManagedSessionSecrets",
+  );
+}
+
+export async function saveManagedSessionSecrets(
+  secrets: NativeManagedSessionSecrets,
+) {
+  if (!isDirectNativeBridgeAvailable()) return { saved: false };
+  return callDirectNative<{ saved?: boolean }>(
+    "saveManagedSessionSecrets",
+    secrets,
+  );
+}
+
+export async function clearManagedSessionSecrets() {
+  if (!isDirectNativeBridgeAvailable()) return;
+  await callDirectNative<void>("clearManagedSessionSecrets");
 }
 
 export async function imageUrlToDataUrl(url: string) {
@@ -471,7 +574,12 @@ export async function saveImageToGallery(url: string, fileName: string) {
 export async function saveImageToAppStorage(
   url: string,
   fileName: string,
-  metadata: { prompt?: string; model?: string; taskId?: string } = {},
+  metadata: {
+    prompt?: string;
+    model?: string;
+    taskId?: string;
+    ownerUserId?: string;
+  } = {},
 ) {
   const dataUrl = await imageUrlToDataUrl(url);
   if (isNativeAndroid()) {
@@ -502,16 +610,17 @@ export async function saveImageToAppStorage(
   };
 }
 
-export async function listAppImages() {
+export async function listAppImages(ownerUserId = "") {
   if (!isNativeAndroid()) return [] as NativeAppImage[];
   if (isDirectNativeBridgeAvailable()) {
     const result = await callDirectNative<{ items?: NativeAppImage[] }>(
       "listAppImages",
+      { ownerUserId },
     );
     return result.items || [];
   }
   if (NextChatNative.listAppImages) {
-    const result = await NextChatNative.listAppImages();
+    const result = await NextChatNative.listAppImages({ ownerUserId });
     return result.items || [];
   }
   return [];
@@ -564,6 +673,51 @@ export async function shareImage(url: string, fileName: string, text?: string) {
     }
   }
   downloadInBrowser(dataUrl, fileName);
+}
+
+export async function shareImages(
+  items: Array<{ url: string; fileName: string }>,
+  text?: string,
+) {
+  if (!items.length) return;
+  const prepared = await Promise.all(
+    items.map(async (item) => ({
+      dataUrl: await imageUrlToDataUrl(item.url),
+      fileName: item.fileName,
+    })),
+  );
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<void>("shareImages", {
+        items: prepared,
+        title: "JisudengChat",
+        text,
+      });
+    }
+    if (NextChatNative.shareImages) {
+      return NextChatNative.shareImages({
+        items: prepared,
+        title: "JisudengChat",
+        text,
+      });
+    }
+  }
+  if (navigator.share) {
+    const files = await Promise.all(
+      prepared.map(async (item) => {
+        const blob = await (await fetch(item.dataUrl)).blob();
+        return new File([blob], item.fileName, {
+          type: blob.type || "image/png",
+        });
+      }),
+    );
+    const payload: ShareData = { title: "JisudengChat", text, files };
+    if (navigator.canShare?.(payload)) {
+      await navigator.share(payload);
+      return;
+    }
+  }
+  for (const item of prepared) downloadInBrowser(item.dataUrl, item.fileName);
 }
 
 export async function shareText(text: string, title = "JisudengChat") {
@@ -724,13 +878,17 @@ export async function getNativeDownloadStatus(id: string) {
   return NextChatNative.getDownloadStatus({ id });
 }
 
-export async function installDownloadedApk(id?: string, uri?: string) {
+export async function installDownloadedApk(
+  id?: string,
+  uri?: string,
+  sha256?: string,
+) {
   if (!isNativeAndroid()) return;
   if (isDirectNativeBridgeAvailable()) {
-    await callDirectNative<void>("installApk", { id, uri });
+    await callDirectNative<void>("installApk", { id, uri, sha256 });
     return;
   }
   if (NextChatNative.installApk) {
-    await NextChatNative.installApk({ id, uri });
+    await NextChatNative.installApk({ id, uri, sha256 });
   }
 }

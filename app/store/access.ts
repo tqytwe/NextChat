@@ -287,6 +287,9 @@ export const useAccessStore = createPersistStore(
   {
     name: StoreKey.Access,
     version: 2,
+    partialize(state: any) {
+      return state.hideUserApiKey ? { ...state, openaiApiKey: "" } : state;
+    },
     migrate(persistedState, version) {
       if (version < 2) {
         const state = persistedState as {

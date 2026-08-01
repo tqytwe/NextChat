@@ -19,12 +19,14 @@ export const MANAGED_MOBILE_TEXT = {
     errors: {
       missingBackend: "APP 后端配置缺失，请安装正式版本",
       networkFailed: "网络请求失败，请检查网络后重试",
+      requestTimeout: "请求超时，APP 将保留任务状态供重试",
+      offline: "设备当前离线，请恢复网络后重试",
       appLoginNotSupported: "当前服务器还未支持 APP 登录，请更新服务器后重试",
       notFound: "请求的服务不存在，请稍后重试",
       requestFailed: (status: number) => `请求失败：${status}`,
       turnstileFailed: "当前登录方式需要安全验证，请使用新版 APP 或稍后重试",
       invalidCredentials: "邮箱或密码不正确",
-      unauthorized: "登录状态正在自动恢复，请稍候",
+      unauthorized: "登录已过期，请重新登录",
       authRecovering: "登录状态正在自动恢复，请稍候",
       serviceUnavailable: "服务器暂时不可用，请稍后重试",
       serviceBusy: "服务暂时繁忙，请稍后重试",
@@ -114,6 +116,118 @@ export const MANAGED_MOBILE_TEXT = {
       selectedMark: "已选",
     },
     platform: {
+      contentKit: {
+        title: "商品推广内容套件",
+        hint: "一次生成主图、竖版图、横幅图和发布文案，仅保存在本机",
+        newProject: "新建套件",
+        moreSettings: "更多设置",
+        hideMoreSettings: "收起更多设置",
+        projectName: "商品名称",
+        productPlaceholder: "例如：夏日轻便小白鞋",
+        sellingPoints: "核心卖点",
+        sellingPointsPlaceholder: "例如：轻便、透气、百搭",
+        audience: "目标人群",
+        audiencePlaceholder: "例如：18-30 岁通勤女性",
+        platform: "发布平台",
+        platformPlaceholder: "例如：小红书、抖音、淘宝",
+        tone: "文案语气",
+        tonePlaceholder: "例如：真诚、轻松、有质感",
+        consistency: "商品一致性",
+        lockProduct: "锁定商品外形与包装",
+        lockColor: "锁定主色",
+        lockLogo: "保留可见品牌标识",
+        composition: "构图",
+        compositionCenter: "居中",
+        compositionLeft: "靠左",
+        compositionRight: "靠右",
+        compositionCloseup: "特写",
+        safeArea: "文案安全留白",
+        safeAreaNone: "不指定",
+        safeAreaTop: "顶部",
+        safeAreaBottom: "底部",
+        safeAreaLeft: "左侧",
+        safeAreaRight: "右侧",
+        videoIntent: "标记为视频剪辑可用素材",
+        references: "参考图（可选）",
+        chooseModel: "生图模型",
+        create: "生成内容套件",
+        outputPlan: "输出计划",
+        presetQuick: "快速试稿",
+        presetEcommerce: "电商上新",
+        presetCampaign: "活动推广",
+        presetCustom: "自定义计划",
+        presetQuickHint: "6 张候选，先确认风格",
+        presetEcommerceHint: "16 张商品、细节、场景和渠道图",
+        presetCampaignHint: "24 张活动素材与多平台比例",
+        presetCustomHint: "按镜头组设置 1-6 张变体，项目最多排队 48 张",
+        addShot: "添加镜头组",
+        removeShot: "移除镜头组",
+        planLimit: "单个项目最多排队 48 张，请减少镜头组或变体数量",
+        plannedImages: (count: number) => `本批计划 ${count} 张`,
+        estimateLoading: "正在核算预计消耗",
+        estimatedCost: "预计消耗",
+        availableBalance: "当前余额",
+        insufficientBalance: "余额不足，无法启动此批生成",
+        referenceLimit: (count: number) => `当前模型最多支持 ${count} 张参考图`,
+        estimateUnavailable: "暂时无法核算预计消耗，暂不能启动生成",
+        estimateRequired: "请等待预计消耗核算完成后再生成",
+        newVersion: "创建新版本",
+        projectLimit: "该项目最多保留 48 张输出，请新建套件继续生成",
+        selectOutput: "选择图片",
+        previewOutput: "预览图片",
+        closePreview: "关闭预览",
+        filterAll: "全部",
+        tagKeep: "保留",
+        tagReview: "待确认",
+        tagReject: "淘汰",
+        tagVideo: "适合视频",
+        actualCost: (cost: number) => `实际消耗 ${cost}`,
+        billingPending: "结算确认中",
+        shareOneOutput: "系统分享一次只能发送一张图片，请只选择一张",
+        queueRunning: "正在生成队列",
+        queuePaused: "已暂停",
+        pauseQueue: "暂停剩余任务",
+        resumeQueue: "继续生成",
+        cancelQueue: "取消剩余任务",
+        retryFailed: "重试失败项",
+        selectedOutputs: (count: number) => `已选 ${count} 张`,
+        saveSelected: "保存所选",
+        shareSelected: "分享所选",
+        noSelectedOutputs: "请先选择要导出的图片",
+        outputGroups: "镜头组",
+        detail: "细节特写",
+        lifestyle: "场景种草图",
+        poster: "卖点海报",
+        queued: "等待队列",
+        partial: "部分完成",
+        projects: "本机项目",
+        noProjects: "暂无内容套件项目",
+        main: "商品主图",
+        vertical: "竖版推广图",
+        banner: "横幅图",
+        copy: "标题与发布文案",
+        assets: "视觉素材",
+        brief: "项目简介",
+        projectProgress: "图片进度",
+        waiting: "等待生成",
+        generating: "生成中",
+        completed: "已完成",
+        failed: "生成失败",
+        retryItem: "重试此项",
+        copyResult: "复制文案",
+        saveImage: "保存图片",
+        shareResult: "系统分享",
+        removeProject: "删除项目",
+        removeLocalFailed: "项目已删除，但部分本机图片未能清理",
+        removeConfirm: (name: string) =>
+          `删除“${name}”及本机结果？此操作无法恢复。`,
+        requiredProduct: "请输入商品名称和至少一个卖点",
+        noImageModel: "当前分组没有可用图片模型",
+        unsupportedSize: "当前模型不支持该输出尺寸，请调整计划或更换模型",
+        noChatModel: "当前分组没有可用聊天模型，无法生成文案",
+        referenceUnsupported:
+          "当前模型不支持参考图编辑，请明确选择支持编辑的模型后再生成",
+      },
       tasks: "任务历史",
       taskHint: "聊天、生图和文件任务统一记录",
       taskEmpty: "暂无云端任务",
@@ -136,8 +250,11 @@ export const MANAGED_MOBILE_TEXT = {
       uploadMaterial: "添加素材",
       uploadWaiting: "上传中",
       uploadReady: "已上传",
+      uploadLocalReady: "已在本机附加",
       uploadFailed: "上传失败",
       uploadFailedHint: "素材上传失败，请移除后重新添加",
+      localFileUnsupported:
+        "云端素材存储暂不可用。图片会直接发送；仅纯文本文件可在本机附加到聊天。",
       deleteAssetConfirm: "确定删除这个云端素材吗？",
       assetDeleted: "素材已删除",
       addToChat: "加入聊天",
@@ -219,6 +336,13 @@ export const MANAGED_MOBILE_TEXT = {
       totpPlaceholder: "6 位验证码",
       loggingIn: "正在登录...",
       verifyAndLogin: "验证并登录",
+      rememberAccount: "在此设备记住账号和密码",
+      showPassword: "显示密码",
+      hidePassword: "隐藏密码",
+      manualCredentialSource: "手动输入",
+      savedCredentialSource: "已保存回填",
+      loginDiagnostic: (passwordLength: number, source: string) =>
+        `登录诊断：密码长度 ${passwordLength}，来源 ${source}。请用 request ID 查后端日志。`,
       submit: "登录",
     },
     chat: {
@@ -235,6 +359,7 @@ export const MANAGED_MOBILE_TEXT = {
       stop: "停止",
       retryLast: "重试上一条",
       uploadImage: "上传图片",
+      attachFile: "添加图片或文件",
       camera: "拍照",
       voiceInput: "语音输入",
       voicePrompt: "请开始说话",
@@ -321,6 +446,11 @@ export const MANAGED_MOBILE_TEXT = {
       addReference: "添加参考图",
       clearReferences: "清空参考图",
       referenceHint: "支持多张参考图，图片只保存在本机",
+      noReferenceModel: "当前分组没有支持参考图的模型",
+      referenceModelUnsupported: (name: string) =>
+        `${name || "当前模型"} 不支持参考图编辑，请选择 Gemini 或 GPT Image`,
+      referenceModelSwitched: (name: string) =>
+        `已自动切换到支持参考图的模型：${name}`,
       model: "模型",
       size: "尺寸",
       quality: "清晰度",
@@ -425,6 +555,16 @@ export const MANAGED_MOBILE_TEXT = {
       orders: "订单",
       balanceDetails: "余额明细",
       redeemCenter: "兑换中心",
+      coupons: "我的卡券",
+      couponAvailable: "可用",
+      couponLocked: "已锁定",
+      couponUsed: "已使用",
+      couponExpired: "已过期",
+      noCoupons: "暂无卡券",
+      noCoupon: "不使用优惠券",
+      chooseCoupon: "选择优惠券",
+      couponDiscount: "优惠",
+      couponFinalAmount: "应付金额",
       redeemShortHint: "兑换码",
       redeemCenterHint: "支持兑换码、活动码和套餐码",
       redeemCode: "兑换码",
@@ -503,6 +643,8 @@ export const MANAGED_MOBILE_TEXT = {
       welfareTeamCaptainReplyWithin: (hours: number) =>
         `队长将在 ${hours} 小时内处理`,
       welfareTeamAdmissionUnavailable: "当前暂不能申请入队",
+      welfareTeamCaptainAccessUnavailable: "队长审核权限暂不可用，请刷新后重试",
+      welfareTeamFull: "名额已满",
       welfareTeamCooldownUntil: (time: string) => `冷却至 ${time}`,
       welfareTeamApplyTo: (name: string) => `申请加入 ${name}`,
       welfareTeamApplicationMessage: "申请留言（可选）",
@@ -669,6 +811,12 @@ export const MANAGED_MOBILE_TEXT = {
       validityDays: (days: number | string) => `${days} 天`,
       includedBalance: "包含额度",
       usageProgress: "消耗进度",
+      dailyUsage: "每日额度",
+      weeklyUsage: "每周额度",
+      monthlyUsage: "每月额度",
+      dailyCardUsage: "日卡额度",
+      unlimitedUsage: "不限量",
+      unavailableUsage: "暂无法读取用量",
       remaining: "剩余",
       used: "已用",
       total: "总量",
@@ -728,6 +876,9 @@ export const MANAGED_MOBILE_TEXT = {
       lastSyncedAt: (time: string) => `账户数据${time}`,
       logoutConfirmTitle: "退出登录？",
       logoutConfirmBody: "退出后需要重新登录才能同步余额、分组和模型。",
+      keepSavedAccount: "退出后保留此设备已保存的账号",
+      logoutKeepAccount: "保留账号并退出",
+      logoutClearAll: "清除全部并退出",
       logoutCancel: "继续使用",
       logoutConfirm: "退出",
       currentGroup: "当前分组",
@@ -784,6 +935,9 @@ export const MANAGED_MOBILE_TEXT = {
       missingBackend:
         "The app is missing its server configuration. Please install the official build.",
       networkFailed: "Network request failed. Please check your connection.",
+      requestTimeout:
+        "The request timed out. Its task state was kept for retry.",
+      offline: "The device is offline. Reconnect and try again.",
       appLoginNotSupported:
         "This server does not support app sign-in yet. Please update the server and try again.",
       notFound: "The requested service was not found. Please try again later.",
@@ -791,7 +945,7 @@ export const MANAGED_MOBILE_TEXT = {
       turnstileFailed:
         "This sign-in method requires security verification. Please use the latest app or try again later.",
       invalidCredentials: "Incorrect email or password.",
-      unauthorized: "Restoring your sign-in automatically. Please wait.",
+      unauthorized: "Your login has expired. Please sign in again.",
       authRecovering: "Restoring your sign-in automatically. Please wait.",
       serviceUnavailable:
         "The server is temporarily unavailable. Please try again later.",
@@ -896,6 +1050,127 @@ export const MANAGED_MOBILE_TEXT = {
       selectedMark: "Selected",
     },
     platform: {
+      contentKit: {
+        title: "Product promotion kit",
+        hint: "Generate a main image, vertical visual, banner, and post copy. Saved on this device only.",
+        newProject: "New kit",
+        moreSettings: "More settings",
+        hideMoreSettings: "Hide more settings",
+        projectName: "Product name",
+        productPlaceholder: "e.g. Lightweight summer sneakers",
+        sellingPoints: "Key selling points",
+        sellingPointsPlaceholder: "e.g. Lightweight, breathable, versatile",
+        audience: "Target audience",
+        audiencePlaceholder: "e.g. Urban commuters aged 18-30",
+        platform: "Publishing platform",
+        platformPlaceholder: "e.g. Instagram, TikTok, store listing",
+        tone: "Copy tone",
+        tonePlaceholder: "e.g. Warm, confident, polished",
+        consistency: "Product consistency",
+        lockProduct: "Lock product shape and packaging",
+        lockColor: "Lock primary colors",
+        lockLogo: "Preserve visible product branding",
+        composition: "Composition",
+        compositionCenter: "Centered",
+        compositionLeft: "Left",
+        compositionRight: "Right",
+        compositionCloseup: "Close-up",
+        safeArea: "Headline safe area",
+        safeAreaNone: "Not specified",
+        safeAreaTop: "Top",
+        safeAreaBottom: "Bottom",
+        safeAreaLeft: "Left",
+        safeAreaRight: "Right",
+        videoIntent: "Mark as suitable for video editing",
+        references: "Reference images (optional)",
+        chooseModel: "Image model",
+        create: "Generate content kit",
+        outputPlan: "Output plan",
+        presetQuick: "Quick draft",
+        presetEcommerce: "E-commerce launch",
+        presetCampaign: "Campaign promotion",
+        presetCustom: "Custom plan",
+        presetQuickHint: "6 candidates to confirm the direction",
+        presetEcommerceHint:
+          "16 product, detail, lifestyle, and channel visuals",
+        presetCampaignHint: "24 campaign visuals in multiple formats",
+        presetCustomHint:
+          "Set 1-6 variants per shot group, with up to 48 outputs queued per project",
+        addShot: "Add shot group",
+        removeShot: "Remove shot group",
+        planLimit:
+          "A project can queue at most 48 outputs. Reduce shot groups or variants.",
+        plannedImages: (count: number) => `${count} images planned in this run`,
+        estimateLoading: "Calculating estimated usage",
+        estimatedCost: "Estimated usage",
+        availableBalance: "Available balance",
+        insufficientBalance: "Insufficient balance for this generation batch.",
+        referenceLimit: (count: number) =>
+          `This model supports up to ${count} reference images.`,
+        estimateUnavailable:
+          "Estimated usage is temporarily unavailable, so generation cannot start yet.",
+        estimateRequired: "Wait for the usage estimate before generating.",
+        newVersion: "Create new version",
+        projectLimit:
+          "This project can keep up to 48 outputs. Create a new kit to continue.",
+        selectOutput: "Select image",
+        previewOutput: "Preview image",
+        closePreview: "Close preview",
+        filterAll: "All",
+        tagKeep: "Keep",
+        tagReview: "Review",
+        tagReject: "Reject",
+        tagVideo: "Video ready",
+        actualCost: (cost: number) => `Actual usage ${cost}`,
+        billingPending: "Confirming settlement",
+        shareOneOutput:
+          "System sharing sends one image at a time. Select one image to share.",
+        queueRunning: "Generating queue",
+        queuePaused: "Paused",
+        pauseQueue: "Pause remaining",
+        resumeQueue: "Resume generation",
+        cancelQueue: "Cancel remaining",
+        retryFailed: "Retry failed items",
+        selectedOutputs: (count: number) => `${count} selected`,
+        saveSelected: "Save selected",
+        shareSelected: "Share selected",
+        noSelectedOutputs: "Select images to export first.",
+        outputGroups: "Shot groups",
+        detail: "Detail close-ups",
+        lifestyle: "Lifestyle visuals",
+        poster: "Selling-point posters",
+        queued: "Queued",
+        partial: "Partially completed",
+        projects: "Local projects",
+        noProjects: "No content kit projects yet.",
+        main: "Product main visual",
+        vertical: "Vertical promotion visual",
+        banner: "Banner visual",
+        copy: "Title and post copy",
+        assets: "Visual assets",
+        brief: "Project brief",
+        projectProgress: "Image progress",
+        waiting: "Waiting to generate",
+        generating: "Generating",
+        completed: "Completed",
+        failed: "Generation failed",
+        retryItem: "Retry this item",
+        copyResult: "Copy text",
+        saveImage: "Save image",
+        shareResult: "Share",
+        removeProject: "Delete project",
+        removeLocalFailed:
+          "The project was deleted, but some local images could not be removed.",
+        removeConfirm: (name: string) =>
+          `Delete “${name}” and its local results? This cannot be undone.`,
+        requiredProduct: "Enter a product name and at least one selling point.",
+        noImageModel: "No image model is available in the current group.",
+        unsupportedSize:
+          "This model does not support one or more output sizes. Adjust the plan or choose another model.",
+        noChatModel: "No chat model is available to generate copy.",
+        referenceUnsupported:
+          "This model does not support reference-image editing. Explicitly choose an edit-capable model before generating.",
+      },
       tasks: "Task history",
       taskHint: "Chat, image, and file tasks in one place",
       taskEmpty: "No cloud tasks yet.",
@@ -918,8 +1193,11 @@ export const MANAGED_MOBILE_TEXT = {
       uploadMaterial: "Add material",
       uploadWaiting: "Uploading",
       uploadReady: "Uploaded",
+      uploadLocalReady: "Attached on this device",
       uploadFailed: "Upload failed",
       uploadFailedHint: "Upload failed. Remove the item and add it again.",
+      localFileUnsupported:
+        "Cloud material storage is unavailable. Images are sent directly; only plain-text files can be attached locally to chat.",
       deleteAssetConfirm: "Delete this cloud material?",
       assetDeleted: "Material deleted",
       addToChat: "Add to chat",
@@ -1006,6 +1284,13 @@ export const MANAGED_MOBILE_TEXT = {
       totpPlaceholder: "6-digit code",
       loggingIn: "Signing in...",
       verifyAndLogin: "Verify and sign in",
+      rememberAccount: "Remember account and password on this device",
+      showPassword: "Show password",
+      hidePassword: "Hide password",
+      manualCredentialSource: "typed manually",
+      savedCredentialSource: "filled from saved credentials",
+      loginDiagnostic: (passwordLength: number, source: string) =>
+        `Sign-in diagnostics: password length ${passwordLength}, source ${source}. Check backend logs with the request ID.`,
       submit: "Sign in",
     },
     chat: {
@@ -1023,6 +1308,7 @@ export const MANAGED_MOBILE_TEXT = {
       stop: "Stop",
       retryLast: "Retry last",
       uploadImage: "Attach image",
+      attachFile: "Attach image or file",
       camera: "Camera",
       voiceInput: "Voice input",
       voicePrompt: "Start speaking",
@@ -1113,6 +1399,14 @@ export const MANAGED_MOBILE_TEXT = {
       addReference: "Add reference",
       clearReferences: "Clear references",
       referenceHint: "Multiple references are supported and stay on device.",
+      noReferenceModel:
+        "No model in the current group supports reference images.",
+      referenceModelUnsupported: (name: string) =>
+        `${
+          name || "The selected model"
+        } does not support reference-image editing. Choose Gemini or GPT Image.`,
+      referenceModelSwitched: (name: string) =>
+        `Switched to a reference-image model: ${name}`,
       model: "Model",
       size: "Size",
       quality: "Clarity",
@@ -1223,6 +1517,16 @@ export const MANAGED_MOBILE_TEXT = {
       orders: "Orders",
       balanceDetails: "Balance details",
       redeemCenter: "Redeem",
+      coupons: "My coupons",
+      couponAvailable: "Available",
+      couponLocked: "Locked",
+      couponUsed: "Used",
+      couponExpired: "Expired",
+      noCoupons: "No coupons",
+      noCoupon: "Do not use a coupon",
+      chooseCoupon: "Choose coupon",
+      couponDiscount: "Discount",
+      couponFinalAmount: "Final amount",
       redeemShortHint: "Code",
       redeemCenterHint: "Use redeem, campaign, or plan codes",
       redeemCode: "Redeem code",
@@ -1306,6 +1610,9 @@ export const MANAGED_MOBILE_TEXT = {
       welfareTeamCaptainReplyWithin: (hours: number) =>
         `The captain will respond within ${hours} hours`,
       welfareTeamAdmissionUnavailable: "Team applications are unavailable now",
+      welfareTeamCaptainAccessUnavailable:
+        "Captain review access is unavailable. Refresh and try again.",
+      welfareTeamFull: "Team is full",
       welfareTeamCooldownUntil: (time: string) => `Cooldown ends ${time}`,
       welfareTeamApplyTo: (name: string) => `Apply to join ${name}`,
       welfareTeamApplicationMessage: "Application message (optional)",
@@ -1488,6 +1795,12 @@ export const MANAGED_MOBILE_TEXT = {
       validityDays: (days: number | string) => `${days} days`,
       includedBalance: "Included quota",
       usageProgress: "Usage",
+      dailyUsage: "Daily quota",
+      weeklyUsage: "Weekly quota",
+      monthlyUsage: "Monthly quota",
+      dailyCardUsage: "Daily card quota",
+      unlimitedUsage: "Unlimited",
+      unavailableUsage: "Usage unavailable",
       remaining: "Remaining",
       used: "Used",
       total: "Total",
@@ -1551,6 +1864,9 @@ export const MANAGED_MOBILE_TEXT = {
       logoutConfirmTitle: "Sign out?",
       logoutConfirmBody:
         "You will need to sign in again to sync balance, groups, and models.",
+      keepSavedAccount: "Keep the account saved on this device",
+      logoutKeepAccount: "Keep account and sign out",
+      logoutClearAll: "Clear everything and sign out",
       logoutCancel: "Keep using",
       logoutConfirm: "Sign out",
       currentGroup: "Current group",
@@ -1640,6 +1956,30 @@ export function localizeManagedMobileError(input: {
     /404|not found|page not found|不存在/.test(normalized)
   ) {
     return text.errors.notFound;
+  }
+  if (input.status === 503) {
+    return text.errors.serviceUnavailable;
+  }
+  if (input.status === 502) {
+    return text.errors.serviceBusy;
+  }
+  if (
+    input.status === 401 &&
+    input.path?.includes("/auth/") &&
+    /invalid credentials|incorrect|密码不正确|邮箱或密码错误|凭据/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.invalidCredentials;
+  }
+  if (input.status === 401) {
+    return text.errors.unauthorized;
+  }
+  if (/timeout|timed out|超时/.test(normalized)) {
+    return text.errors.requestTimeout;
+  }
+  if (/device.*offline|device is offline|设备.*离线/.test(normalized)) {
+    return text.errors.offline;
   }
   if (/failed to fetch|network|网络/.test(normalized)) {
     return text.errors.networkFailed;
@@ -1761,11 +2101,10 @@ export function localizeManagedMobileError(input: {
   ) {
     return text.errors.invalidCredentials;
   }
-  if (input.status === 401 || /unauthorized|登录状态|token/.test(normalized)) {
+  if (/unauthorized|登录状态|token/.test(normalized)) {
     return text.errors.unauthorized;
   }
   if (
-    input.status === 503 ||
     /service unavailable|temporarily unavailable|服务器暂时不可用/.test(
       normalized,
     )
@@ -1776,7 +2115,6 @@ export function localizeManagedMobileError(input: {
     return text.errors.imageServiceBusy;
   }
   if (
-    input.status === 502 ||
     /bad gateway|cloudflare|origin server|retry_after|upstream|overloaded/.test(
       normalized,
     )
@@ -1799,4 +2137,20 @@ export function localizeManagedMobileError(input: {
   if (raw) return raw;
   if (input.status) return text.errors.requestFailed(input.status);
   return text.errors.serviceUnavailable;
+}
+
+export function formatManagedMobileError(input: {
+  message?: string;
+  status?: number;
+  path?: string;
+  category: string;
+  requestId: string;
+}) {
+  const label = localizeManagedMobileError(input);
+  const details = [
+    input.status ? `HTTP ${input.status}` : "HTTP unavailable",
+    input.category,
+    `request ${input.requestId}`,
+  ];
+  return `${label} (${details.join(", ")})`;
 }

@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { execFileSync } from "child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -27,6 +28,29 @@ const outApkTarget = path.join(outDownloadsDir, "jisudengchat-android.apk");
 const outManifestPath = path.join(outDownloadsDir, "android-version.json");
 const legacyApkTarget = path.join(downloadsDir, "nextchat-android.apk");
 const legacyOutApkTarget = path.join(outDownloadsDir, "nextchat-android.apk");
+const releaseArtifactPaths = new Set([
+  "public/downloads/android-version.json",
+  "public/downloads/jisudengchat-android.apk",
+  "out/downloads/android-version.json",
+  "out/downloads/jisudengchat-android.apk",
+]);
+
+function gitOutput(args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf-8" }).trim();
+}
+
+function assertReleaseSourceIsClean() {
+  const dirtyPaths = gitOutput(["status", "--porcelain=v1"])
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.slice(3).trim())
+    .filter((file) => !releaseArtifactPaths.has(file));
+  if (dirtyPaths.length) {
+    throw new Error(
+      `Refusing to package from a dirty source tree: ${dirtyPaths.join(", ")}`,
+    );
+  }
+}
 
 function readJson(file) {
   return JSON.parse(readFileSync(file, "utf-8"));
@@ -48,6 +72,9 @@ if (!existsSync(apkSource)) {
   throw new Error(`Release APK not found: ${apkSource}`);
 }
 
+assertReleaseSourceIsClean();
+const sourceCommit = gitOutput(["rev-parse", "HEAD"]);
+
 mkdirSync(downloadsDir, { recursive: true });
 copyFileSync(apkSource, apkTarget);
 chmodSync(apkTarget, 0o644);
@@ -61,13 +88,27 @@ const metadata = existsSync(metadataPath) ? readJson(metadataPath) : {};
 const firstOutput = metadata?.elements?.[0] ?? {};
 const existingManifest = existsSync(manifestPath) ? readJson(manifestPath) : {};
 
-const version =
-  process.env.ANDROID_VERSION_NAME ||
-  firstOutput.versionName ||
-  existingManifest.version ||
-  "1.0.0";
-const versionCode =
-  Number(process.env.ANDROID_VERSION_CODE || firstOutput.versionCode || 1) || 1;
+if (!firstOutput.versionName || !Number(firstOutput.versionCode)) {
+  throw new Error("Release APK metadata is missing versionName/versionCode");
+}
+
+const version = process.env.ANDROID_VERSION_NAME || firstOutput.versionName;
+const versionCode = Number(
+  process.env.ANDROID_VERSION_CODE || firstOutput.versionCode,
+);
+if (!version || !Number.isInteger(versionCode) || versionCode < 1) {
+  throw new Error("Invalid Android release version metadata");
+}
+const previousVersionCode = Number(existingManifest.versionCode || 0);
+if (previousVersionCode && versionCode <= previousVersionCode) {
+  throw new Error(
+    `Android versionCode must increase (previous ${previousVersionCode}, received ${versionCode})`,
+  );
+}
+const canonicalApkUrl = `/downloads/jisudengchat-android.apk?v=${encodeURIComponent(
+  `${version}-${versionCode}`,
+)}`;
+const existingApkUrl = existingManifest.apkUrl || "";
 const envNotes = parseNotes(
   process.env.ANDROID_RELEASE_NOTES ||
     process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES,
@@ -77,14 +118,18 @@ const manifest = {
   ...existingManifest,
   platform: "android",
   version,
+  latestVersion: version,
   versionCode,
+  sourceCommit,
   packageName: "com.jisudeng.chat",
   signingCertificateSha256:
     "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   apkUrl:
-    existingManifest.apkUrl === "/downloads/nextchat-android.apk"
-      ? "/downloads/jisudengchat-android.apk"
-      : existingManifest.apkUrl || "/downloads/jisudengchat-android.apk",
+    !existingApkUrl ||
+    existingApkUrl === "/downloads/nextchat-android.apk" ||
+    existingApkUrl.startsWith("/downloads/jisudengchat-android.apk")
+      ? canonicalApkUrl
+      : existingApkUrl,
   size: formatBytes(apk.length),
   bytes: apk.length,
   sha256,

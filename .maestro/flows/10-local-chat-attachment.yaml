@@ -1,0 +1,18 @@
+appId: com.jisudeng.chat
+name: Chat image attachment stays local when cloud material storage is unavailable
+tags:
+  - core
+---
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "dashboard-new-chat"
+- tapOn: "更多功能|More tools"
+- tapOn: "添加图片或文件|Attach image or file"
+- tapOn: "jisudeng-e2e-reference.png"
+- assertVisible: "已在本机附加|Attached on this device"
+- tapOn: "chat-composer"
+- inputText: "maestro-local-chat-image"
+- hideKeyboard
+- tapOn: "chat-send"
+- assertVisible: "maestro-local-chat-image"

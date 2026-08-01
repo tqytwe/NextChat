@@ -1,0 +1,9 @@
+appId: com.jisudeng.chat
+---
+- runFlow:
+    when:
+      visible: "login-email"
+    file: login.yaml
+- extendedWaitUntil:
+    visible: "dashboard-default-group"
+    timeout: 30000
