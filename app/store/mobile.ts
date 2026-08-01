@@ -154,6 +154,10 @@ function emptyMobileAccount(): MobileAccountState {
   return { chatSessions: [], currentChatId: "", contentKits: [] };
 }
 
+function hasLegacyMobileData(state: ManagedMobileState) {
+  return state.chatSessions.length > 0 || state.contentKits.length > 0;
+}
+
 function migrateContentKit(kit: any): ManagedMobileContentKit {
   const fallbackRunId =
     kit.activeRunId || `content-kit-run-${kit.id || newId("legacy")}`;
@@ -208,6 +212,7 @@ export const useManagedMobileAppStore = createPersistStore<
   {
     activateAccount: (userId: number | string) => void;
     clearActiveAccount: () => void;
+    clearAllAccounts: () => void;
     ensureChatSession: (model: string, groupId?: number) => string;
     createChatSession: (model: string, groupId?: number) => string;
     setCurrentChatId: (id: string) => void;
@@ -295,7 +300,7 @@ export const useManagedMobileAppStore = createPersistStore<
 
         // Attribute pre-v2 data to the first authenticated account after upgrade.
         const legacy =
-          !state.activeAccountId && state.chatSessions.length
+          !state.activeAccountId && hasLegacyMobileData(state)
             ? {
                 chatSessions: state.chatSessions,
                 currentChatId: state.currentChatId,
@@ -322,6 +327,14 @@ export const useManagedMobileAppStore = createPersistStore<
           accounts: state.activeAccountId
             ? { ...state.accounts, [state.activeAccountId]: empty }
             : state.accounts,
+        });
+      },
+
+      clearAllAccounts() {
+        set({
+          ...emptyMobileAccount(),
+          activeAccountId: "",
+          accounts: {},
         });
       },
 

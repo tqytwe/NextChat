@@ -189,8 +189,19 @@ describe("mobile app backend alignment", () => {
     expect(switchGroup).toContain("await managed.switchGroup(groupID)");
   });
 
-  test("keeps account and content-kit pages on the standard scroll container", () => {
+  test("uses the document scroller for long pages while keeping chat independent", () => {
     expect(source).not.toContain("scrollCapture");
+    expect(source).toContain("documentScroll?: boolean;");
+    expect(source).toContain(
+      'const usesDocumentScroll = props.documentScroll ?? props.active !== "chat";',
+    );
+    const dashboard = source.slice(
+      source.indexOf("function AndroidDashboard()"),
+      source.indexOf("function ChatSessionDrawer("),
+    );
+    expect(dashboard).toContain(
+      '<AndroidAppShell active="chat" text={text} documentScroll>',
+    );
     const stylesheet = readFileSync(
       resolve(process.cwd(), "app/components/mobile-app.module.scss"),
       "utf8",
@@ -198,6 +209,12 @@ describe("mobile app backend alignment", () => {
     expect(stylesheet).not.toContain(".scroll-capture");
     expect(stylesheet).toContain(".app-scroll {");
     expect(stylesheet).toContain("overflow-y: auto;");
+    const globalStyles = readFileSync(
+      resolve(process.cwd(), "app/styles/globals.scss"),
+      "utf8",
+    );
+    expect(globalStyles).toContain("html.mobile-document-scroll");
+    expect(globalStyles).toContain("body.mobile-document-scroll");
   });
 
   test("does not erase the saved default group before workspace models load", () => {
@@ -217,6 +234,15 @@ describe("mobile app backend alignment", () => {
     expect(chat).toContain(
       "if (!effectiveChatGroupId) return;\n    persistChatPreference(",
     );
+  });
+
+  test("migrates a legacy default group to only the first signed-in account", () => {
+    const storage = source.slice(
+      source.indexOf("function readStoredJSON"),
+      source.indexOf("function writeStoredJSON"),
+    );
+    expect(storage).toContain("localStorage.setItem(scopedKey, raw)");
+    expect(storage).toContain("localStorage.removeItem(key)");
   });
 
   test("uses the saved draft group when opening chat without a session", () => {

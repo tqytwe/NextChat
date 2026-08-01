@@ -58,6 +58,7 @@ export const useSdStore = createPersistStore<
   {
     activateAccount: (userId: number | string) => void;
     clearActiveAccount: () => void;
+    clearAllAccounts: () => void;
     getNextId: () => number;
     sendTask: (data: any, okCall?: Function) => void;
     updateDraw: (draw: any) => void;
@@ -128,6 +129,14 @@ export const useSdStore = createPersistStore<
           accounts: state.activeAccountId
             ? { ...state.accounts, [state.activeAccountId]: empty }
             : state.accounts,
+        });
+      },
+
+      clearAllAccounts() {
+        set({
+          ...emptySdAccount(),
+          activeAccountId: "",
+          accounts: {},
         });
       },
 

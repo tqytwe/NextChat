@@ -53,6 +53,7 @@ import type {
 } from "../store/mobile";
 import { localizedMobileDisplay } from "../client/mobile-display";
 import { compressImage, removeImage } from "../utils/chat";
+import { indexedDBStorage } from "../utils/indexedDB-storage";
 import {
   ManagedApiError,
   ManagedTransportError,
@@ -76,6 +77,7 @@ import {
 } from "../client/managed-mobile-i18n";
 import {
   formatUsageUSD,
+  mergeSubscriptionProgress,
   planUsageInfo,
   subscriptionUsagePeriods,
 } from "../client/mobile-subscription";
@@ -2448,7 +2450,7 @@ function writeGalleryPreferences(preferences: GalleryPreferences) {
 function accountStorageKey(key: string) {
   const state = useManagedNextChatStore.getState();
   const userId =
-    state.user?.id || state.workspace?.user?.id || state.session?.user_id;
+    state.workspace?.user?.id || state.user?.id || state.session?.user_id;
   return userId ? `${key}:user:${userId}` : key;
 }
 
@@ -3276,8 +3278,9 @@ function AndroidAppShell(props: {
   active: AndroidTab;
   text: ManagedMobileText;
   children: ReactNode;
+  documentScroll?: boolean;
 }) {
-  const usesDocumentScroll = props.active !== "chat";
+  const usesDocumentScroll = props.documentScroll ?? props.active !== "chat";
   useNativeDocumentScroll(usesDocumentScroll);
 
   return (
@@ -4029,7 +4032,7 @@ function AndroidDashboard() {
   }
 
   return (
-    <AndroidAppShell active="chat" text={text}>
+    <AndroidAppShell active="chat" text={text} documentScroll>
       <header className={styles["dashboard-header"]}>
         <div>
           <span>
@@ -4296,7 +4299,9 @@ function AndroidDashboard() {
                         {chatSessionDisplayTitle(session, text).slice(0, 1)}
                       </i>
                       <span>
-                        <strong>{chatSessionDisplayTitle(session, text)}</strong>
+                        <strong>
+                          {chatSessionDisplayTitle(session, text)}
+                        </strong>
                         <small>{preview}</small>
                       </span>
                       <em>{formatSyncTime(session.updatedAt, text)}</em>
@@ -11887,6 +11892,7 @@ function localizedSubscriptionStatus(status: string, text: ManagedMobileText) {
         queued: "待生效",
         exhausted: "额度已用完",
         expired: "已过期",
+        suspended: "已暂停",
         revoked: "已撤销",
         cancelled: "已取消",
         canceled: "已取消",
@@ -11897,6 +11903,7 @@ function localizedSubscriptionStatus(status: string, text: ManagedMobileText) {
         queued: "Queued",
         exhausted: "Quota exhausted",
         expired: "Expired",
+        suspended: "Suspended",
         revoked: "Revoked",
         cancelled: "Cancelled",
         canceled: "Cancelled",
@@ -12364,35 +12371,25 @@ function AndroidAccountSettings() {
 
   async function signOut(clearAll: boolean) {
     setShowLogoutConfirm(false);
-    const userId = String(
-      managed.user?.id ||
-        managed.workspace?.user?.id ||
-        managed.session?.user_id ||
-        "",
-    );
-    if (clearAll) {
-      await clearLoginCredentials().catch(() => undefined);
-      if (userId) {
-        const localImages = await listAppImages(userId).catch(() => []);
-        const fileNames = localImages
-          .map((item) => item.fileName || "")
-          .filter(Boolean);
-        if (fileNames.length) {
-          await deleteAppImages(fileNames).catch(() => undefined);
-        }
-        const suffix = `:user:${userId}`;
-        Object.keys(localStorage).forEach((key) => {
-          if (key.endsWith(suffix)) localStorage.removeItem(key);
-        });
-      }
-      mobileStore.clearActiveAccount();
-      sdStore.clearActiveAccount();
-    }
     const installationId = mobileInstallationId();
     if (installationId) {
       await mobilePlatformClient()
         .then((client) => client.devices.delete(installationId))
         .catch(() => undefined);
+    }
+    if (clearAll) {
+      await clearLoginCredentials().catch(() => undefined);
+      const localImages = await listAppImages().catch(() => []);
+      const fileNames = localImages
+        .map((item) => item.fileName || "")
+        .filter(Boolean);
+      if (fileNames.length) {
+        await deleteAppImages(fileNames).catch(() => undefined);
+      }
+      localStorage.clear();
+      await indexedDBStorage.clear().catch(() => undefined);
+      mobileStore.clearAllAccounts();
+      sdStore.clearAllAccounts();
     }
     await managed.logout();
   }
@@ -13078,20 +13075,30 @@ function AndroidAccountSettings() {
         return { status: "rejected", reason };
       }
     };
-    const [orders, transactions, wallet, plans, subscriptions] =
-      await Promise.all([
-        settle("/api/v1/payment/orders/my?page=1&page_size=30"),
-        settle("/api/v1/user/wallet/transactions?page=1&page_size=30"),
-        settle("/api/v1/user/wallet/summary"),
-        settle("/api/v1/payment/plans"),
-        settle("/api/v1/subscriptions"),
-      ]);
+    const [
+      orders,
+      transactions,
+      wallet,
+      plans,
+      subscriptions,
+      subscriptionProgress,
+    ] = await Promise.all([
+      settle("/api/v1/payment/orders/my?page=1&page_size=30"),
+      settle("/api/v1/user/wallet/transactions?page=1&page_size=30"),
+      settle("/api/v1/user/wallet/summary"),
+      settle("/api/v1/payment/plans"),
+      settle("/api/v1/subscriptions"),
+      settle("/api/v1/subscriptions/progress"),
+    ]);
+    const subscriptionsAvailable =
+      subscriptions.status === "fulfilled" ||
+      subscriptionProgress.status === "fulfilled";
     const failures = [
       orders.status === "rejected" ? text.account.orders : "",
       transactions.status === "rejected" ? text.account.balanceDetails : "",
       wallet.status === "rejected" ? text.account.balance : "",
       plans.status === "rejected" ? text.account.packages : "",
-      subscriptions.status === "rejected" ? text.account.subscriptions : "",
+      !subscriptionsAvailable ? text.account.subscriptions : "",
     ].filter(Boolean);
     setAccountData((state) => {
       const hasAnySuccess = [
@@ -13100,7 +13107,16 @@ function AndroidAccountSettings() {
         wallet,
         plans,
         subscriptions,
+        subscriptionProgress,
       ].some((result) => result.status === "fulfilled");
+      const subscriptionRecords =
+        subscriptions.status === "fulfilled"
+          ? arrayPayload(subscriptions.value)
+          : [];
+      const progressRecords =
+        subscriptionProgress.status === "fulfilled"
+          ? arrayPayload(subscriptionProgress.value)
+          : [];
       if (hasAnySuccess) {
         managed.clearLastError();
       }
@@ -13122,10 +13138,9 @@ function AndroidAccountSettings() {
           plans.status === "fulfilled"
             ? arrayPayload(plans.value)
             : state.plans,
-        subscriptions:
-          subscriptions.status === "fulfilled"
-            ? arrayPayload(subscriptions.value)
-            : state.subscriptions,
+        subscriptions: subscriptionsAvailable
+          ? mergeSubscriptionProgress(subscriptionRecords, progressRecords)
+          : state.subscriptions,
       };
     });
   }

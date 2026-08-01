@@ -17,24 +17,6 @@
     "SF Pro Text", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
 }
 
-// Android scroll capture only follows the document scroller reliably. Detail,
-// account, project, gallery, and image pages opt in at runtime; chat keeps its
-// independent message viewport so the composer remains fixed above the IME.
-:global(html.mobile-document-scroll) {
-  height: auto;
-  min-height: 100dvh;
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
-:global(body.mobile-document-scroll) {
-  display: block;
-  width: 100%;
-  height: auto;
-  min-height: 100dvh;
-  overflow: visible;
-}
-
 .mobile-app.native-page {
   height: auto;
   min-height: 100dvh;

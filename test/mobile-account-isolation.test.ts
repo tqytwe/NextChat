@@ -54,6 +54,21 @@ describe("managed mobile account isolation", () => {
     expect(useManagedMobileAppStore.getState().chatSessions).toHaveLength(1);
   });
 
+  test("clears every account only when the user chooses clear all", () => {
+    const store = useManagedMobileAppStore.getState();
+    store.activateAccount(101);
+    store.createChatSession("model-a", 1);
+    useManagedMobileAppStore.getState().activateAccount(202);
+    useManagedMobileAppStore.getState().createChatSession("model-b", 2);
+
+    useManagedMobileAppStore.getState().clearAllAccounts();
+    const cleared = useManagedMobileAppStore.getState();
+    expect(cleared.activeAccountId).toBe("");
+    expect(cleared.chatSessions).toEqual([]);
+    expect(cleared.contentKits).toEqual([]);
+    expect(cleared.accounts).toEqual({});
+  });
+
   test("keeps content kit inputs and results isolated by account", () => {
     const store = useManagedMobileAppStore.getState();
     store.activateAccount(101);
@@ -77,6 +92,39 @@ describe("managed mobile account isolation", () => {
       productName: "Account 101 product",
       model: "gpt-image-private-alias",
     });
+  });
+
+  test("attributes a legacy content-kit-only store to the first account", () => {
+    useManagedMobileAppStore.setState({
+      activeAccountId: "",
+      accounts: {},
+      chatSessions: [],
+      currentChatId: "",
+      contentKits: [
+        {
+          id: "legacy-kit",
+          accountId: "",
+          version: 1,
+          productName: "Saved product",
+          sellingPoints: "Saved points",
+          audience: "",
+          platform: "",
+          tone: "",
+          model: "image-model",
+          referenceImages: [],
+          assets: [],
+          copyStatus: "completed",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+
+    useManagedMobileAppStore.getState().activateAccount(101);
+    expect(useManagedMobileAppStore.getState().contentKits).toHaveLength(1);
+    expect(useManagedMobileAppStore.getState().contentKits[0].id).toBe(
+      "legacy-kit",
+    );
   });
 
   test("persists a multi-output content-kit run without collapsing repeated shot groups", () => {

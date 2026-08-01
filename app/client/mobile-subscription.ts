@@ -59,6 +59,62 @@ function matchingSubscription(plan: any, subscriptions: any[] = []) {
   });
 }
 
+function subscriptionRecordID(subscription: any) {
+  const value = subscription?.id ?? subscription?.subscription_id;
+  const id = String(value ?? "").trim();
+  return id || "";
+}
+
+/**
+ * The legacy subscriptions endpoint returns subscription records, while the
+ * progress endpoint returns { subscription, progress } pairs. Keep one record
+ * per subscription so the account UI can use the same rendering path either
+ * way.
+ */
+export function mergeSubscriptionProgress(
+  subscriptions: any[] = [],
+  progressItems: any[] = [],
+) {
+  const progressBySubscriptionID = new Map<string, any>();
+
+  for (const item of progressItems) {
+    const subscription =
+      item?.subscription && typeof item.subscription === "object"
+        ? item.subscription
+        : undefined;
+    const id = subscriptionRecordID(subscription);
+    if (!id) continue;
+    progressBySubscriptionID.set(id, {
+      subscription,
+      progress: item?.progress,
+    });
+  }
+
+  const seen = new Set<string>();
+  const merged = subscriptions.map((subscription) => {
+    const id = subscriptionRecordID(subscription);
+    if (!id) return subscription;
+    seen.add(id);
+    const item = progressBySubscriptionID.get(id);
+    if (!item) return subscription;
+    return {
+      ...subscription,
+      ...item.subscription,
+      ...(item.progress ? { progress: item.progress } : {}),
+    };
+  });
+
+  for (const [id, item] of progressBySubscriptionID) {
+    if (seen.has(id)) continue;
+    merged.push({
+      ...item.subscription,
+      ...(item.progress ? { progress: item.progress } : {}),
+    });
+  }
+
+  return merged;
+}
+
 export function planUsageInfo(plan: any, subscriptions: any[] = []) {
   const subscription = matchingSubscription(plan, subscriptions);
   const source = subscription || plan || {};
@@ -124,7 +180,9 @@ function usageWindowPeriod(
     numericUsage(progressWindow?.limit_usd) ?? numericUsage(group[limitKey]);
   if (!limit || limit <= 0) return [];
   const used =
-    numericUsage(progressWindow?.used_usd) ?? numericUsage(subscription[usedKey]) ?? 0;
+    numericUsage(progressWindow?.used_usd) ??
+    numericUsage(subscription[usedKey]) ??
+    0;
   const remaining =
     numericUsage(progressWindow?.remaining_usd) ?? Math.max(0, limit - used);
   return [{ label, used, limit, remaining }];
