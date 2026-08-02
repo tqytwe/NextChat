@@ -1,20 +1,18 @@
 {
   "platform": "android",
-  "version": "2.0.69",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.69-269",
+  "version": "2.0.70",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.70-270",
   "size": "7.1 MB",
-  "sha256": "f319d4bcb980bf73cee81881c96e874e2d47d38ef31e67c46645fb9f65e73d66",
+  "sha256": "6b1dc324f0d0be1a6fd0f11f1ad9518d85336dfe936ede6389632fd4a99404d7",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-08-02",
   "notes": [
-    "修复覆盖安装后的本地数据迁移、记住账号、套餐用量进度与 Android 原生滚动",
-    "恢复套件、战队和聊天附件入口",
-    "退出登录在同步期间仍可操作"
+    "修复首页双击返回退出、批量参考图任务、会话模型继承和完成态操作图标"
   ],
-  "versionCode": 269,
-  "bytes": 7493149,
+  "versionCode": 270,
+  "bytes": 7493348,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "2.0.69",
-  "sourceCommit": "0001df0f1fcdcad3a78723d9eb523fd69c225b50"
+  "latestVersion": "2.0.70",
+  "sourceCommit": "96d361229bae24d81827ee8140165303550ecb67"
 }
