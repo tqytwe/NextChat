@@ -135,6 +135,7 @@ import {
   createInvitePosterDataUrl,
   getInviteInstallationId,
   getStableInviteEventId,
+  INVITE_POSTER_THEMES,
   loadInviteReferral,
   reportInviteLifecycleEvent,
   resolveInviteReferral,
@@ -16390,20 +16391,18 @@ function AndroidAccountSettings() {
                     <h3>{text.account.inviteGrowthShare}</h3>
                   </div>
                   <div className={styles["invite-poster-themes"]}>
-                    {(["midnight", "light", "celebration"] as const).map(
-                      (theme) => (
-                        <button
-                          key={theme}
-                          type="button"
-                          className={clsx({
-                            [styles["active"]]: invitePosterTheme === theme,
-                          })}
-                          onClick={() => setInvitePosterTheme(theme)}
-                        >
-                          {text.account.invitePosterThemes[theme]}
-                        </button>
-                      ),
-                    )}
+                    {INVITE_POSTER_THEMES.map((theme) => (
+                      <button
+                        key={theme}
+                        type="button"
+                        className={clsx({
+                          [styles["active"]]: invitePosterTheme === theme,
+                        })}
+                        onClick={() => setInvitePosterTheme(theme)}
+                      >
+                        {text.account.invitePosterThemes[theme]}
+                      </button>
+                    ))}
                   </div>
                   <div className={styles["inline-actions"]}>
                     <button

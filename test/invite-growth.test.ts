@@ -167,27 +167,35 @@ describe("invite growth client", () => {
     expect(payload.appLabel).toBe("Download the APP");
   });
 
-  test.each(["midnight", "light", "celebration"] as const)(
-    "builds the %s poster with Chinese dual-QR labels",
-    (theme) => {
-      const payload = growth.buildInvitePosterPayload({
-        registerUrl:
-          "https://www.jisudeng.com/register?invite_token=signed-token",
-        appUrl:
-          "https://www.jisudeng.com/download/android?invite_token=signed-token",
-        headline: "邀请好友，解锁活动奖励",
-        body: "好友完成充值与消费后计为有效邀请。",
-        locale: "zh-CN",
-        theme,
-      });
+  test.each([
+    "midnight",
+    "light",
+    "celebration",
+    "mint",
+    "coral",
+    "gold",
+    "sky",
+    "forest",
+    "ink",
+    "sun",
+  ] as const)("builds the %s poster with Chinese dual-QR labels", (theme) => {
+    const payload = growth.buildInvitePosterPayload({
+      registerUrl:
+        "https://www.jisudeng.com/register?invite_token=signed-token",
+      appUrl:
+        "https://www.jisudeng.com/download/android?invite_token=signed-token",
+      headline: "邀请好友，解锁活动奖励",
+      body: "好友完成充值与消费后计为有效邀请。",
+      locale: "zh-CN",
+      theme,
+    });
 
-      expect(payload.theme).toBe(theme);
-      expect(payload.registerLabel).toBe("扫码参加网页活动");
-      expect(payload.appLabel).toBe("扫码下载 APP");
-      expect(payload.registerQrValue).toContain("/register");
-      expect(payload.appQrValue).toContain("/download/android");
-    },
-  );
+    expect(payload.theme).toBe(theme);
+    expect(payload.registerLabel).toBe("扫码参加网页活动");
+    expect(payload.appLabel).toBe("扫码下载 APP");
+    expect(payload.registerQrValue).toContain("/register");
+    expect(payload.appQrValue).toContain("/download/android");
+  });
 
   test("keeps the signed campaign attribution in both poster QR destinations", () => {
     const payload = growth.buildInvitePosterPayload({

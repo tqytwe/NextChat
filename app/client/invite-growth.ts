@@ -286,7 +286,20 @@ export interface InvitePosterInput {
   theme?: InvitePosterTheme;
 }
 
-export type InvitePosterTheme = "midnight" | "light" | "celebration";
+export const INVITE_POSTER_THEMES = [
+  "midnight",
+  "light",
+  "celebration",
+  "mint",
+  "coral",
+  "gold",
+  "sky",
+  "forest",
+  "ink",
+  "sun",
+] as const;
+
+export type InvitePosterTheme = (typeof INVITE_POSTER_THEMES)[number];
 
 export interface InviteCampaignReward {
   id: number;
@@ -379,32 +392,14 @@ export async function createInvitePosterDataUrl(
   canvas.height = Math.round(width * 1.25);
   const context = canvas.getContext("2d");
   if (!context) throw new Error("invite poster canvas unavailable");
-  const palette =
-    payload.theme === "light"
-      ? {
-          background: "#f4f6f8",
-          title: "#111318",
-          body: "#374151",
-          accent: "#0066cc",
-          panel: "#ffffff",
-        }
-      : payload.theme === "celebration"
-      ? {
-          background: "#8b1e2d",
-          title: "#ffffff",
-          body: "#ffe4c7",
-          accent: "#ffd166",
-          panel: "#ffffff",
-        }
-      : {
-          background: "#111318",
-          title: "#ffffff",
-          body: "#d6d9e0",
-          accent: "#66b3ff",
-          panel: "#ffffff",
-        };
-  context.fillStyle = palette.background;
-  context.fillRect(0, 0, canvas.width, canvas.height);
+  const palette = invitePosterPalette(payload.theme);
+  drawInvitePosterBackground(
+    context,
+    canvas.width,
+    canvas.height,
+    payload.theme,
+    palette,
+  );
   context.fillStyle = palette.accent;
   context.font = "700 28px sans-serif";
   context.fillText("JisudengChat", 64, 72);
@@ -446,6 +441,184 @@ export async function createInvitePosterDataUrl(
     : "Join on the web or download the APP";
   drawPosterText(context, footer, 64, canvas.height - 92, width - 128, 34, 2);
   return canvas.toDataURL("image/png");
+}
+
+type InvitePosterPalette = {
+  background: string;
+  title: string;
+  body: string;
+  accent: string;
+  panel: string;
+};
+
+function invitePosterPalette(
+  theme: InvitePosterTheme = "midnight",
+): InvitePosterPalette {
+  const palettes: Record<InvitePosterTheme, InvitePosterPalette> = {
+    midnight: {
+      background: "#101720",
+      title: "#ffffff",
+      body: "#d6d9e0",
+      accent: "#66b3ff",
+      panel: "#ffffff",
+    },
+    light: {
+      background: "#f4f6f8",
+      title: "#111318",
+      body: "#374151",
+      accent: "#0066cc",
+      panel: "#ffffff",
+    },
+    celebration: {
+      background: "#8b1e2d",
+      title: "#ffffff",
+      body: "#ffe4c7",
+      accent: "#ffd166",
+      panel: "#ffffff",
+    },
+    mint: {
+      background: "#093b38",
+      title: "#f3fffb",
+      body: "#c5efe4",
+      accent: "#6ee7cc",
+      panel: "#ffffff",
+    },
+    coral: {
+      background: "#f26e5e",
+      title: "#382121",
+      body: "#542e29",
+      accent: "#ffffff",
+      panel: "#ffffff",
+    },
+    gold: {
+      background: "#16130e",
+      title: "#fff8e7",
+      body: "#e5d5b2",
+      accent: "#e5bb65",
+      panel: "#ffffff",
+    },
+    sky: {
+      background: "#dff2ff",
+      title: "#12364e",
+      body: "#28536f",
+      accent: "#1169a5",
+      panel: "#ffffff",
+    },
+    forest: {
+      background: "#247146",
+      title: "#f6fff9",
+      body: "#ccead8",
+      accent: "#ffe58a",
+      panel: "#ffffff",
+    },
+    ink: {
+      background: "#24242a",
+      title: "#f8f8fa",
+      body: "#d5d5dc",
+      accent: "#ff8c69",
+      panel: "#ffffff",
+    },
+    sun: {
+      background: "#ffd659",
+      title: "#1f2840",
+      body: "#35425c",
+      accent: "#1f2840",
+      panel: "#ffffff",
+    },
+  };
+  return palettes[theme];
+}
+
+function drawInvitePosterBackground(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  theme: InvitePosterTheme | undefined,
+  palette: InvitePosterPalette,
+) {
+  context.fillStyle = palette.background;
+  context.fillRect(0, 0, width, height);
+  context.save();
+  context.strokeStyle = palette.accent;
+  context.fillStyle = palette.accent;
+  context.globalAlpha = 0.18;
+  context.lineWidth = 3;
+
+  switch (theme) {
+    case "light":
+    case "sky":
+      for (let x = 30; x < width; x += 70) {
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, height);
+        context.stroke();
+      }
+      for (let y = 30; y < height; y += 70) {
+        context.beginPath();
+        context.moveTo(0, y);
+        context.lineTo(width, y);
+        context.stroke();
+      }
+      break;
+    case "celebration":
+    case "sun":
+      for (let index = 0; index < 30; index += 1) {
+        context.fillRect(
+          (index * 137) % width,
+          50 + ((index * 97) % 560),
+          9,
+          28,
+        );
+      }
+      break;
+    case "mint":
+    case "forest":
+      for (let index = 0; index < 7; index += 1) {
+        const x = 70 + index * 142;
+        const y = 430 + (index % 2) * 78;
+        context.beginPath();
+        context.arc(x, y, 22, 0, Math.PI * 2);
+        context.fill();
+        if (index) {
+          context.beginPath();
+          context.moveTo(x - 112, 430 + ((index - 1) % 2) * 78);
+          context.lineTo(x - 24, y);
+          context.stroke();
+        }
+      }
+      break;
+    case "coral":
+    case "ink":
+      for (let index = 0; index < 5; index += 1) {
+        const x = 70 + index * 210;
+        const y = 390 + (index % 2) * 64;
+        context.strokeRect(x, y, 150, 94);
+        context.fillRect(x + 20, y + 22, 82, 8);
+        context.fillRect(x + 20, y + 48, 112, 8);
+      }
+      break;
+    case "gold":
+      for (let y = 85; y < 480; y += 52) {
+        for (let x = 60; x < width; x += 92) context.fillRect(x, y, 36, 13);
+      }
+      break;
+    case "midnight":
+    default:
+      for (let index = 0; index < 9; index += 1) {
+        const x = 70 + index * 120;
+        const y = 440 + (index % 3) * 52;
+        context.beginPath();
+        context.arc(x, y, 16, 0, Math.PI * 2);
+        context.fill();
+        if (index < 8) {
+          context.beginPath();
+          context.moveTo(x + 16, y);
+          context.lineTo(x + 104, 440 + ((index + 1) % 3) * 52);
+          context.stroke();
+        }
+      }
+  }
+  context.restore();
 }
 
 function drawCenteredPosterLabel(
