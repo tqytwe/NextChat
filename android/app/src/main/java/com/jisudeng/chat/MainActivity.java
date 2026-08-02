@@ -26,6 +26,7 @@ import android.net.Network;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.widget.Toast;
 import android.provider.OpenableColumns;
 import android.provider.MediaStore;
 import android.provider.Settings;
@@ -746,6 +747,18 @@ public class MainActivity extends Activity {
                     break;
                 case "getDeviceInfo":
                     resolve(requestId, getDeviceInfoPayload());
+                    break;
+                case "showToast":
+                    Toast.makeText(
+                        MainActivity.this,
+                        options.optString("message"),
+                        Toast.LENGTH_SHORT
+                    ).show();
+                    resolve(requestId, new JSONObject());
+                    break;
+                case "finishApp":
+                    resolve(requestId, new JSONObject());
+                    finishAndRemoveTask();
                     break;
                 case "getE2EFixtureFlags":
                     resolve(

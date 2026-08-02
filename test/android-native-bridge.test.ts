@@ -9,7 +9,12 @@ jest.unstable_mockModule("@capacitor/core", () => ({
   registerPlugin: jest.fn(() => ({})),
 }));
 
-const { loadLoginCredentials, startDirectNativeStreamRequest } = await import(
+const {
+  finishNativeApp,
+  loadLoginCredentials,
+  showNativeToast,
+  startDirectNativeStreamRequest,
+} = await import(
   "../app/client/android-native"
 );
 
@@ -39,6 +44,27 @@ describe("direct Android bridge authentication", () => {
       method: "loadLoginCredentials",
       bridgeToken: "launch-secret-123",
     });
+  });
+
+  test("delegates the home back hint and confirmed exit to the native bridge", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/?nativeBridgeToken=launch-secret-123",
+    );
+    const methods: string[] = [];
+    window.JisudengNativeBridge = {
+      request(raw) {
+        const payload = JSON.parse(raw) as { id: string; method: string };
+        methods.push(payload.method);
+        window.__jisudengNativeResolve?.(payload.id, {});
+      },
+    };
+
+    await showNativeToast("再按一次退出应用");
+    await finishNativeApp();
+
+    expect(methods).toEqual(["showToast", "finishApp"]);
   });
 
   test("reassembles chunked native response lines without inserting data", async () => {
@@ -88,4 +114,18 @@ test("native bridge supports sharing multiple selected images in one chooser", (
   expect(source).toContain(
     "putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)",
   );
+});
+
+test("native bridge implements a system toast and finish action for double back", () => {
+  const source = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  expect(source).toContain('case "showToast"');
+  expect(source).toContain("Toast.makeText(");
+  expect(source).toContain('case "finishApp"');
+  expect(source).toContain("finishAndRemoveTask()");
 });

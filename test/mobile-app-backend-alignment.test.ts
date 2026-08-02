@@ -23,7 +23,10 @@ describe("mobile app backend alignment", () => {
   });
 
   test("routes reference image generation through the managed gateway transport", () => {
-    expect(source).toContain("const endpoint = taskReferences.length");
+    expect(source).toContain('const imageOperation = taskReferences.length');
+    expect(source).toContain('"images.edits"');
+    expect(source).toContain('const endpoint = imageOperation === "images.edits"');
+    expect(source).toContain("const taskBackendBaseUrl = managed.backendBaseUrl;");
     expect(source).toContain("body: request.body");
     expect(source).toContain("managedGatewayRequestText(");
     expect(source).not.toContain("request.body instanceof FormData");
@@ -280,6 +283,34 @@ describe("mobile app backend alignment", () => {
     expect(chat).not.toContain(
       "preferredChatGroupID(\n    workspace,\n    currentSession?.groupId,\n  )",
     );
+  });
+
+  test("inherits the user's selected model when a new chat is created", () => {
+    const chat = source.slice(
+      source.indexOf("function AndroidChat()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    const newSession = chat.slice(
+      chat.indexOf("function newSession()"),
+      chat.indexOf("function renameSession("),
+    );
+    expect(newSession).toContain("const preferredModel = storedChatPreferenceModel()");
+    expect(newSession).toContain("currentSession?.model || draftModel || selectedModel");
+    expect(newSession).not.toContain(
+      "modelValue(chatModelsForGroup(workspace, nextGroupId)[0])",
+    );
+  });
+
+  test("uses a double native back press only for root tabs", () => {
+    expect(source).toContain("function handleNativeHomeBack(text: ManagedMobileText)");
+    expect(source).toContain("now - lastNativeHomeBackAt <= 2000");
+    expect(source).toContain("void finishNativeApp()");
+    expect(source).toContain("void showNativeToast(text.common.exitAppHint)");
+    const dashboard = source.slice(
+      source.indexOf("function AndroidDashboard()"),
+      source.indexOf("function ChatSessionDrawer("),
+    );
+    expect(dashboard).toContain("handleNativeHomeBack(text)");
   });
 
   test("does not intercept system text selection on chat messages", () => {

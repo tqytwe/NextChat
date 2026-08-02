@@ -114,6 +114,8 @@ import {
   loadLoginCredentials,
   saveLoginCredentials,
   clearLoginCredentials,
+  finishNativeApp,
+  showNativeToast,
 } from "../client/android-native";
 import type {
   NativeAppImage,
@@ -2281,6 +2283,10 @@ function storedChatPreferenceGroupID() {
   return Number(readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId);
 }
 
+function storedChatPreferenceModel() {
+  return String(readStoredJSON(CHAT_PREF_STORAGE_KEY, { model: "" }).model || "");
+}
+
 function persistChatPreference(groupId?: number, model = "") {
   writeStoredJSON(CHAT_PREF_STORAGE_KEY, {
     groupId: groupId || 0,
@@ -3205,6 +3211,19 @@ function useNativeBackHandler(enabled: boolean, onBack: () => void) {
   }, [enabled, onBack]);
 }
 
+let lastNativeHomeBackAt = 0;
+
+function handleNativeHomeBack(text: ManagedMobileText) {
+  const now = Date.now();
+  if (now - lastNativeHomeBackAt <= 2000) {
+    lastNativeHomeBackAt = 0;
+    void finishNativeApp();
+    return;
+  }
+  lastNativeHomeBackAt = now;
+  void showNativeToast(text.common.exitAppHint);
+}
+
 function useNativeDocumentScroll(enabled = true) {
   useEffect(() => {
     if (!enabled || typeof document === "undefined") return;
@@ -3927,12 +3946,33 @@ function AndroidDashboard() {
     const validGroupId = preferredChatGroupID(workspace, dashboardChatGroupId);
     if (validGroupId && validGroupId !== dashboardChatGroupId) {
       setDashboardChatGroupId(validGroupId);
+      const rememberedModel = storedChatPreferenceModel();
       persistChatPreference(
         validGroupId,
-        modelValue(chatModelsForGroup(workspace, validGroupId)[0]),
+        chatModelsForGroup(workspace, validGroupId).some(
+          (model) => modelValue(model) === rememberedModel,
+        )
+          ? rememberedModel
+          : modelValue(chatModelsForGroup(workspace, validGroupId)[0]),
       );
     }
   }, [dashboardChatGroupId, workspace]);
+
+  useNativeBackHandler(true, () => {
+    if (renameTarget) {
+      setRenameTarget(null);
+      return;
+    }
+    if (sessionActionTarget) {
+      setSessionActionTarget(null);
+      return;
+    }
+    if (groupSheetOpen) {
+      setGroupSheetOpen(false);
+      return;
+    }
+    handleNativeHomeBack(text);
+  });
 
   async function refreshCloudTasks() {
     if (!managed.accessToken) return;
@@ -7177,9 +7217,16 @@ function AndroidChat() {
   function newSession() {
     const nextGroupId =
       preferredChatGroupId || defaultChatGroupId || chatGroup?.id;
+    const nextModels = chatModelsForGroup(workspace, nextGroupId);
+    const preferredModel = storedChatPreferenceModel();
+    const inheritedModel =
+      currentSession?.model || draftModel || selectedModel || preferredModel;
     const nextModel =
-      modelValue(chatModelsForGroup(workspace, nextGroupId)[0]) ||
-      fallbackModel;
+      (nextModels.some((item) => modelValue(item) === preferredModel)
+        ? preferredModel
+        : nextModels.some((item) => modelValue(item) === inheritedModel)
+        ? inheritedModel
+        : modelValue(nextModels[0])) || fallbackModel;
     mobileStore.setCurrentChatId("");
     setDraftGroupId(nextGroupId);
     setDraftModel(nextModel);
@@ -9994,7 +10041,14 @@ function AndroidImageStudio() {
       1,
       Math.min(4, Number(overrides?.n || count || 1)),
     );
-    const taskReferences = overrides?.referenceImages || references;
+    // Snapshot inputs once. A batch must not change from edit to generation if
+    // the composer state is refreshed while one of its individual requests runs.
+    const taskReferences = Array.isArray(overrides?.referenceImages || references)
+      ? [...(overrides?.referenceImages || references)]
+      : [];
+    const imageOperation = taskReferences.length
+      ? "images.edits"
+      : "images.generations";
     const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
       image502ThenSuccess: false,
     }));
@@ -10077,9 +10131,7 @@ function AndroidImageStudio() {
         const client = await mobilePlatformClient();
         projectedTask = await client.tasks.create({
           kind: "image",
-          operation: taskReferences.length
-            ? "images.edits"
-            : "images.generations",
+          operation: imageOperation,
           client_request_id: clientRequestID("image"),
           title_zh: promptText.slice(0, 80),
           model,
@@ -10114,9 +10166,11 @@ function AndroidImageStudio() {
     updateTask(id, { status: "running", progress: 12 });
     startProgress(id);
 
-    const endpoint = taskReferences.length
+    const endpoint = imageOperation === "images.edits"
       ? "/images/edits"
       : "/images/generations";
+    const taskBackendBaseUrl = managed.backendBaseUrl;
+    const initialImageApiKey = managed.imageSession?.api_key || "";
     const basePayload: Record<string, any> = {
       model,
       prompt: promptText,
@@ -10131,7 +10185,7 @@ function AndroidImageStudio() {
 
     function buildImageRequest(
       requestIndex: number,
-      imageApiKey = managed.imageSession?.api_key || "",
+      imageApiKey = initialImageApiKey,
     ) {
       const payload: Record<string, any> = { ...basePayload, n: 1 };
       const headers: Record<string, string> = {
@@ -10172,7 +10226,7 @@ function AndroidImageStudio() {
         );
         try {
           const response = await managedGatewayRequestText(
-            latestManaged.backendBaseUrl,
+            taskBackendBaseUrl,
             `/v1${endpoint}`,
             {
               method: "POST",
@@ -10672,7 +10726,7 @@ function AndroidImageStudio() {
       setStyleSheetOpen(false);
       return;
     }
-    navigate(Path.Home);
+    handleNativeHomeBack(text);
   });
 
   return (
@@ -11463,7 +11517,7 @@ function AndroidGallery() {
       setSelectedIds([]);
       return;
     }
-    navigate(Path.Home);
+    handleNativeHomeBack(text);
   });
 
   return (
@@ -14154,7 +14208,7 @@ function AndroidAccountSettings() {
       setShowLogoutConfirm(false);
       return;
     }
-    navigate(Path.Home);
+    handleNativeHomeBack(text);
   });
 
   if (route === Path.AccountAdmin) {

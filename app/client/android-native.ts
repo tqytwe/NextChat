@@ -124,6 +124,8 @@ export interface NativeSharedMaterialData extends NativeSharedMaterial {
 }
 
 interface NextChatNativePlugin {
+  finishApp?(): Promise<void>;
+  showToast?(options: { message: string }): Promise<void>;
   requestGalleryPermissions(): Promise<NativePermissionResult>;
   requestCameraPermission(): Promise<NativePermissionResult>;
   requestMicrophonePermission(): Promise<NativePermissionResult>;
@@ -386,6 +388,24 @@ export function isNativeAndroid() {
   return (
     Capacitor.getPlatform() === "android" || isDirectNativeBridgeAvailable()
   );
+}
+
+export async function showNativeToast(message: string) {
+  if (!message || !isNativeAndroid()) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("showToast", { message });
+    return;
+  }
+  await NextChatNative.showToast?.({ message });
+}
+
+export async function finishNativeApp() {
+  if (!isNativeAndroid()) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("finishApp");
+    return;
+  }
+  await NextChatNative.finishApp?.();
 }
 
 export async function loadLoginCredentials(): Promise<NativeLoginCredentials> {
