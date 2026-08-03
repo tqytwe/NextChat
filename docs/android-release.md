@@ -14,7 +14,7 @@ It must never be sent to testers or referenced by deployment instructions.
 Create a release with one command after setting the version environment values:
 
 ```bash
-ANDROID_VERSION_NAME=2.0.74 ANDROID_VERSION_CODE=274 yarn android:release
+ANDROID_VERSION_NAME=2.0.77 ANDROID_VERSION_CODE=277 yarn android:release
 ```
 
 The release packager verifies the APK package ID, version, signing certificate and
@@ -47,6 +47,12 @@ the following agree on both version name and version code:
 It also requires the embedded APK URL to use the canonical cache key
 `?v=<versionName>-<versionCode>`. This makes a stale web-resource Android
 version a release-time error rather than a user-visible version mismatch.
+
+The APK must not bundle `assets/public/downloads/android-version.json` or an APK
+copy. Those are downloadable release artifacts, not application resources. The
+Android update probe resolves the authoritative manifest from the official web
+host, while the release verifier rejects any embedded copy so an older manifest
+cannot survive an upgrade.
 
 The generated manifest records `builtFromCommit` (also retained as the legacy
 `sourceCommit` field) so the source revision used for the APK cannot be confused

@@ -25,6 +25,10 @@ const embeddedWebIndexPath = path.join(
   root,
   "android/app/src/main/assets/public/index.html",
 );
+const embeddedWebManifestPath = path.join(
+  root,
+  "android/app/src/main/assets/public/downloads/android-version.json",
+);
 const downloadsDir = path.join(root, "public/downloads");
 const apkTarget = path.join(downloadsDir, "jisudengchat-android.apk");
 const manifestPath = path.join(downloadsDir, "android-version.json");
@@ -400,6 +404,14 @@ function assertEmbeddedAndroidBuildMatchesApk(apkRelease) {
   }
 }
 
+function assertNoEmbeddedAndroidManifest() {
+  if (existsSync(embeddedWebManifestPath)) {
+    throw new Error(
+      `Embedded Android release manifest must not be bundled: ${embeddedWebManifestPath}`,
+    );
+  }
+}
+
 function readPreviousManifest() {
   if (!existsSync(manifestPath)) {
     return {};
@@ -520,6 +532,7 @@ assertReleaseVersionsMatch(
   "ANDROID_VERSION_NAME/CODE",
 );
 assertEmbeddedAndroidBuildMatchesApk(apkRelease);
+assertNoEmbeddedAndroidManifest();
 const existingManifest = readPreviousManifest();
 const previousVersionCode = Math.max(
   existingManifest.versionCode || 0,

@@ -21,10 +21,14 @@ function walkFiles(dir) {
 
 try {
   for (const entry of readdirSync(downloadsDir, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.toLowerCase().endsWith(".apk")) {
+    if (
+      entry.isFile() &&
+      (entry.name.toLowerCase().endsWith(".apk") ||
+        entry.name.toLowerCase() === "android-version.json")
+    ) {
       const file = path.join(downloadsDir, entry.name);
       rmSync(file);
-      console.log(`[Android Assets] removed bundled APK asset: ${file}`);
+      console.log(`[Android Assets] removed bundled release asset: ${file}`);
     }
   }
 } catch {

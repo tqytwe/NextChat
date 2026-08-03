@@ -26,6 +26,7 @@ type FixtureOptions = {
   embeddedVersion?: string;
   embeddedVersionCode?: number;
   embeddedApkUrl?: string;
+  includeEmbeddedManifest?: boolean;
   includeAndroidReleaseVersion?: boolean;
   signingCertificateSha256?: string;
   publishedManifest?: Record<string, unknown>;
@@ -51,10 +52,12 @@ function createFixture(options: FixtureOptions = {}) {
     root,
     "android/app/src/main/assets/public",
   );
+  const embeddedDownloadsDir = path.join(embeddedAssetsDir, "downloads");
   const downloadsDir = path.join(root, "public/downloads");
   const toolsDir = path.join(root, "tools");
   mkdirSync(releaseDir, { recursive: true });
   mkdirSync(embeddedAssetsDir, { recursive: true });
+  mkdirSync(embeddedDownloadsDir, { recursive: true });
   mkdirSync(downloadsDir, { recursive: true });
   mkdirSync(toolsDir, { recursive: true });
 
@@ -111,6 +114,14 @@ function createFixture(options: FixtureOptions = {}) {
     path.join(embeddedAssetsDir, "index.html"),
     `<meta name="config" content="${embeddedConfig}">`,
   );
+  if (options.includeEmbeddedManifest) {
+    writeJson(path.join(embeddedDownloadsDir, "android-version.json"), {
+      platform: "android",
+      version: "2.0.74",
+      versionCode: 274,
+      sha256: "stale-self-checksum",
+    });
+  }
 
   const aaptPath = path.join(toolsDir, "aapt");
   writeFileSync(
@@ -331,6 +342,24 @@ describe("Android release package version gate", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
       "androidReleaseVersion is missing versionName",
+    );
+    expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
+    expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
+  });
+
+  test("rejects an embedded Android release manifest before publishing", () => {
+    const fixture = createFixture({ includeEmbeddedManifest: true });
+    const originalManifest = readFileSync(fixture.manifestPath, "utf-8");
+    const originalApk = readFileSync(fixture.publishedApk, "utf-8");
+
+    const result = packageRelease(fixture, {
+      ANDROID_VERSION_NAME: "2.0.66",
+      ANDROID_VERSION_CODE: "266",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Embedded Android release manifest must not be bundled",
     );
     expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
