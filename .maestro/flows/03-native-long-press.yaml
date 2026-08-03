@@ -1,0 +1,17 @@
+appId: com.jisudeng.chat
+name: Android owns long press selection and copy
+tags:
+  - core
+---
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "dashboard-new-chat"
+- tapOn: "chat-composer"
+- inputText: "maestro-native-selection-message"
+- hideKeyboard
+- tapOn: "chat-send"
+- assertVisible: "maestro-native-selection-message"
+- longPressOn: "maestro-native-selection-message"
+- assertVisible:
+    text: "复制|Copy"

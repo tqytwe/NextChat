@@ -37,3 +37,45 @@ jobs:
 
       - name: Run Jest tests
         run: yarn test:ci
+
+      - name: Type-check application
+        run: npx tsc --noEmit --pretty false
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Build Android web assets and sync Capacitor
+        run: yarn android:sync
+        env:
+          NEXT_PUBLIC_SUB2API_BASE_URL: https://api.jisudeng.com
+          NEXT_PUBLIC_NEXTCHAT_WEB_URL: https://www.jisudeng.com
+          ANDROID_VERSION_NAME: 0.0.0-ci
+          ANDROID_VERSION_CODE: "1"
+          NEXT_PUBLIC_ANDROID_VERSION: 0.0.0-ci
+          NEXT_PUBLIC_ANDROID_VERSION_CODE: "1"
+
+      - name: Validate Android release build
+        working-directory: android
+        run: >-
+          ./gradlew testReleaseUnitTest lintRelease assembleRelease
+          -PandroidVersionName=0.0.0-ci
+          -PandroidVersionCode=1

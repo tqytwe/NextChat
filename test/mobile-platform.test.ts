@@ -90,44 +90,42 @@ describe("mobile platform client", () => {
     expect(String(init.body)).not.toContain(accessToken);
   });
 
-  test("uploads assets with FormData over fetch instead of JSON request", async () => {
+  test("uploads assets through the managed native-capable transport", async () => {
     const formData = new FormData();
     formData.append("file", new Blob(["image"]), "image.png");
-    jest.mocked(window.fetch).mockResolvedValue({
+    managedRequestText.mockResolvedValue({
       ok: true,
       status: 200,
-      text: () =>
-        Promise.resolve(
-          JSON.stringify({
-            code: 0,
-            data: {
-              id: "asset-1",
-              kind: "image",
-              status: "ready",
-              content_type: "image/png",
-              byte_size: 5,
-              content_url: "https://cdn.example.com/a.png",
-              created_at: "2026-07-26T00:00:00Z",
-            },
-          }),
-        ),
-    } as Response);
+      text: JSON.stringify({
+        code: 0,
+        data: {
+          id: "asset-1",
+          kind: "image",
+          status: "ready",
+          content_type: "image/png",
+          byte_size: 5,
+          content_url: "https://cdn.example.com/a.png",
+          created_at: "2026-07-26T00:00:00Z",
+        },
+      }),
+    });
 
     await expect(
       platform.uploadMobileAssetFormData(baseUrl, accessToken, formData),
     ).resolves.toMatchObject({ id: "asset-1" });
 
     expect(managedJsonRequest).not.toHaveBeenCalled();
-    expect(window.fetch).toHaveBeenCalledWith(
-      "https://api.example.com/api/v1/mobile/assets",
+    expect(managedRequestText).toHaveBeenCalledWith(
+      baseUrl,
+      "/api/v1/mobile/assets",
       expect.objectContaining({
         method: "POST",
         body: formData,
-        headers: expect.any(Headers),
       }),
+      expect.any(Headers),
     );
-    const headers = jest.mocked(window.fetch).mock.calls[0][1]
-      ?.headers as Headers;
+    expect(window.fetch).not.toHaveBeenCalled();
+    const headers = managedRequestText.mock.calls[0][3] as Headers;
     expect(headers.get("Authorization")).toBe(`Bearer ${accessToken}`);
     expect(headers.has("Content-Type")).toBe(false);
   });
@@ -192,7 +190,12 @@ describe("mobile platform client", () => {
     await client.redeemCodes.history({ limit: 20 });
     await client.payments.create({
       provider: "wechat",
+      payment_type: "wechat",
+      order_type: "balance",
+      amount: 50,
       plan_id: "pro",
+      payment_source: "android_app",
+      is_mobile: true,
       client_request_id: "pay-1",
     });
     await client.payments.detail("order-1");
@@ -229,6 +232,19 @@ describe("mobile platform client", () => {
     });
     expect(managedJsonRequest.mock.calls[9][2]).toMatchObject({
       method: "POST",
+    });
+    expect(managedJsonRequest.mock.calls[11][2]).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        provider: "wechat",
+        payment_type: "wechat",
+        order_type: "balance",
+        amount: 50,
+        plan_id: "pro",
+        payment_source: "android_app",
+        is_mobile: true,
+        client_request_id: "pay-1",
+      }),
     });
   });
 

@@ -1,0 +1,36 @@
+name: Verify Android Release Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - public/downloads/jisudengchat-android.apk
+      - public/downloads/android-version.json
+      - scripts/verify-android-release-artifact.mjs
+      - .github/workflows/android-release-artifact.yml
+
+jobs:
+  verify-and-upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Android package inspector
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes aapt
+      - name: Verify canonical APK and manifest
+        run: node scripts/verify-android-release-artifact.mjs
+      - name: Upload canonical Android release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jisudengchat-android
+          path: |
+            public/downloads/jisudengchat-android.apk
+            public/downloads/android-version.json
+          if-no-files-found: error

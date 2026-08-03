@@ -21,6 +21,7 @@ const { Capacitor, CapacitorHttp } = await import("@capacitor/core");
 const {
   isManagedAuthError,
   loginManagedUser,
+  managedRequestText,
   managedJsonRequest,
   shouldRefreshManagedSession,
   shouldRefreshManagedToken,
@@ -266,6 +267,103 @@ describe("managed NextChat API requests", () => {
     expect(CapacitorHttp.request).not.toHaveBeenCalled();
   });
 
+  test("sends FormData through the direct native bridge as multipart base64", async () => {
+    let streamOptions: any = null;
+    window.JisudengNativeBridge = {
+      request: jest.fn((raw) => {
+        const request = JSON.parse(String(raw)) as {
+          id: string;
+          method: string;
+          options?: any;
+        };
+        if (request.method === "streamRequest") {
+          streamOptions = request.options;
+          queueMicrotask(() => {
+            window.__jisudengNativeResolve?.(request.id, { id: request.id });
+            window.__jisudengNativeStream?.(request.id, "status", {
+              status: 200,
+            });
+            window.__jisudengNativeStream?.(request.id, "data", {
+              line: JSON.stringify({ code: 0, data: { ok: true } }),
+            });
+            window.__jisudengNativeStream?.(request.id, "done");
+          });
+        }
+      }),
+    };
+    const form = new FormData();
+    form.append("prompt", "reference edit");
+    form.append(
+      "image",
+      new Blob(["fake-png"], { type: "image/png" }),
+      "a.png",
+    );
+    const headers = new Headers({ Accept: "application/json" });
+
+    await expect(
+      managedRequestText(
+        "https://api.jisudeng.com",
+        "/v1/images/edits",
+        { method: "POST", body: form },
+        headers,
+      ),
+    ).resolves.toMatchObject({ ok: true, status: 200 });
+
+    expect(streamOptions?.body).toBeUndefined();
+    expect(streamOptions?.bodyBase64).toEqual(expect.any(String));
+    expect(streamOptions?.headers?.["content-type"]).toMatch(
+      /^multipart\/form-data; boundary=/i,
+    );
+    const multipart = atob(streamOptions.bodyBase64);
+    expect(multipart).toContain('name="prompt"');
+    expect(multipart).toContain("reference edit");
+    expect(multipart).toContain('name="image"; filename="a.png"');
+    expect(multipart).toContain("fake-png");
+  });
+
+  test("preserves reference-image business errors from the native bridge", async () => {
+    const errorBody = JSON.stringify({
+      error: {
+        code: "reference_image_invalid",
+        message: "reference image format is not supported",
+      },
+    });
+    window.JisudengNativeBridge = {
+      request: jest.fn((raw) => {
+        const request = JSON.parse(String(raw)) as {
+          id: string;
+          method: string;
+        };
+        if (request.method !== "streamRequest") return;
+        queueMicrotask(() => {
+          window.__jisudengNativeResolve?.(request.id, { id: request.id });
+          window.__jisudengNativeStream?.(request.id, "status", {
+            status: 422,
+          });
+          window.__jisudengNativeStream?.(request.id, "error", {
+            status: 422,
+            message: errorBody,
+          });
+        });
+      }),
+    };
+    const form = new FormData();
+    form.append("image", new Blob(["bad-image"]), "bad.png");
+
+    await expect(
+      managedRequestText(
+        "https://api.jisudeng.com",
+        "/v1/images/edits",
+        { method: "POST", body: form },
+        new Headers(),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      status: 422,
+      text: errorBody,
+    });
+  });
+
   test("keeps localized business errors from native HTTP responses", async () => {
     jest.mocked(Capacitor.getPlatform).mockReturnValue("android");
     jest.mocked(CapacitorHttp.request).mockResolvedValue({
@@ -407,6 +505,74 @@ describe("managed NextChat API requests", () => {
 
     expect(CapacitorHttp.request).toHaveBeenCalledTimes(1);
     expect(window.fetch).not.toHaveBeenCalled();
+  });
+
+  test("retries Android POST only when it carries an idempotency key", async () => {
+    jest.mocked(Capacitor.getPlatform).mockReturnValue("android");
+    jest
+      .mocked(CapacitorHttp.request)
+      .mockRejectedValueOnce(new Error("timeout"))
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: {},
+        url: "https://api.jisudeng.com/v1/images/generations",
+        data: JSON.stringify({
+          data: [{ url: "https://cdn.example/image.png" }],
+        }),
+      });
+
+    const headers = new Headers({
+      Authorization: "Bearer managed-key",
+      "Content-Type": "application/json",
+      "Idempotency-Key": "image-task-1",
+    });
+    await expect(
+      managedRequestText(
+        "https://api.jisudeng.com",
+        "/v1/images/generations",
+        { method: "POST", body: "{}" },
+        headers,
+      ),
+    ).resolves.toMatchObject({ status: 200 });
+
+    expect(CapacitorHttp.request).toHaveBeenCalledTimes(2);
+    expect(window.fetch).not.toHaveBeenCalled();
+  });
+
+  test("reports HTTP status, category, and request ID for API failures", async () => {
+    jest.mocked(Capacitor.getPlatform).mockReturnValue("android");
+    jest.mocked(CapacitorHttp.request).mockResolvedValue({
+      status: 502,
+      headers: {},
+      url: "https://api.jisudeng.com/api/v1/nextchat/mobile/bootstrap",
+      data: JSON.stringify({ code: 502, message: "cloudflare bad gateway" }),
+    });
+
+    await expect(
+      managedJsonRequest(
+        "https://api.jisudeng.com",
+        "/api/v1/nextchat/mobile/bootstrap",
+        { headers: { "X-Request-ID": "e2e-request-502" } },
+      ),
+    ).rejects.toThrow(/服务暂时繁忙.*HTTP 502, http, request e2e-request-502/);
+  });
+
+  test("reports unavailable HTTP status, category, and request ID for transport failures", async () => {
+    jest
+      .mocked(window.fetch)
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(
+      managedRequestText(
+        "https://api.jisudeng.com",
+        "/v1/chat/completions",
+        { method: "POST", body: "{}" },
+        new Headers({
+          "Idempotency-Key": "transport-request-1",
+          "X-Request-ID": "transport-request-1",
+        }),
+      ),
+    ).rejects.toThrow(/HTTP unavailable, network, request transport-request-1/);
   });
 
   test("releases Android native request promises when aborted", async () => {

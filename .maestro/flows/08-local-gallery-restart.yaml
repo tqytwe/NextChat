@@ -1,0 +1,15 @@
+appId: com.jisudeng.chat
+name: Locally generated image remains after app restart
+tags:
+  - fixture
+---
+- stopApp
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "app-tab-gallery"
+- extendedWaitUntil:
+    visible: "local-gallery-item-1"
+    timeout: 20000
+- assertVisible:
+    text: "local-gallery-count-[1-9][0-9]*"

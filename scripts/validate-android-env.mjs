@@ -1,6 +1,14 @@
 const backendBaseUrl = (process.env.NEXT_PUBLIC_SUB2API_BASE_URL || "").trim();
 const webBaseUrl = (process.env.NEXT_PUBLIC_NEXTCHAT_WEB_URL || "").trim();
 const allowDevBackend = process.env.ALLOW_ANDROID_DEV_BACKEND === "1";
+const androidVersionName = (process.env.ANDROID_VERSION_NAME || "").trim();
+const androidVersionCode = (process.env.ANDROID_VERSION_CODE || "").trim();
+const publicAndroidVersion = (
+  process.env.NEXT_PUBLIC_ANDROID_VERSION || ""
+).trim();
+const publicAndroidVersionCode = (
+  process.env.NEXT_PUBLIC_ANDROID_VERSION_CODE || ""
+).trim();
 
 function fail(message) {
   console.error(`[Android Env] ${message}`);
@@ -13,6 +21,31 @@ function isPlaceholderHost(hostname) {
     hostname.endsWith(".example.com") ||
     hostname === "your-domain.com" ||
     hostname.endsWith(".your-domain.com")
+  );
+}
+
+function normalizedVersionName(version) {
+  return version.replace(/^v/i, "");
+}
+
+if (
+  androidVersionName &&
+  publicAndroidVersion &&
+  normalizedVersionName(androidVersionName) !==
+    normalizedVersionName(publicAndroidVersion)
+) {
+  fail(
+    "ANDROID_VERSION_NAME and NEXT_PUBLIC_ANDROID_VERSION disagree. Android release metadata must have one source of truth.",
+  );
+}
+
+if (
+  androidVersionCode &&
+  publicAndroidVersionCode &&
+  androidVersionCode !== publicAndroidVersionCode
+) {
+  fail(
+    "ANDROID_VERSION_CODE and NEXT_PUBLIC_ANDROID_VERSION_CODE disagree. Android release metadata must have one source of truth.",
   );
 }
 

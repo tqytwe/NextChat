@@ -1,0 +1,17 @@
+appId: com.jisudeng.chat
+name: First image request 502 retries with the same idempotency key and succeeds
+tags:
+  - fixture
+---
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "app-tab-image"
+- tapOn: "image-prompt"
+- inputText: "maestro first 502 then success"
+- hideKeyboard
+- scroll
+- tapOn: "image-generate"
+- extendedWaitUntil:
+    visible: ".*(已完成|Completed).*"
+    timeout: 60000
+- assertNotVisible:
+    text: ".*HTTP 502.*"

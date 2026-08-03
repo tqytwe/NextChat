@@ -13,15 +13,20 @@ import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ApplicationInfo;
 import android.content.res.AssetManager;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.widget.Toast;
 import android.provider.OpenableColumns;
 import android.provider.MediaStore;
 import android.provider.Settings;
@@ -29,6 +34,9 @@ import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Base64;
+import android.util.Log;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
@@ -52,6 +60,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -60,11 +70,16 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 public class MainActivity extends Activity {
+    private static final String LOG_TAG = "JisudengNative";
     private static final int FILE_CHOOSER_REQUEST = 4101;
     private static final int PERMISSION_REQUEST_BASE = 5200;
     private static final int CAMERA_REQUEST = 6200;
@@ -78,6 +93,16 @@ public class MainActivity extends Activity {
     private static final long MAX_SHARED_TOTAL_BYTES = 50L * 1024L * 1024L;
     private static final int MAX_SHARED_FILE_COUNT = 8;
     private static final int COPY_BUFFER_BYTES = 32 * 1024;
+    private static final int STREAM_EVENT_CHUNK_CHARS = 32 * 1024;
+    private static final String CREDENTIAL_KEY_ALIAS = "jisudengchat_login_credentials_v1";
+    private static final String CREDENTIAL_PREFS = "jisudengchat_secure_credentials";
+    private static final String CREDENTIAL_PAYLOAD = "encrypted_payload";
+    private static final String CREDENTIAL_IV = "encrypted_iv";
+    private static final String SESSION_KEY_ALIAS = "jisudengchat_managed_session_v1";
+    private static final String SESSION_PREFS = "jisudengchat_secure_managed_session";
+    private static final String SESSION_PAYLOAD = "encrypted_payload";
+    private static final String SESSION_IV = "encrypted_iv";
+    private final String bridgeToken = UUID.randomUUID().toString();
     private ValueCallback<Uri[]> filePathCallback;
     private WebView webView;
     private int nextPermissionRequestCode = PERMISSION_REQUEST_BASE;
@@ -91,6 +116,12 @@ public class MainActivity extends Activity {
     private ArrayList<String> holdSpeechMatches = new ArrayList<>();
     private final Map<String, HttpURLConnection> streamConnections = new ConcurrentHashMap<>();
     private final Map<String, Boolean> cancelledStreamRequests = new ConcurrentHashMap<>();
+    private boolean e2eFirstImage502Fixture;
+    private int e2eImageFixtureAttempt;
+    private boolean e2eFirstBootstrap401Fixture;
+    private boolean e2eBootstrap401Used;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
     private JSONObject lastSharePayload;
     private boolean hasResumedOnce = false;
     private boolean initialIntentsDispatched = false;
@@ -110,16 +141,33 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
 
-        WebView.setWebContentsDebuggingEnabled(true);
+        boolean debuggable =
+            (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        Intent launchIntent = getIntent();
+        e2eFirstImage502Fixture = debuggable && launchIntent != null && (
+            launchIntent.getBooleanExtra("e2eFirstImage502", false) ||
+            "true".equalsIgnoreCase(launchIntent.getStringExtra("e2eFirstImage502"))
+        );
+        e2eFirstBootstrap401Fixture = debuggable && launchIntent != null && (
+            launchIntent.getBooleanExtra("e2eFirstBootstrap401", false) ||
+            "true".equalsIgnoreCase(launchIntent.getStringExtra("e2eFirstBootstrap401"))
+        );
+        WebView.setWebContentsDebuggingEnabled(debuggable);
         webView.setWebViewClient(new LocalAssetWebViewClient(getAssets(), getAppImageDir()));
         webView.setWebChromeClient(new AppWebChromeClient());
         webView.addJavascriptInterface(new NativeBridge(), "JisudengNativeBridge");
 
         setContentView(webView);
-        webView.loadUrl(LOCAL_ORIGIN + "/");
+        registerNetworkRecoveryCallback();
+        webView.loadUrl(
+            LOCAL_ORIGIN + "/?nativeBridgeToken=" + Uri.encode(bridgeToken)
+        );
     }
 
     @Override
@@ -207,6 +255,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyHoldSpeechRecognizer();
+        if (connectivityManager != null && networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (Exception ignored) {
+            }
+        }
         for (HttpURLConnection connection : streamConnections.values()) {
             try {
                 connection.disconnect();
@@ -215,6 +269,23 @@ public class MainActivity extends Activity {
         }
         streamConnections.clear();
         super.onDestroy();
+    }
+
+    private void registerNetworkRecoveryCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return;
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                if (webView == null) return;
+                webView.post(() -> webView.evaluateJavascript(
+                    "window.dispatchEvent(new Event('jisudeng-network-restored'));",
+                    null
+                ));
+            }
+        };
+        connectivityManager.registerDefaultNetworkCallback(networkCallback);
     }
 
     private void dispatchIncomingShare(Intent intent) {
@@ -550,6 +621,10 @@ public class MainActivity extends Activity {
         try {
             JSONObject request = new JSONObject(requestJson);
             requestId = request.optString("id");
+            if (!bridgeToken.equals(request.optString("bridgeToken"))) {
+                reject(requestId, "untrusted native bridge request");
+                return;
+            }
             String method = request.optString("method");
             JSONObject options = request.optJSONObject("options");
             if (options == null) options = new JSONObject();
@@ -604,11 +679,18 @@ public class MainActivity extends Activity {
                         options.optString("fileName", "jisudengchat-image.png"),
                         options.optString("prompt", ""),
                         options.optString("model", ""),
-                        options.optString("taskId", "")
+                        options.optString("taskId", ""),
+                        options.optString("ownerUserId", ""),
+                        options.optString("projectId", ""),
+                        options.optString("runId", ""),
+                        options.optString("shotId", ""),
+                        options.optString("kind", ""),
+                        options.optString("label", ""),
+                        options.optString("collectionId", "")
                     );
                     break;
                 case "listAppImages":
-                    listAppImages(requestId);
+                    listAppImages(requestId, options.optString("ownerUserId", ""));
                     break;
                 case "deleteAppImages":
                     deleteAppImages(requestId, options.optJSONArray("fileNames"));
@@ -618,6 +700,14 @@ public class MainActivity extends Activity {
                         requestId,
                         options.optString("dataUrl"),
                         options.optString("fileName", "jisudengchat-image.png"),
+                        options.optString("title", "JisudengChat"),
+                        options.optString("text", "")
+                    );
+                    break;
+                case "shareImages":
+                    shareImages(
+                        requestId,
+                        options.optJSONArray("items"),
                         options.optString("title", "JisudengChat"),
                         options.optString("text", "")
                     );
@@ -651,7 +741,8 @@ public class MainActivity extends Activity {
                     installApk(
                         requestId,
                         options.optString("id"),
-                        options.optString("uri")
+                        options.optString("uri"),
+                        options.optString("sha256")
                     );
                     break;
                 case "openUrl":
@@ -662,6 +753,49 @@ public class MainActivity extends Activity {
                     break;
                 case "getDeviceInfo":
                     resolve(requestId, getDeviceInfoPayload());
+                    break;
+                case "showToast":
+                    Toast.makeText(
+                        MainActivity.this,
+                        options.optString("message"),
+                        Toast.LENGTH_SHORT
+                    ).show();
+                    resolve(requestId, new JSONObject());
+                    break;
+                case "finishApp":
+                    resolve(requestId, new JSONObject());
+                    finishAndRemoveTask();
+                    break;
+                case "getE2EFixtureFlags":
+                    resolve(
+                        requestId,
+                        new JSONObject().put(
+                            "image502ThenSuccess",
+                            e2eFirstImage502Fixture
+                        )
+                    );
+                    break;
+                case "saveLoginCredentials":
+                    saveLoginCredentials(
+                        requestId,
+                        options.optString("email", ""),
+                        options.optString("password", "")
+                    );
+                    break;
+                case "loadLoginCredentials":
+                    loadLoginCredentials(requestId);
+                    break;
+                case "clearLoginCredentials":
+                    clearLoginCredentials(requestId);
+                    break;
+                case "saveManagedSessionSecrets":
+                    saveManagedSessionSecrets(requestId, options);
+                    break;
+                case "loadManagedSessionSecrets":
+                    loadManagedSessionSecrets(requestId);
+                    break;
+                case "clearManagedSessionSecrets":
+                    clearManagedSessionSecrets(requestId);
                     break;
                 case "getPendingShare":
                     resolve(requestId, pendingSharePayload());
@@ -687,6 +821,153 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             reject(requestId, error.getMessage());
         }
+    }
+
+    private SecretKey loginCredentialKey() throws Exception {
+        return secretKey(CREDENTIAL_KEY_ALIAS);
+    }
+
+    private SecretKey secretKey(String alias) throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+        keyStore.load(null);
+        if (keyStore.containsAlias(alias)) {
+            return ((KeyStore.SecretKeyEntry) keyStore.getEntry(alias, null)).getSecretKey();
+        }
+        KeyGenerator generator = KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES,
+            "AndroidKeyStore"
+        );
+        generator.init(
+            new KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .build()
+        );
+        return generator.generateKey();
+    }
+
+    private void saveLoginCredentials(String requestId, String email, String password) {
+        try {
+            if (email == null || email.trim().isEmpty() || password == null || password.isEmpty()) {
+                throw new IllegalArgumentException("email and password are required");
+            }
+            JSONObject credentials = new JSONObject();
+            credentials.put("email", email.trim());
+            credentials.put("password", password);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, loginCredentialKey());
+            byte[] encrypted = cipher.doFinal(
+                credentials.toString().getBytes(StandardCharsets.UTF_8)
+            );
+            getSharedPreferences(CREDENTIAL_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(CREDENTIAL_PAYLOAD, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .putString(CREDENTIAL_IV, Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP))
+                .apply();
+            JSONObject result = new JSONObject();
+            result.put("saved", true);
+            result.put("email", email.trim());
+            resolve(requestId, result);
+        } catch (Exception error) {
+            reject(requestId, "credential_save_failed: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private void loadLoginCredentials(String requestId) {
+        try {
+            SharedPreferences preferences = getSharedPreferences(
+                CREDENTIAL_PREFS,
+                Context.MODE_PRIVATE
+            );
+            String encrypted = preferences.getString(CREDENTIAL_PAYLOAD, "");
+            String iv = preferences.getString(CREDENTIAL_IV, "");
+            if (encrypted == null || encrypted.isEmpty() || iv == null || iv.isEmpty()) {
+                JSONObject empty = new JSONObject();
+                empty.put("saved", false);
+                resolve(requestId, empty);
+                return;
+            }
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                loginCredentialKey(),
+                new GCMParameterSpec(128, Base64.decode(iv, Base64.DEFAULT))
+            );
+            byte[] clear = cipher.doFinal(Base64.decode(encrypted, Base64.DEFAULT));
+            JSONObject credentials = new JSONObject(new String(clear, StandardCharsets.UTF_8));
+            credentials.put("saved", true);
+            resolve(requestId, credentials);
+        } catch (Exception error) {
+            getSharedPreferences(CREDENTIAL_PREFS, Context.MODE_PRIVATE).edit().clear().apply();
+            reject(requestId, "credential_load_failed: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private void clearLoginCredentials(String requestId) {
+        getSharedPreferences(CREDENTIAL_PREFS, Context.MODE_PRIVATE).edit().clear().apply();
+        resolve(requestId, new JSONObject());
+    }
+
+    private void saveManagedSessionSecrets(String requestId, JSONObject secrets) {
+        try {
+            String accessToken = secrets.optString("accessToken", "");
+            if (accessToken.isEmpty()) {
+                throw new IllegalArgumentException("accessToken is required");
+            }
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey(SESSION_KEY_ALIAS));
+            byte[] encrypted = cipher.doFinal(
+                secrets.toString().getBytes(StandardCharsets.UTF_8)
+            );
+            getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(SESSION_PAYLOAD, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .putString(SESSION_IV, Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP))
+                .apply();
+            JSONObject result = new JSONObject();
+            result.put("saved", true);
+            resolve(requestId, result);
+        } catch (Exception error) {
+            reject(requestId, "session_save_failed: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private void loadManagedSessionSecrets(String requestId) {
+        try {
+            SharedPreferences preferences = getSharedPreferences(
+                SESSION_PREFS,
+                Context.MODE_PRIVATE
+            );
+            String encrypted = preferences.getString(SESSION_PAYLOAD, "");
+            String iv = preferences.getString(SESSION_IV, "");
+            if (encrypted == null || encrypted.isEmpty() || iv == null || iv.isEmpty()) {
+                JSONObject empty = new JSONObject();
+                empty.put("saved", false);
+                resolve(requestId, empty);
+                return;
+            }
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                secretKey(SESSION_KEY_ALIAS),
+                new GCMParameterSpec(128, Base64.decode(iv, Base64.DEFAULT))
+            );
+            byte[] clear = cipher.doFinal(Base64.decode(encrypted, Base64.DEFAULT));
+            JSONObject secrets = new JSONObject(new String(clear, StandardCharsets.UTF_8));
+            secrets.put("saved", true);
+            resolve(requestId, secrets);
+        } catch (Exception error) {
+            getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit().clear().apply();
+            reject(requestId, "session_load_failed: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private void clearManagedSessionSecrets(String requestId) {
+        getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit().clear().apply();
+        resolve(requestId, new JSONObject());
     }
 
     private void requestGalleryPermission(String requestId) {
@@ -935,7 +1216,14 @@ public class MainActivity extends Activity {
         String fileName,
         String prompt,
         String model,
-        String taskId
+        String taskId,
+        String ownerUserId,
+        String projectId,
+        String runId,
+        String shotId,
+        String kind,
+        String label,
+        String collectionId
     ) {
         try {
             byte[] data = decodeDataUrl(dataUrl);
@@ -950,6 +1238,13 @@ public class MainActivity extends Activity {
             metadata.put("fileName", file.getName());
             metadata.put("prompt", prompt == null ? "" : prompt);
             metadata.put("model", model == null ? "" : model);
+            metadata.put("ownerUserId", ownerUserId == null ? "" : ownerUserId);
+            metadata.put("projectId", projectId == null ? "" : projectId);
+            metadata.put("runId", runId == null ? "" : runId);
+            metadata.put("shotId", shotId == null ? "" : shotId);
+            metadata.put("kind", kind == null ? "" : kind);
+            metadata.put("label", label == null ? "" : label);
+            metadata.put("collectionId", collectionId == null ? "" : collectionId);
             metadata.put("mimeType", mimeType);
             metadata.put("createdAt", System.currentTimeMillis());
             metadata.put("size", file.length());
@@ -960,7 +1255,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void listAppImages(String requestId) {
+    private void listAppImages(String requestId, String ownerUserId) {
         JSONObject payload = new JSONObject();
         JSONArray items = new JSONArray();
         try {
@@ -977,7 +1272,16 @@ public class MainActivity extends Activity {
                     (left, right) -> Long.compare(right.lastModified(), left.lastModified())
                 );
                 for (File file : images) {
-                    items.put(appImagePayload(file, readImageMetadata(file)));
+                    JSONObject metadata = readImageMetadata(file);
+                    String owner = metadata.optString("ownerUserId", "");
+                    if (owner.isEmpty() && ownerUserId != null && !ownerUserId.isEmpty()) {
+                        metadata.put("ownerUserId", ownerUserId);
+                        writeImageMetadata(file, metadata);
+                        owner = ownerUserId;
+                    }
+                    if (ownerUserId == null || ownerUserId.isEmpty() || ownerUserId.equals(owner)) {
+                        items.put(appImagePayload(file, metadata));
+                    }
                 }
             }
             payload.put("items", items);
@@ -1033,6 +1337,61 @@ public class MainActivity extends Activity {
             Intent intent = new Intent(Intent.ACTION_SEND);
             intent.setType(mimeTypeFromDataUrl(dataUrl));
             intent.putExtra(Intent.EXTRA_STREAM, uri);
+            intent.putExtra(Intent.EXTRA_TEXT, text);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(intent, title));
+            resolve(requestId, new JSONObject());
+        } catch (Exception error) {
+            reject(requestId, error.getMessage());
+        }
+    }
+
+    private void shareImages(
+        String requestId,
+        JSONArray items,
+        String title,
+        String text
+    ) {
+        try {
+            if (items == null || items.length() == 0) {
+                reject(requestId, "no images selected");
+                return;
+            }
+            ArrayList<Uri> uris = new ArrayList<>();
+            ClipData clipData = null;
+            for (int i = 0; i < items.length(); i += 1) {
+                JSONObject item = items.optJSONObject(i);
+                if (item == null) continue;
+                File file = writeImageToCache(
+                    item.optString("dataUrl"),
+                    item.optString("fileName", "jisudengchat-image-" + (i + 1) + ".png")
+                );
+                Uri uri = FileProvider.getUriForFile(
+                    this,
+                    getPackageName() + ".fileprovider",
+                    file
+                );
+                uris.add(uri);
+                if (clipData == null) {
+                    clipData = ClipData.newRawUri("images", uri);
+                } else {
+                    clipData.addItem(new ClipData.Item(uri));
+                }
+            }
+            if (uris.isEmpty()) {
+                reject(requestId, "no valid images selected");
+                return;
+            }
+            Intent intent = new Intent(
+                uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE
+            );
+            intent.setType("image/*");
+            if (uris.size() == 1) {
+                intent.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+            } else {
+                intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+            }
+            if (clipData != null) intent.setClipData(clipData);
             intent.putExtra(Intent.EXTRA_TEXT, text);
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(intent, title));
@@ -1146,7 +1505,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void installApk(String requestId, String rawId, String rawUri) {
+    private void installApk(String requestId, String rawId, String rawUri, String expectedSha256) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                 !getPackageManager().canRequestPackageInstalls()) {
@@ -1163,6 +1522,10 @@ public class MainActivity extends Activity {
             Uri uri = resolveDownloadedApkUri(rawId, rawUri);
             if (uri == null) {
                 reject(requestId, "downloaded apk not found");
+                return;
+            }
+            if (!matchesSha256(uri, expectedSha256)) {
+                reject(requestId, "downloaded apk checksum mismatch");
                 return;
             }
 
@@ -1208,6 +1571,26 @@ public class MainActivity extends Activity {
             );
         }
         return uri;
+    }
+
+    private boolean matchesSha256(Uri uri, String expectedSha256) throws Exception {
+        String expected = expectedSha256 == null ? "" : expectedSha256.replaceAll("[^A-Fa-f0-9]", "").toLowerCase(Locale.ROOT);
+        if (expected.isEmpty()) return true;
+        if (expected.length() != 64) return false;
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) return false;
+            byte[] buffer = new byte[32 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+        }
+        StringBuilder actual = new StringBuilder(64);
+        for (byte value : digest.digest()) {
+            actual.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        }
+        return expected.equals(actual.toString());
     }
 
     private void openUrl(String requestId, String url) {
@@ -1322,8 +1705,26 @@ public class MainActivity extends Activity {
         String url = options.optString("url");
         String method = options.optString("method", "POST");
         String body = options.optString("body", "");
+        String bodyBase64 = options.optString("bodyBase64", "");
         JSONObject headers = options.optJSONObject("headers");
         cancelledStreamRequests.remove(requestId);
+        if (
+            e2eFirstBootstrap401Fixture &&
+            !e2eBootstrap401Used &&
+            url.contains("/api/v1/nextchat/mobile/bootstrap")
+        ) {
+            e2eBootstrap401Used = true;
+            runE2eHttpErrorFixture(
+                requestId,
+                401,
+                "{\"code\":401,\"message\":\"token expired\"}"
+            );
+            return;
+        }
+        if (e2eFirstImage502Fixture && url.contains("/v1/images/")) {
+            runE2eImageFixture(requestId);
+            return;
+        }
         new Thread(() -> {
             HttpURLConnection connection = null;
             try {
@@ -1347,16 +1748,23 @@ public class MainActivity extends Activity {
                         connection.setRequestProperty(key, headers.optString(key));
                     }
                 }
-                if (body != null && !body.isEmpty()) {
+                byte[] requestBody = null;
+                if (bodyBase64 != null && !bodyBase64.isEmpty()) {
+                    requestBody = Base64.decode(bodyBase64, Base64.DEFAULT);
+                } else if (body != null && !body.isEmpty()) {
+                    requestBody = body.getBytes(StandardCharsets.UTF_8);
+                }
+                if (requestBody != null && requestBody.length > 0) {
+                    Log.i(LOG_TAG, "stream request " + method + " " + safeRequestPath(url) + " requestBytes=" + requestBody.length);
                     connection.setDoOutput(true);
-                    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-                    connection.setFixedLengthStreamingMode(bytes.length);
+                    connection.setFixedLengthStreamingMode(requestBody.length);
                     try (OutputStream out = connection.getOutputStream()) {
-                        out.write(bytes);
+                        out.write(requestBody);
                     }
                 }
 
                 int status = connection.getResponseCode();
+                Log.i(LOG_TAG, "stream response " + method + " " + safeRequestPath(url) + " status=" + status);
                 streamStatus(requestId, status);
                 InputStream input = status >= 200 && status < 300
                     ? connection.getInputStream()
@@ -1370,9 +1778,15 @@ public class MainActivity extends Activity {
                     return;
                 }
                 StringBuilder errorBody = new StringBuilder();
+                int responseChars = 0;
+                int responseLines = 0;
+                int maxLineChars = 0;
                 try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
+                        responseChars += line.length();
+                        responseLines += 1;
+                        maxLineChars = Math.max(maxLineChars, line.length());
                         if (status >= 200 && status < 300) {
                             streamData(requestId, line);
                         } else if (errorBody.length() < 4096) {
@@ -1380,6 +1794,12 @@ public class MainActivity extends Activity {
                         }
                     }
                 }
+                Log.i(
+                    LOG_TAG,
+                    "stream body " + method + " " + safeRequestPath(url) +
+                        " chars=" + responseChars + " lines=" + responseLines +
+                        " maxLineChars=" + maxLineChars
+                );
                 if (status >= 200 && status < 300) {
                     streamDone(requestId);
                 } else {
@@ -1387,6 +1807,12 @@ public class MainActivity extends Activity {
                 }
             } catch (Exception error) {
                 if (!cancelledStreamRequests.containsKey(requestId)) {
+                    Log.e(
+                        LOG_TAG,
+                        "stream failure " + method + " " + safeRequestPath(url) +
+                            " type=" + error.getClass().getSimpleName() +
+                            " message=" + safeErrorMessage(error)
+                    );
                     streamError(requestId, error.getMessage(), 0);
                 }
             } finally {
@@ -1403,6 +1829,66 @@ public class MainActivity extends Activity {
         } catch (JSONException ignored) {
         }
         resolve(requestId, payload);
+    }
+
+    private synchronized int nextE2eImageFixtureAttempt() {
+        e2eImageFixtureAttempt += 1;
+        return e2eImageFixtureAttempt;
+    }
+
+    private void runE2eImageFixture(String requestId) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("id", requestId);
+        } catch (JSONException ignored) {
+        }
+        resolve(requestId, payload);
+        int attempt = nextE2eImageFixtureAttempt();
+        webView.postDelayed(() -> {
+            Log.i(
+                LOG_TAG,
+                "E2E image fixture attempt=" + attempt +
+                " status=" + (attempt == 1 ? 502 : 200)
+            );
+            if (attempt == 1) {
+                streamStatus(requestId, 502);
+                streamError(
+                    requestId,
+                    "{\"title\":\"Bad Gateway\",\"detail\":\"E2E upstream busy\",\"instance\":\"e2e-image-502\"}",
+                    502
+                );
+                return;
+            }
+            streamStatus(requestId, 200);
+            streamData(
+                requestId,
+                "{\"data\":[{\"b64_json\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZJ9sAAAAASUVORK5CYII=\"}]}"
+            );
+            streamDone(requestId);
+        }, 80);
+    }
+
+    private void runE2eHttpErrorFixture(String requestId, int status, String body) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("id", requestId);
+        } catch (JSONException ignored) {
+        }
+        resolve(requestId, payload);
+        webView.postDelayed(() -> {
+            streamStatus(requestId, status);
+            streamError(requestId, body, status);
+        }, 80);
+    }
+
+    private String safeRequestPath(String rawUrl) {
+        try {
+            URL parsed = new URL(rawUrl);
+            String path = parsed.getPath();
+            return path == null || path.isEmpty() ? "/" : path;
+        } catch (Exception ignored) {
+            return "/";
+        }
     }
 
     private void cancelStreamRequest(String requestId) {
@@ -1424,9 +1910,31 @@ public class MainActivity extends Activity {
     }
 
     private void streamData(String requestId, String line) {
+        String value = line == null ? "" : line;
+        if (value.isEmpty()) {
+            streamDataChunk(requestId, "", false);
+            return;
+        }
+        int offset = 0;
+        while (offset < value.length()) {
+            int end = Math.min(value.length(), offset + STREAM_EVENT_CHUNK_CHARS);
+            if (
+                end < value.length() &&
+                end > offset &&
+                Character.isHighSurrogate(value.charAt(end - 1))
+            ) {
+                end -= 1;
+            }
+            streamDataChunk(requestId, value.substring(offset, end), end < value.length());
+            offset = end;
+        }
+    }
+
+    private void streamDataChunk(String requestId, String chunk, boolean continued) {
         JSONObject payload = new JSONObject();
         try {
-            payload.put("line", line == null ? "" : line);
+            payload.put("line", chunk);
+            payload.put("continued", continued);
         } catch (JSONException ignored) {
         }
         streamEvent(requestId, "data", payload);
@@ -2068,6 +2576,55 @@ public class MainActivity extends Activity {
         }
 
         @Override
+        public boolean shouldOverrideUrlLoading(
+            WebView view,
+            WebResourceRequest request
+        ) {
+            if (!request.isForMainFrame()) return false;
+            return handleTopLevelNavigation(request.getUrl());
+        }
+
+        @Override
+        @SuppressWarnings("deprecation")
+        public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            return handleTopLevelNavigation(Uri.parse(url));
+        }
+
+        @Override
+        public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+            Uri uri = Uri.parse(url);
+            if (!isTrustedLocalUri(uri)) {
+                view.stopLoading();
+                openExternalUri(uri);
+                return;
+            }
+            super.onPageStarted(view, url, favicon);
+        }
+
+        private boolean handleTopLevelNavigation(Uri uri) {
+            if (isTrustedLocalUri(uri)) return false;
+            openExternalUri(uri);
+            return true;
+        }
+
+        private boolean isTrustedLocalUri(Uri uri) {
+            return TrustedNavigationPolicy.isTrustedLocalUrl(uri.toString());
+        }
+
+        private void openExternalUri(Uri uri) {
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme();
+            if (!"https".equalsIgnoreCase(scheme) && !"http".equalsIgnoreCase(scheme)) {
+                return;
+            }
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+                intent.addCategory(Intent.CATEGORY_BROWSABLE);
+                startActivity(intent);
+            } catch (ActivityNotFoundException ignored) {
+            }
+        }
+
+        @Override
         public WebResourceResponse shouldInterceptRequest(
             WebView view,
             WebResourceRequest request
@@ -2082,7 +2639,7 @@ public class MainActivity extends Activity {
         }
 
         private WebResourceResponse assetResponse(Uri uri) {
-            if (!"https".equals(uri.getScheme()) || !"localhost".equals(uri.getHost())) {
+            if (!isTrustedLocalUri(uri)) {
                 return null;
             }
 

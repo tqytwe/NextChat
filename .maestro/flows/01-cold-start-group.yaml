@@ -1,0 +1,22 @@
+appId: com.jisudeng.chat
+name: Cold start keeps local default group without a session
+tags:
+  - core
+---
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "dashboard-default-group"
+- tapOn:
+    text: "choice-option-.*-unselected"
+    index: 0
+- tapOn: "dashboard-new-chat"
+- assertVisible: "chat-draft-no-session"
+- stopApp
+- launchApp:
+    clearState: false
+- runFlow: ../subflows/ensure-login.yaml
+- tapOn: "dashboard-new-chat"
+- assertVisible: "chat-draft-no-session"
+- tapOn: "chat-group-selector"
+- assertVisible: "choice-option-.*-selected"

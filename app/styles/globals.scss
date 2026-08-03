@@ -117,6 +117,23 @@ body {
   }
 }
 
+// Android scroll capture follows the document scroller. Non-chat mobile pages
+// opt in at runtime; chat keeps its dedicated scroll viewport for the composer.
+html.mobile-document-scroll {
+  height: auto;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body.mobile-document-scroll {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 100dvh;
+  overflow: visible;
+}
+
 ::-webkit-scrollbar {
   --bar-width: 10px;
   width: var(--bar-width);

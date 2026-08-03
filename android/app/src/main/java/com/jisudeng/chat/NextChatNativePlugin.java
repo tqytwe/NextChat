@@ -316,6 +316,13 @@ public class NextChatNativePlugin extends Plugin {
         String prompt = call.getString("prompt", "");
         String model = call.getString("model", "");
         String taskId = call.getString("taskId", "");
+        String ownerUserId = call.getString("ownerUserId", "");
+        String projectId = call.getString("projectId", "");
+        String runId = call.getString("runId", "");
+        String shotId = call.getString("shotId", "");
+        String kind = call.getString("kind", "");
+        String label = call.getString("label", "");
+        String collectionId = call.getString("collectionId", "");
         try {
             byte[] data = decodeDataUrl(dataUrl);
             String mimeType = mimeTypeFromDataUrl(dataUrl);
@@ -329,6 +336,13 @@ public class NextChatNativePlugin extends Plugin {
             metadata.put("fileName", file.getName());
             metadata.put("prompt", prompt == null ? "" : prompt);
             metadata.put("model", model == null ? "" : model);
+            metadata.put("ownerUserId", ownerUserId == null ? "" : ownerUserId);
+            metadata.put("projectId", projectId == null ? "" : projectId);
+            metadata.put("runId", runId == null ? "" : runId);
+            metadata.put("shotId", shotId == null ? "" : shotId);
+            metadata.put("kind", kind == null ? "" : kind);
+            metadata.put("label", label == null ? "" : label);
+            metadata.put("collectionId", collectionId == null ? "" : collectionId);
             metadata.put("mimeType", mimeType);
             metadata.put("createdAt", System.currentTimeMillis());
             metadata.put("size", file.length());
@@ -342,6 +356,7 @@ public class NextChatNativePlugin extends Plugin {
     @PluginMethod
     public void listAppImages(PluginCall call) {
         try {
+            String ownerUserId = call.getString("ownerUserId", "");
             JSONArray items = new JSONArray();
             File[] files = getAppImageDir().listFiles();
             if (files != null) {
@@ -353,7 +368,18 @@ public class NextChatNativePlugin extends Plugin {
                 }
                 Collections.sort(images, (left, right) -> Long.compare(right.lastModified(), left.lastModified()));
                 for (File file : images) {
-                    items.put(appImagePayload(file, readImageMetadata(file)));
+                    JSONObject metadata = readImageMetadata(file);
+                    String owner = metadata.optString("ownerUserId", "");
+                    // Old releases did not have account ownership metadata. Claim
+                    // those legacy files only for the account that first opens them.
+                    if (owner.isEmpty() && ownerUserId != null && !ownerUserId.isEmpty()) {
+                        metadata.put("ownerUserId", ownerUserId);
+                        writeImageMetadata(file, metadata);
+                        owner = ownerUserId;
+                    }
+                    if (ownerUserId == null || ownerUserId.isEmpty() || ownerUserId.equals(owner)) {
+                        items.put(appImagePayload(file, metadata));
+                    }
                 }
             }
             JSObject ret = new JSObject();
@@ -635,6 +661,13 @@ public class NextChatNativePlugin extends Plugin {
         payload.put("mimeType", metadata.optString("mimeType", mimeTypeForFile(file.getName())));
         payload.put("prompt", metadata.optString("prompt", ""));
         payload.put("model", metadata.optString("model", ""));
+        payload.put("ownerUserId", metadata.optString("ownerUserId", ""));
+        payload.put("projectId", metadata.optString("projectId", ""));
+        payload.put("runId", metadata.optString("runId", ""));
+        payload.put("shotId", metadata.optString("shotId", ""));
+        payload.put("kind", metadata.optString("kind", ""));
+        payload.put("label", metadata.optString("label", ""));
+        payload.put("collectionId", metadata.optString("collectionId", ""));
         payload.put("createdAt", metadata.optLong("createdAt", file.lastModified()));
         payload.put("updatedAt", file.lastModified());
         payload.put("size", file.length());

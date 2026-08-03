@@ -8,17 +8,25 @@ if (keystorePropertiesFile.exists()) {
     }
 }
 
-def androidVersionCodeValue = (
+def androidVersionCodeRaw = (
     project.findProperty('androidVersionCode') ?:
-        System.getenv('ANDROID_VERSION_CODE') ?:
-        '1'
-).toString().toInteger()
-def androidVersionNameValue = (
+        System.getenv('ANDROID_VERSION_CODE')
+)
+def androidVersionNameRaw = (
     project.findProperty('androidVersionName') ?:
         System.getenv('ANDROID_VERSION_NAME') ?:
-        System.getenv('NEXT_PUBLIC_ANDROID_VERSION') ?:
-        '1.0'
-).toString().replaceFirst(/^v/, '')
+        System.getenv('NEXT_PUBLIC_ANDROID_VERSION')
+)
+def releaseRequested = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains('release')
+}
+if (releaseRequested && (!androidVersionCodeRaw || !androidVersionNameRaw)) {
+    throw new GradleException(
+        'Release builds require ANDROID_VERSION_CODE and ANDROID_VERSION_NAME (or matching -P properties).'
+    )
+}
+def androidVersionCodeValue = (androidVersionCodeRaw ?: '1').toString().toInteger()
+def androidVersionNameValue = (androidVersionNameRaw ?: '0.0.0-dev').toString().replaceFirst(/^v/, '')
 
 android {
     namespace "com.jisudeng.chat"
