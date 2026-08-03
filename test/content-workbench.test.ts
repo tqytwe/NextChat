@@ -1,9 +1,14 @@
 import { describe, expect, test } from "@jest/globals";
 
 import {
+  CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT,
+  CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
   buildContentWorkbenchCopyPrompt,
   buildContentWorkbenchPrompt,
+  contentWorkbenchCanIncreaseShotCount,
+  contentWorkbenchClonePlan,
   contentWorkbenchCustomShot,
+  contentWorkbenchPlanOutputCount,
   contentWorkbenchPlan,
   contentWorkbenchPresets,
   normalizeContentWorkbenchShot,
@@ -85,8 +90,11 @@ describe("content creation workspace", () => {
     expect(detailPagePrompt).toContain("locally rendered specifications");
     expect(detailPagePrompt).toContain("5000mAh battery");
     expect(detailPrompt).toContain("Subject: Nova Phone.");
+    expect(mainPrompt).toContain("Shot type: main.");
+    expect(detailPrompt).toContain("macro or tight crop");
+    expect(detailPagePrompt).toContain("vertical detail-page module");
     expect(detailPrompt).toContain(
-      "follow this shot purpose instead of recreating the reference as a generic main image",
+      "not their camera angle, background, or framing",
     );
   });
 
@@ -114,6 +122,51 @@ describe("content creation workspace", () => {
     expect(customPrompt).toContain(
       "show day and night camera results side by side",
     );
+  });
+
+  test("lets every scenario plan scale by shot while preserving bounded batches", () => {
+    const basePlan = contentWorkbenchPlan("ecommerce");
+    const plan = basePlan.map((shot) => ({
+      ...shot,
+      count: CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
+    }));
+
+    expect(contentWorkbenchPlanOutputCount(plan)).toBe(42);
+    expect(contentWorkbenchCanIncreaseShotCount(plan, plan[0].id)).toBe(false);
+
+    const nearFullPlan = plan.map((shot, index) =>
+      index === 0 ? { ...shot, count: 5 } : shot,
+    );
+    const fullPlan = [
+      ...nearFullPlan,
+      {
+        ...contentWorkbenchCustomShot("extra-shot"),
+        count: CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
+      },
+      { ...contentWorkbenchCustomShot("overflow-shot"), count: 1 },
+    ];
+    expect(contentWorkbenchPlanOutputCount(fullPlan)).toBe(48);
+    expect(
+      contentWorkbenchCanIncreaseShotCount(fullPlan, "overflow-shot"),
+    ).toBe(false);
+    expect(CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT).toBe(48);
+  });
+
+  test("clones an edited preset plan before it is attached to a project", () => {
+    const [first] = contentWorkbenchPlan("ecommerce");
+    const cloned = contentWorkbenchClonePlan([
+      { ...first, count: 4, purpose: "show the packaging at checkout" },
+    ]);
+
+    expect(cloned).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        count: 4,
+        purpose: "show the packaging at checkout",
+      }),
+    ]);
+    expect(cloned[0]).not.toBe(first);
+    expect(cloned[0].copyFields).not.toBe(first.copyFields);
   });
 
   test("creates scenario-aware copy with editable parameter facts", () => {

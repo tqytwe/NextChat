@@ -46,4 +46,21 @@ describe("mobile dynamic display localization", () => {
       }),
     ).toMatch(/plan|套餐/i);
   });
+
+  test("maps administrator recovery codes without exposing a server-default message", () => {
+    expect(
+      localizeManagedMobileError({
+        code: "ADMIN_COMPLIANCE_ACK_REQUIRED",
+        message: "administrator compliance acknowledgement is required",
+        status: 423,
+      }),
+    ).toMatch(/compliance|合规/i);
+    expect(
+      localizeManagedMobileError({
+        code: "STEP_UP_REQUIRED",
+        message: "step-up verification required",
+        status: 403,
+      }),
+    ).toMatch(/step-up|二次验证/i);
+  });
 });

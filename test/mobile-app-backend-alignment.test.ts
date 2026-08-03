@@ -138,6 +138,24 @@ describe("mobile app backend alignment", () => {
     expect(source).toContain("window.setInterval(refresh, 15_000)");
   });
 
+  test("keeps scenario plans editable and retries the exact failed project run", () => {
+    const kit = source.slice(
+      source.indexOf("function AndroidContentKit()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    expect(kit).toContain("presetShotEdits");
+    expect(kit).toContain("function updateSelectedPlan(");
+    expect(kit).toContain("contentWorkbenchCanIncreaseShotCount(");
+    expect(kit).toContain("contentWorkbenchClonePlan(selectedPlanShots)");
+    expect(kit).toContain("function retryRunAssets(");
+    expect(kit).toContain("activeRunId: runId");
+    expect(kit).toContain("content-kit-retry-${asset.id}");
+    expect(kit).toContain("retryFailedAssets(selectedProject, displayedRunId)");
+    expect(kit).toContain("retryRunAssets(selectedProject, asset.runId");
+    expect(kit).toContain("collectionId: project.id");
+    expect(kit).not.toContain("open={groupIndex === 0}");
+  });
+
   test("uses the server capability contract and coupon IDs", () => {
     expect(source).toContain('capabilities.operations?.includes("edit")');
     expect(source).toContain('"/api/v1/payment/coupons/quote"');
@@ -211,6 +229,34 @@ describe("mobile app backend alignment", () => {
     expect(managedStore).toContain("void get().refreshMobileSessionStatus()");
     expect(managedStore).toContain("set({ mobileProtocol: null })");
     expect(managedStore).toContain("mobileProtocol: _mobileProtocol");
+
+    const accountAdminRoute = source.slice(
+      source.indexOf("if (route === Path.AccountAdmin)"),
+      source.indexOf("if (route === Path.AccountRedeem)"),
+    );
+    expect(accountAdminRoute).toContain("{isAdmin ? (");
+    expect(accountAdminRoute).toContain("<MobileAdminWorkspace");
+    expect(accountAdminRoute).toContain("text.account.adminUnavailable");
+  });
+
+  test("checks and acknowledges admin compliance before rendering protected data", () => {
+    const adminWorkspace = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-admin-workspace.tsx"),
+      "utf8",
+    );
+    const adminClient = readFileSync(
+      resolve(process.cwd(), "app/client/mobile-admin.ts"),
+      "utf8",
+    );
+
+    expect(adminWorkspace).toContain("getMobileAdminComplianceStatus");
+    expect(adminWorkspace).toContain("acceptMobileAdminCompliance");
+    expect(adminWorkspace).toContain("isMobileAdminComplianceAvailable");
+    expect(adminWorkspace).toContain("if (!complianceSupported)");
+    expect(adminWorkspace).toContain("ADMIN_COMPLIANCE_ACK_REQUIRED");
+    expect(adminWorkspace).toContain("setAppliedSearch");
+    expect(adminClient).toContain("MOBILE_ADMIN_COMPLIANCE_PATHS");
+    expect(adminClient).toContain('"Idempotency-Key"');
   });
 
   test("uses the document scroller for long pages while keeping chat independent", () => {

@@ -76,9 +76,14 @@ import {
   localizeManagedMobileError,
 } from "../client/managed-mobile-i18n";
 import {
+  CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT,
+  CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
   buildContentWorkbenchCopyPrompt,
   buildContentWorkbenchPrompt,
+  contentWorkbenchCanIncreaseShotCount,
+  contentWorkbenchClonePlan,
   contentWorkbenchCustomShot,
+  contentWorkbenchPlanOutputCount,
   contentWorkbenchPresets,
   contentWorkbenchShotOptions,
   normalizeContentWorkbenchShot,
@@ -233,7 +238,8 @@ const SERVER_SKILL_SELECTION_KEY = "jisudengchat-server-skills-v1";
 const COLLABORATION_AGENT_ID = "multi-agent-collaboration";
 const CONTENT_KIT_GLOBAL_CONCURRENCY = 2;
 const CONTENT_KIT_MAX_OUTPUTS_PER_RUN = 24;
-const CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT = 48;
+const CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT =
+  CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT;
 const activeContentKitOutputs = new Set<string>();
 
 type ContentKitShotPlan = WorkbenchShotPlan;
@@ -8275,6 +8281,7 @@ function AndroidContentKit() {
   const [error, setError] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [showComposer, setShowComposer] = useState(false);
+  const [showPlanEditor, setShowPlanEditor] = useState(false);
   const [showAdvancedFields, setShowAdvancedFields] = useState(false);
   const [presetId, setPresetId] = useState("ecommerce");
   const [customShots, setCustomShots] = useState<ContentKitShotPlan[]>(() =>
@@ -8282,6 +8289,9 @@ function AndroidContentKit() {
       .filter((shot) => ["main", "lifestyle", "vertical"].includes(shot.kind))
       .map((shot) => localizedContentKitShot(shot, text)),
   );
+  const [presetShotEdits, setPresetShotEdits] = useState<
+    Record<string, ContentKitShotPlan[]>
+  >({});
   const fileRef = useRef<HTMLInputElement | null>(null);
   const queueRef = useRef(new Set<string>());
   const recoveredQueuesRef = useRef(false);
@@ -8338,12 +8348,14 @@ function AndroidContentKit() {
     ? modelCapabilities.supported_sizes
     : ["1024x1024", "1024x1536", "1536x1024"];
 
-  const selectedPlanShots: ContentKitShotPlan[] =
-    presetId === "custom" ? customShots : selectedPreset.shots;
-  const selectedPlanCount = selectedPlanShots.reduce(
-    (total, shot) => total + shot.count,
-    0,
-  );
+  function planForPreset(preset: (typeof presetOptions)[number]) {
+    return preset.id === "custom"
+      ? customShots
+      : presetShotEdits[preset.id] || preset.shots;
+  }
+
+  const selectedPlanShots: ContentKitShotPlan[] = planForPreset(selectedPreset);
+  const selectedPlanCount = contentWorkbenchPlanOutputCount(selectedPlanShots);
   const planSignature = selectedPlanShots
     .map(
       (shot) =>
@@ -8353,6 +8365,21 @@ function AndroidContentKit() {
   const customShotOptions = contentWorkbenchShotOptions().map((shot) =>
     localizedContentKitShot(shot, text),
   );
+
+  function updateSelectedPlan(
+    updater: (plan: ContentKitShotPlan[]) => ContentKitShotPlan[],
+  ) {
+    if (selectedPreset.id === "custom") {
+      setCustomShots((current) => updater(current));
+      return;
+    }
+    setPresetShotEdits((current) => ({
+      ...current,
+      [selectedPreset.id]: updater(
+        current[selectedPreset.id] || selectedPreset.shots,
+      ),
+    }));
+  }
 
   function assetSpecs(
     runId: string,
@@ -8889,23 +8916,76 @@ function AndroidContentKit() {
     updateRun(project.id, runId, "cancelled");
   }
 
-  function retryFailedAssets(project: ManagedMobileContentKit) {
-    const runId = project.activeRunId;
-    if (!runId) return;
+  function retryRunAssets(
+    project: ManagedMobileContentKit,
+    runId: string,
+    assetIds?: string[],
+  ) {
+    const retryIds = new Set(assetIds || []);
+    const retryingAllFailed = retryIds.size === 0;
+    const retryable = project.assets.filter(
+      (asset) =>
+        asset.runId === runId &&
+        asset.status === "failed" &&
+        (retryingAllFailed || retryIds.has(asset.id)),
+    );
+    if (!retryable.length) return;
+
+    const activeRun = project.runs?.find(
+      (run) => run.id === project.activeRunId,
+    );
+    if (
+      activeRun &&
+      activeRun.id !== runId &&
+      ["queued", "running", "paused"].includes(activeRun.status)
+    ) {
+      setError(text.platform.contentKit.queueRunning);
+      return;
+    }
+
+    const retrying = new Set(retryable.map((asset) => asset.id));
     mobileStore.updateContentKit(project.id, {
+      activeRunId: runId,
       assets: project.assets.map((asset) =>
-        asset.runId === runId && asset.status === "failed"
-          ? { ...asset, status: "queued", error: "", updatedAt: Date.now() }
+        retrying.has(asset.id)
+          ? {
+              ...asset,
+              // A recovered request reuses its key, while an explicit retry
+              // must have a new key so a terminal upstream error is not
+              // returned from an idempotency cache.
+              requestId: clientRequestID(`content-kit-retry-${asset.id}`),
+              taskId: undefined,
+              status: "queued",
+              error: "",
+              billingStatus: "pending",
+              updatedAt: Date.now(),
+            }
           : asset,
       ),
+      runs: (project.runs || []).map((run) =>
+        run.id === runId
+          ? { ...run, status: "queued", updatedAt: Date.now() }
+          : run,
+      ),
     });
-    updateRun(project.id, runId, "queued");
+    setViewRunId(runId);
+    setError("");
     void runProjectQueue(project.id);
   }
 
+  function retryFailedAssets(
+    project: ManagedMobileContentKit,
+    runId = project.activeRunId,
+  ) {
+    if (!runId) return;
+    retryRunAssets(project, runId);
+  }
+
   function createNextRun(project: ManagedMobileContentKit) {
-    const plan = project.shotPlan?.filter((shot) => shot.count > 0) || [];
-    const outputCount = plan.reduce((total, shot) => total + shot.count, 0);
+    const plan = contentWorkbenchClonePlan(
+      project.shotPlan?.filter((shot) => shot.count > 0) || [],
+    );
+    const outputCount = contentWorkbenchPlanOutputCount(plan);
     if (
       !outputCount ||
       project.assets.length + outputCount > CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT
@@ -9029,7 +9109,7 @@ function AndroidContentKit() {
       model,
       referenceImages: references,
       presetId: selectedPreset.id,
-      shotPlan: selectedPlanShots,
+      shotPlan: contentWorkbenchClonePlan(selectedPlanShots),
       activeRunId: runs[0]?.id,
       runs,
       assets,
@@ -9327,7 +9407,7 @@ function AndroidContentKit() {
           {runAssets.some((asset) => asset.status === "failed") && (
             <button
               type="button"
-              onClick={() => retryFailedAssets(selectedProject)}
+              onClick={() => retryFailedAssets(selectedProject, displayedRunId)}
             >
               {text.platform.contentKit.retryFailed}
             </button>
@@ -9406,10 +9486,9 @@ function AndroidContentKit() {
             ))}
           </div>
           <div className={styles["content-kit-assets"]}>
-            {groupedAssets.map(([shotId, assets], groupIndex) => (
+            {groupedAssets.map(([shotId, assets]) => (
               <details
                 key={shotId}
-                open={groupIndex === 0}
                 className={styles["content-kit-shot-group"]}
               >
                 <summary>
@@ -9482,13 +9561,11 @@ function AndroidContentKit() {
                       {asset.status === "failed" && (
                         <button
                           type="button"
-                          onClick={() => {
-                            patchAsset(selectedProject.id, asset.id, {
-                              status: "queued",
-                              error: "",
-                            });
-                            void runProjectQueue(selectedProject.id);
-                          }}
+                          onClick={() =>
+                            retryRunAssets(selectedProject, asset.runId, [
+                              asset.id,
+                            ])
+                          }
                         >
                           <ReloadIcon />
                         </button>
@@ -9710,9 +9787,8 @@ function AndroidContentKit() {
             <span>{text.platform.contentKit.outputPlan}</span>
             <div>
               {presetOptions.map((preset) => {
-                const count = preset.shots.reduce(
-                  (total, shot) => total + shot.count,
-                  0,
+                const count = contentWorkbenchPlanOutputCount(
+                  planForPreset(preset),
                 );
                 return (
                   <button
@@ -9722,7 +9798,10 @@ function AndroidContentKit() {
                     className={clsx({
                       [styles["active"]]: preset.id === selectedPreset.id,
                     })}
-                    onClick={() => setPresetId(preset.id)}
+                    onClick={() => {
+                      setPresetId(preset.id);
+                      setShowPlanEditor(preset.id === "custom");
+                    }}
                   >
                     <strong>{preset.title}</strong>
                     <small>{preset.hint}</small>
@@ -9732,9 +9811,19 @@ function AndroidContentKit() {
               })}
             </div>
           </div>
-          {presetId === "custom" && (
+          <button
+            type="button"
+            className={styles["content-kit-more-settings"]}
+            aria-expanded={showPlanEditor}
+            onClick={() => setShowPlanEditor((value) => !value)}
+          >
+            {showPlanEditor
+              ? text.platform.contentKit.hidePlanEditor
+              : text.platform.contentKit.editPlan}
+          </button>
+          {showPlanEditor && (
             <div className={styles["content-kit-custom-plan"]}>
-              {customShots.map((shot) => (
+              {selectedPlanShots.map((shot) => (
                 <div
                   key={shot.id}
                   className={styles["content-kit-custom-shot"]}
@@ -9746,7 +9835,7 @@ function AndroidContentKit() {
                           aria-label={`${text.platform.contentKit.customShot} name`}
                           value={shot.label}
                           onChange={(event) =>
-                            setCustomShots((items) =>
+                            updateSelectedPlan((items) =>
                               items.map((item) =>
                                 item.id === shot.id
                                   ? {
@@ -9769,7 +9858,7 @@ function AndroidContentKit() {
                         aria-label={`${shot.label} -`}
                         disabled={shot.count <= 1}
                         onClick={() =>
-                          setCustomShots((items) =>
+                          updateSelectedPlan((items) =>
                             items.map((item) =>
                               item.id === shot.id
                                 ? {
@@ -9787,14 +9876,22 @@ function AndroidContentKit() {
                       <button
                         type="button"
                         aria-label={`${shot.label} +`}
-                        disabled={shot.count >= 6 || selectedPlanCount >= 48}
+                        disabled={
+                          !contentWorkbenchCanIncreaseShotCount(
+                            selectedPlanShots,
+                            shot.id,
+                          )
+                        }
                         onClick={() =>
-                          setCustomShots((items) =>
+                          updateSelectedPlan((items) =>
                             items.map((item) =>
                               item.id === shot.id
                                 ? {
                                     ...item,
-                                    count: Math.min(6, item.count + 1),
+                                    count: Math.min(
+                                      CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
+                                      item.count + 1,
+                                    ),
                                   }
                                 : item,
                             ),
@@ -9808,7 +9905,7 @@ function AndroidContentKit() {
                       aria-label={`${shot.label} size`}
                       value={shot.size}
                       onChange={(event) =>
-                        setCustomShots((items) =>
+                        updateSelectedPlan((items) =>
                           items.map((item) =>
                             item.id === shot.id
                               ? { ...item, size: event.currentTarget.value }
@@ -9827,7 +9924,7 @@ function AndroidContentKit() {
                       type="button"
                       aria-label={`${text.platform.contentKit.removeShot} ${shot.label}`}
                       onClick={() =>
-                        setCustomShots((items) =>
+                        updateSelectedPlan((items) =>
                           items.filter((item) => item.id !== shot.id),
                         )
                       }
@@ -9844,7 +9941,7 @@ function AndroidContentKit() {
                       }
                       value={shot.purpose}
                       onChange={(event) =>
-                        setCustomShots((items) =>
+                        updateSelectedPlan((items) =>
                           items.map((item) =>
                             item.id === shot.id
                               ? {
@@ -9864,23 +9961,29 @@ function AndroidContentKit() {
                   .filter(
                     (option) =>
                       option.kind === "custom" ||
-                      !customShots.some((shot) => shot.id === option.id),
+                      !selectedPlanShots.some(
+                        (shot) => shot.kind === option.kind,
+                      ),
                   )
                   .map((option) => (
                     <button
                       key={option.id}
                       type="button"
+                      disabled={
+                        selectedPlanCount >= CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT
+                      }
                       onClick={() => {
-                        const next =
+                        const baseShot =
                           option.kind === "custom"
-                            ? localizedContentKitShot(
-                                contentWorkbenchCustomShot(
-                                  clientRequestID("content-kit-custom-shot"),
-                                ),
-                                text,
+                            ? contentWorkbenchCustomShot(
+                                clientRequestID("content-kit-custom-shot"),
                               )
                             : option;
-                        setCustomShots((items) => [...items, next]);
+                        const next = localizedContentKitShot(
+                          { ...baseShot, scene: selectedPreset.id },
+                          text,
+                        );
+                        updateSelectedPlan((items) => [...items, next]);
                       }}
                     >
                       <AddIcon />
@@ -14918,7 +15021,13 @@ function AndroidAccountSettings() {
         text={text}
         onRefresh={() => managed.bootstrap({ silent: true })}
       >
-        <MobileAdminWorkspace client={adminClient} text={text} />
+        {isAdmin ? (
+          <MobileAdminWorkspace client={adminClient} text={text} />
+        ) : (
+          <p className={styles["empty-copy"]}>
+            {text.account.adminUnavailable}
+          </p>
+        )}
       </AndroidDetailShell>
     );
   }

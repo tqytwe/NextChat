@@ -23,6 +23,8 @@ const { ManagedApiError, ManagedTransportError } = await import(
 );
 const {
   MobileAdminClientError,
+  acceptMobileAdminCompliance,
+  getMobileAdminComplianceStatus,
   listMobileAdminAuditLogs,
   listMobileAdminOrders,
   listMobileAdminUsers,
@@ -41,6 +43,7 @@ const client = {
         available: true,
         api_base_path: "/api/v1/admin",
         step_up_path: "/api/v1/user/totp/step-up",
+        compliance_path: "/api/v1/admin/compliance",
       },
     },
   },
@@ -193,6 +196,179 @@ describe("mobile administrator client", () => {
     });
     expect(mobileAdminErrorCategory(error)).toBe("http");
     expect(mobileAdminRequestId(error)).toBe("admin-orders-502");
+  });
+
+  test("preserves compliance metadata instead of reducing a 423 to a network error", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: false,
+      status: 423,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            code: "ADMIN_COMPLIANCE_ACK_REQUIRED",
+            message: "administrator compliance acknowledgement is required",
+            metadata: {
+              version: "v2026.06.10",
+              document_url_zh: "https://example.test/compliance-zh",
+            },
+          }),
+        ),
+    } as Response);
+
+    await expect(
+      listMobileAdminOrders(client, undefined, {
+        requestId: "admin-compliance-423",
+      }),
+    ).rejects.toMatchObject({
+      status: 423,
+      code: "ADMIN_COMPLIANCE_ACK_REQUIRED",
+      requestId: "admin-compliance-423",
+      metadata: {
+        version: "v2026.06.10",
+        document_url_zh: "https://example.test/compliance-zh",
+      },
+    });
+  });
+
+  test("reads the server-owned compliance status before protected admin data", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            code: 0,
+            data: {
+              required: true,
+              version: "v2026.06.10",
+              ack_phrase_zh: "确认语",
+            },
+          }),
+        ),
+    } as Response);
+
+    await expect(
+      getMobileAdminComplianceStatus(client, {
+        requestId: "admin-compliance-status",
+        locale: "zh-CN",
+      }),
+    ).resolves.toEqual({
+      data: {
+        required: true,
+        version: "v2026.06.10",
+        ack_phrase_zh: "确认语",
+      },
+      requestId: "admin-compliance-status",
+    });
+
+    expect(window.fetch).toHaveBeenCalledWith(
+      "https://api.jisudeng.com/api/v1/admin/compliance",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  test("does not probe an undeclared compliance route on a legacy server", async () => {
+    const legacyClient = {
+      ...client,
+      mobileProtocol: {
+        capabilities: {
+          admin: {
+            available: true,
+            api_base_path: "/api/v1/admin",
+            step_up_path: "/api/v1/user/totp/step-up",
+          },
+        },
+      },
+    };
+
+    await expect(
+      getMobileAdminComplianceStatus(legacyClient, {
+        requestId: "admin-compliance-legacy",
+      }),
+    ).rejects.toMatchObject({
+      code: "ADMIN_COMPLIANCE_CAPABILITY_UNAVAILABLE",
+      category: "capability",
+      path: "/api/v1/admin/compliance",
+      requestId: "admin-compliance-legacy",
+    });
+    expect(window.fetch).not.toHaveBeenCalled();
+  });
+
+  test("keeps legacy administrator read requests available without compliance capability", async () => {
+    const legacyClient = {
+      ...client,
+      mobileProtocol: {
+        capabilities: {
+          admin: {
+            available: true,
+            api_base_path: "/api/v1/admin",
+            step_up_path: "/api/v1/user/totp/step-up",
+          },
+        },
+      },
+    };
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            code: 0,
+            data: { items: [], total: 0, page: 1, page_size: 20, pages: 1 },
+          }),
+        ),
+    } as Response);
+
+    await expect(
+      listMobileAdminOrders(legacyClient, undefined, {
+        requestId: "admin-legacy-orders",
+      }),
+    ).resolves.toMatchObject({ requestId: "admin-legacy-orders" });
+    expect(window.fetch).toHaveBeenCalledWith(
+      "https://api.jisudeng.com/api/v1/admin/payment/orders",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  test("acknowledges compliance with an idempotency key and correlated IDs", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            code: 0,
+            data: { required: false, version: "v2026.06.10" },
+          }),
+        ),
+    } as Response);
+
+    await expect(
+      acceptMobileAdminCompliance(
+        client,
+        { phrase: "确认语", language: "zh" },
+        {
+          requestId: "admin-compliance-accept",
+          idempotencyKey: "admin-compliance-accept-key",
+        },
+      ),
+    ).resolves.toEqual({
+      data: { required: false, version: "v2026.06.10" },
+      requestId: "admin-compliance-accept",
+    });
+
+    expect(window.fetch).toHaveBeenCalledWith(
+      "https://api.jisudeng.com/api/v1/admin/compliance/accept",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ phrase: "确认语", language: "zh" }),
+      }),
+    );
+    const request = jest.mocked(window.fetch).mock.calls[0][1];
+    const headers = new Headers(request?.headers);
+    expect(headers.get("X-Request-ID")).toBe("admin-compliance-accept");
+    expect(headers.get("X-Client-Request-ID")).toBe("admin-compliance-accept");
+    expect(headers.get("Idempotency-Key")).toBe("admin-compliance-accept-key");
   });
 
   test("preserves the request ID and network category from a transport failure", async () => {

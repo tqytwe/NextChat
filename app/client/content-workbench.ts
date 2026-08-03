@@ -31,6 +31,14 @@ export type ContentWorkbenchShotLabel =
   | "download"
   | "customShot";
 
+/**
+ * A shot group is deliberately capped so one accidental tap cannot enqueue an
+ * unreviewable batch. Users can still compose up to 48 outputs across their
+ * own shot groups in a project.
+ */
+export const CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT = 6;
+export const CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT = 48;
+
 export interface ContentWorkbenchShotPlan {
   id: string;
   scene?: string;
@@ -400,7 +408,13 @@ export function normalizeContentWorkbenchShot(
 ): ContentWorkbenchShotPlan {
   const fallback =
     DEFAULT_SHOT_BY_KIND[shot.kind || ""] || DEFAULT_SHOT_BY_KIND.custom;
-  const count = Math.max(1, Math.min(6, Number(shot.count || fallback.count)));
+  const count = Math.max(
+    1,
+    Math.min(
+      CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
+      Number(shot.count || fallback.count),
+    ),
+  );
   return {
     ...cloneShot(fallback),
     ...shot,
@@ -415,9 +429,40 @@ export function normalizeContentWorkbenchShot(
     promptTemplate: shot.promptTemplate || fallback.promptTemplate,
     copyFields:
       Array.isArray(shot.copyFields) && shot.copyFields.length
-        ? shot.copyFields
+        ? [...shot.copyFields]
         : [...fallback.copyFields],
   };
+}
+
+/**
+ * Produces independent normalized copies before a plan is stored with a
+ * project. This prevents a later composer edit from changing a saved run.
+ */
+export function contentWorkbenchClonePlan(plan: ContentWorkbenchShotPlan[]) {
+  return plan.map((shot) => normalizeContentWorkbenchShot(shot));
+}
+
+export function contentWorkbenchPlanOutputCount(
+  plan: ContentWorkbenchShotPlan[],
+) {
+  return contentWorkbenchClonePlan(plan).reduce(
+    (total, shot) => total + shot.count,
+    0,
+  );
+}
+
+export function contentWorkbenchCanIncreaseShotCount(
+  plan: ContentWorkbenchShotPlan[],
+  shotId: string,
+  maxOutputs = CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT,
+) {
+  const shot = plan.find((item) => item.id === shotId);
+  if (!shot) return false;
+  return (
+    normalizeContentWorkbenchShot(shot).count <
+      CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT &&
+    contentWorkbenchPlanOutputCount(plan) < maxOutputs
+  );
 }
 
 function briefValue(
@@ -444,6 +489,43 @@ function contentWorkbenchControls(controls?: ContentWorkbenchBrandControls) {
   ].filter((value): value is string => Boolean(value));
 }
 
+function contentWorkbenchShotGuard(shot: ContentWorkbenchShotPlan) {
+  const guards: Record<string, string> = {
+    main: "Use a complete primary subject view with one clear focal point. Do not crop this into a material-detail or turn it into a lifestyle scene.",
+    angle:
+      "Use a three-quarter, side, rear, overhead, or practical-use angle. Do not repeat a centered front-facing primary listing composition.",
+    detail:
+      "Use a macro or tight crop of one real material, mechanism, texture, or feature. Do not show a wide full-product hero view.",
+    lifestyle:
+      "Show the subject in a credible real-world context with natural scale and use. Do not use a seamless studio packshot or generic product pedestal.",
+    "selling-point":
+      "Use one feature demonstration and reserve a quiet modular panel for local factual copy. Do not generate readable text, price labels, specifications, or logos.",
+    "detail-page":
+      "Use a vertical detail-page module with one explained feature and a deliberate ordered copy area. Do not create a storefront hero or render facts as image text.",
+    banner:
+      "Use a true horizontal layout with the focal subject on one side and separate empty copy space on the other. Do not return a square crop.",
+    poster:
+      "Use a campaign composition with intentional headline-safe space. Do not fill that space with synthetic readable text.",
+    vertical:
+      "Use a portrait mobile-first composition with a single focal point that remains readable at cover size. Do not reuse a landscape banner layout.",
+    "social-cover":
+      "Use a portrait cover composition that communicates one idea immediately. Do not reuse a carousel card or listing hero composition.",
+    "social-carousel":
+      "Use a square explanatory card that advances a story beyond the cover. Do not repeat the cover's framing.",
+    "brand-hero":
+      "Use a distinctive branded campaign visual, not a neutral store listing packshot.",
+    feature:
+      "Use one service or product capability as the visual story. Do not render a fake interface full of unreadable labels.",
+    workflow:
+      "Use a clear process visual with distinct stages and local-label space. Do not use a generic hero composition.",
+    download:
+      "Use a conversion poster with a device or service focal point and protected call-to-action space. Do not generate the call to action as image text.",
+    custom:
+      "Follow the custom shot direction while making the composition meaningfully different from any primary visual.",
+  };
+  return guards[shot.kind] || guards.custom;
+}
+
 export function buildContentWorkbenchPrompt(
   brief: ContentWorkbenchBrief,
   inputShot: ContentWorkbenchShotPlan,
@@ -468,12 +550,14 @@ export function buildContentWorkbenchPrompt(
   return [
     `Scene: ${brief.scene || "custom"}.`,
     subject && `Subject: ${subject}.`,
+    `Shot type: ${shot.kind}.`,
     `Shot purpose: ${shot.purpose}.`,
+    `Production guardrail: ${contentWorkbenchShotGuard(shot)}`,
     shot.promptTemplate,
     `Target aspect: ${shot.aspect}; requested size: ${shot.size}.`,
     ...context,
     ...controls,
-    "When reference images are attached, use them only to preserve identity and visual facts; follow this shot purpose instead of recreating the reference as a generic main image.",
+    "When reference images are attached, use them only to preserve identity and visual facts, not their camera angle, background, or framing. Follow this shot purpose instead of recreating the reference as a generic main image.",
   ]
     .filter(Boolean)
     .join(" ");

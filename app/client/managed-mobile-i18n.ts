@@ -94,6 +94,8 @@ export const MANAGED_MOBILE_TEXT = {
       teamApplicationNotPending: "该申请已不处于待处理状态",
       teamApplicationExpired: "该申请已过期",
       teamCompetitionUnavailable: "战队功能暂时不可用，请稍后重试",
+      adminComplianceRequired: "请先阅读并确认管理员合规承诺",
+      adminStepUpRequired: "该管理员操作需要二次验证",
     },
     common: {
       cancel: "取消",
@@ -128,6 +130,8 @@ export const MANAGED_MOBILE_TEXT = {
         newProject: "新建项目",
         moreSettings: "更多设置",
         hideMoreSettings: "收起更多设置",
+        editPlan: "编辑镜头计划",
+        hidePlanEditor: "收起镜头计划",
         projectName: "创作主题",
         productPlaceholder: "例如：夏日轻便小白鞋、新品活动或应用下载",
         sellingPoints: "核心信息与卖点",
@@ -896,6 +900,7 @@ export const MANAGED_MOBILE_TEXT = {
         summary: "运行概览",
         paymentSummary: "支付概览",
         userSearch: "搜索邮箱或用户名",
+        search: "查询",
         noUsers: "未找到用户",
         userBalance: "余额核对",
         balanceHistory: "余额流水",
@@ -916,6 +921,16 @@ export const MANAGED_MOBILE_TEXT = {
         stepUpVerify: "验证",
         stepUpVerified: (seconds: number) => `二次验证有效期约 ${seconds} 秒`,
         stepUpFailed: "二次验证失败，请检查动态验证码后重试",
+        compliance: "管理员合规确认",
+        complianceChecking: "正在核验管理员合规状态...",
+        complianceRequiredHint:
+          "继续使用管理功能前，请阅读合规承诺并完整输入确认语。",
+        complianceDocument: "查看合规承诺",
+        compliancePhraseHint: "完整输入确认语",
+        complianceAccept: "确认并继续",
+        complianceAccepted: "合规承诺已确认，可以继续使用管理功能。",
+        complianceUnavailable: "未能读取管理员合规状态，请刷新后重试",
+        compliancePhraseRequired: "请完整输入确认语后再确认",
         readonlyHint:
           "移动端仅展示后端已开放的只读数据；资金、配置和用户修改请在网页管理后台完成。",
         status: "状态",
@@ -1188,6 +1203,10 @@ export const MANAGED_MOBILE_TEXT = {
       teamApplicationExpired: "This application has expired.",
       teamCompetitionUnavailable:
         "Team competition is temporarily unavailable. Try again later.",
+      adminComplianceRequired:
+        "Read and acknowledge the administrator compliance commitment first.",
+      adminStepUpRequired:
+        "This administrator action requires step-up verification.",
     },
     common: {
       cancel: "Cancel",
@@ -1222,6 +1241,8 @@ export const MANAGED_MOBILE_TEXT = {
         newProject: "New project",
         moreSettings: "More settings",
         hideMoreSettings: "Hide more settings",
+        editPlan: "Edit shot plan",
+        hidePlanEditor: "Hide shot plan",
         projectName: "Creative subject",
         productPlaceholder:
           "e.g. Lightweight summer sneakers, launch campaign, or app download",
@@ -2059,6 +2080,7 @@ export const MANAGED_MOBILE_TEXT = {
         summary: "Runtime overview",
         paymentSummary: "Payment overview",
         userSearch: "Search email or username",
+        search: "Search",
         noUsers: "No users found",
         userBalance: "Balance review",
         balanceHistory: "Balance history",
@@ -2081,6 +2103,19 @@ export const MANAGED_MOBILE_TEXT = {
           `Step-up verification is valid for about ${seconds} seconds`,
         stepUpFailed:
           "Step-up verification failed. Check the one-time code and try again.",
+        compliance: "Administrator compliance acknowledgement",
+        complianceChecking: "Checking administrator compliance status...",
+        complianceRequiredHint:
+          "Read the compliance commitment and enter the acknowledgement phrase before using administrator tools.",
+        complianceDocument: "View compliance commitment",
+        compliancePhraseHint: "Enter the full acknowledgement phrase",
+        complianceAccept: "Acknowledge and continue",
+        complianceAccepted:
+          "The compliance commitment is acknowledged. Administrator tools are available.",
+        complianceUnavailable:
+          "Administrator compliance status could not be read. Refresh and try again.",
+        compliancePhraseRequired:
+          "Enter the full acknowledgement phrase before confirming",
         readonlyHint:
           "Mobile shows only server-approved read data. Complete fund, configuration, and user changes in the web admin console.",
         status: "Status",
@@ -2287,6 +2322,13 @@ export function localizeManagedMobileError(input: {
   const text = getManagedMobileText();
   const raw = (input.message || "").trim();
   const normalized = `${String(input.code || "")} ${raw}`.toLowerCase();
+
+  if (/admin_compliance_ack_required/.test(normalized)) {
+    return text.errors.adminComplianceRequired;
+  }
+  if (/step_up_required/.test(normalized)) {
+    return text.errors.adminStepUpRequired;
+  }
 
   if (
     input.status === 404 &&

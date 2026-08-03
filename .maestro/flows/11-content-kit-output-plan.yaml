@@ -7,10 +7,18 @@ tags:
     clearState: false
 - runFlow: ../subflows/ensure-login.yaml
 - tapOn: "open-content-kit"
-- tapOn: "New kit|新建套件"
-- assertVisible: "16 images planned in this run|本批计划 16 张"
-- tapOn: "content-kit-preset-campaign"
-- assertVisible: "24 images planned in this run|本批计划 24 张"
+- tapOn: "New project|新建项目"
+- assertVisible: "content-kit-preset-ecommerce"
+- tapOn: "content-kit-preset-brand"
+- scrollUntilVisible:
+    element: "content-kit-generate"
+    direction: DOWN
+    timeout: 10000
+- assertVisible: "7 images planned in this run|本批计划 7 张"
+- scrollUntilVisible:
+    element: "content-kit-preset-custom"
+    direction: UP
+    timeout: 10000
 - tapOn: "content-kit-preset-custom"
 - assertVisible: "content-kit-preset-custom"
 - scrollUntilVisible:

@@ -3,11 +3,17 @@ import {
   ManagedTransportError,
   managedJsonRequest,
 } from "./managed-nextchat";
-import { resolveMobileAdminCapability } from "./mobile-capabilities";
+import {
+  CANONICAL_MOBILE_ADMIN_API_BASE_PATH,
+  CANONICAL_MOBILE_ADMIN_COMPLIANCE_PATH,
+  CANONICAL_MOBILE_ADMIN_STEP_UP_PATH,
+  resolveMobileAdminCapability,
+} from "./mobile-capabilities";
 import type { MobileProtocol } from "./mobile-platform";
 
-const CANONICAL_ADMIN_API_BASE_PATH = "/api/v1/admin";
-const CANONICAL_ADMIN_STEP_UP_PATH = "/api/v1/user/totp/step-up";
+const CANONICAL_ADMIN_API_BASE_PATH = CANONICAL_MOBILE_ADMIN_API_BASE_PATH;
+const CANONICAL_ADMIN_COMPLIANCE_PATH = CANONICAL_MOBILE_ADMIN_COMPLIANCE_PATH;
+const CANONICAL_ADMIN_STEP_UP_PATH = CANONICAL_MOBILE_ADMIN_STEP_UP_PATH;
 
 /**
  * Deliberately small allowlist for the mobile administrator overview. The
@@ -26,6 +32,16 @@ export const MOBILE_ADMIN_READ_PATHS = {
   withdrawals: "/withdrawals",
   refundRequests: "/funds/refund-requests",
   auditLogs: "/audit-logs",
+} as const;
+
+/**
+ * These two endpoints are deliberately separate from the read allowlist: the
+ * status check is needed before protected reads can succeed, and accepting a
+ * compliance commitment is an auditable, idempotent state transition.
+ */
+export const MOBILE_ADMIN_COMPLIANCE_PATHS = {
+  status: "/compliance",
+  accept: "/compliance/accept",
 } as const;
 
 const MOBILE_ADMIN_USER_READ_PATHS = {
@@ -56,6 +72,8 @@ export interface MobileAdminRequestOptions {
    * this request with server-side audit and Ops records.
    */
   requestId?: string;
+  /** Reuse this key when replaying the same approved state transition. */
+  idempotencyKey?: string;
   signal?: AbortSignal | null;
   locale?: string;
 }
@@ -76,6 +94,26 @@ export interface MobileAdminPage<T = Record<string, unknown>> {
 export interface MobileAdminStepUpResult {
   verified: boolean;
   expires_in: number;
+}
+
+export interface MobileAdminComplianceStatus {
+  required: boolean;
+  version: string;
+  document_path_zh?: string;
+  document_path_en?: string;
+  document_url_zh?: string;
+  document_url_en?: string;
+  ack_phrase_zh?: string;
+  ack_phrase_en?: string;
+  acknowledgement?: {
+    version?: string;
+    accepted_at?: string;
+  };
+}
+
+export interface MobileAdminComplianceAcceptInput {
+  phrase: string;
+  language: "zh" | "en";
 }
 
 export type MobileAdminErrorCategory =
@@ -136,6 +174,16 @@ export function mobileAdminRequestId(error: unknown) {
   return "unknown";
 }
 
+export function mobileAdminErrorCode(error: unknown) {
+  if (error instanceof MobileAdminClientError) return error.code;
+  if (error instanceof ManagedApiError) return String(error.code || "");
+  return "";
+}
+
+export function mobileAdminErrorMetadata(error: unknown) {
+  return error instanceof ManagedApiError ? error.metadata : undefined;
+}
+
 function createMobileAdminRequestId() {
   return `mobile-admin-${Date.now()}-${Math.random()
     .toString(36)
@@ -144,6 +192,13 @@ function createMobileAdminRequestId() {
 
 function resolveRequestId(options?: MobileAdminRequestOptions) {
   return options?.requestId?.trim() || createMobileAdminRequestId();
+}
+
+function resolveIdempotencyKey(
+  options: MobileAdminRequestOptions | undefined,
+  requestId: string,
+) {
+  return options?.idempotencyKey?.trim() || `mobile-admin-${requestId}`;
 }
 
 function appendQuery(path: string, query?: MobileAdminQuery) {
@@ -180,6 +235,7 @@ function requestInit(
   requestId: string,
   options?: MobileAdminRequestOptions,
   body?: unknown,
+  idempotencyKey?: string,
 ): RequestInit {
   const headers = new Headers({
     "X-Request-ID": requestId,
@@ -187,6 +243,9 @@ function requestInit(
   });
   if (options?.locale?.trim()) {
     headers.set("Accept-Language", options.locale.trim());
+  }
+  if (idempotencyKey?.trim()) {
+    headers.set("Idempotency-Key", idempotencyKey.trim());
   }
   return {
     method,
@@ -285,6 +344,29 @@ function resolveStepUpPath(client: MobileAdminClient, requestId: string) {
   return capability.stepUpPath;
 }
 
+function resolveCompliancePath(
+  client: MobileAdminClient,
+  endpoint: (typeof MOBILE_ADMIN_COMPLIANCE_PATHS)[keyof typeof MOBILE_ADMIN_COMPLIANCE_PATHS],
+  requestId: string,
+) {
+  // Reuse the base-path and token checks before applying the optional
+  // compliance capability check. This keeps local failures consistent with
+  // every other admin request and never probes an undeclared route.
+  resolveAdminBasePath(client, MOBILE_ADMIN_COMPLIANCE_PATHS.status, requestId);
+  const capability = resolveMobileAdminCapability(client.mobileProtocol);
+  if (capability.compliancePath !== CANONICAL_ADMIN_COMPLIANCE_PATH) {
+    throw localAdminError(
+      "The server did not declare a supported administrator compliance path.",
+      CANONICAL_ADMIN_COMPLIANCE_PATH,
+      requestId,
+      "ADMIN_COMPLIANCE_CAPABILITY_UNAVAILABLE",
+      "capability",
+    );
+  }
+  const suffix = endpoint.slice(MOBILE_ADMIN_COMPLIANCE_PATHS.status.length);
+  return `${capability.compliancePath}${suffix}`;
+}
+
 /**
  * Sends one allowlisted, read-only canonical admin request. There is no
  * mutation escape hatch here; future write flows must receive their own
@@ -308,6 +390,83 @@ export async function requestMobileAdminRead<T>(
     client.accessToken,
   );
   return { data, requestId };
+}
+
+/**
+ * The compliance endpoint is the only mobile admin mutation available today.
+ * Keep it narrowly scoped until privileged business writes have a reviewed
+ * step-up replay contract of their own.
+ */
+async function requestMobileAdminComplianceMutation<T>(
+  client: MobileAdminClient,
+  endpoint: (typeof MOBILE_ADMIN_COMPLIANCE_PATHS)["accept"],
+  body: MobileAdminComplianceAcceptInput,
+  options?: MobileAdminRequestOptions,
+): Promise<MobileAdminRequestResult<T>> {
+  const requestId = resolveRequestId(options);
+  const path = resolveCompliancePath(client, endpoint, requestId);
+  const data = await managedJsonRequest<T>(
+    client.baseUrl,
+    path,
+    requestInit(
+      "POST",
+      requestId,
+      options,
+      body,
+      resolveIdempotencyKey(options, requestId),
+    ),
+    client.accessToken,
+  );
+  return { data, requestId };
+}
+
+export async function getMobileAdminComplianceStatus(
+  client: MobileAdminClient,
+  options?: MobileAdminRequestOptions,
+): Promise<MobileAdminRequestResult<MobileAdminComplianceStatus>> {
+  const requestId = resolveRequestId(options);
+  const path = resolveCompliancePath(
+    client,
+    MOBILE_ADMIN_COMPLIANCE_PATHS.status,
+    requestId,
+  );
+  const data = await managedJsonRequest<MobileAdminComplianceStatus>(
+    client.baseUrl,
+    path,
+    requestInit("GET", requestId, options),
+    client.accessToken,
+  );
+  return { data, requestId };
+}
+
+export async function acceptMobileAdminCompliance(
+  client: MobileAdminClient,
+  input: MobileAdminComplianceAcceptInput,
+  options?: MobileAdminRequestOptions,
+): Promise<MobileAdminRequestResult<MobileAdminComplianceStatus>> {
+  const phrase = input.phrase.trim();
+  const language = input.language === "zh" ? "zh" : "en";
+  const requestId = resolveRequestId(options);
+  const path = resolveCompliancePath(
+    client,
+    MOBILE_ADMIN_COMPLIANCE_PATHS.accept,
+    requestId,
+  );
+  if (!phrase) {
+    throw localAdminError(
+      "A compliance acknowledgement phrase is required.",
+      path,
+      requestId,
+      "ADMIN_COMPLIANCE_PHRASE_REQUIRED",
+      "input",
+    );
+  }
+  return requestMobileAdminComplianceMutation<MobileAdminComplianceStatus>(
+    client,
+    MOBILE_ADMIN_COMPLIANCE_PATHS.accept,
+    { phrase, language },
+    { ...options, requestId },
+  );
 }
 
 export function getMobileAdminDashboardSnapshot<T = Record<string, unknown>>(

@@ -2,6 +2,7 @@ import { describe, expect, test } from "@jest/globals";
 
 import {
   isMobileAdminAvailable,
+  isMobileAdminComplianceAvailable,
   resolveMobileAdminCapability,
 } from "../app/client/mobile-capabilities";
 
@@ -12,10 +13,11 @@ describe("mobile admin capabilities", () => {
         capabilities: undefined,
       }),
     ).toEqual({
-        available: false,
-        apiBasePath: "",
-        stepUpPath: "",
-      });
+      available: false,
+      apiBasePath: "",
+      stepUpPath: "",
+      compliancePath: "",
+    });
   });
 
   test("does not infer access from a role-like field outside capabilities", () => {
@@ -39,10 +41,32 @@ describe("mobile admin capabilities", () => {
     } as any;
 
     expect(resolveMobileAdminCapability(protocol)).toEqual({
-        available: true,
-        apiBasePath: "/api/v1/admin",
-        stepUpPath: "/api/v1/user/totp/step-up",
-      });
+      available: true,
+      apiBasePath: "/api/v1/admin",
+      stepUpPath: "/api/v1/user/totp/step-up",
+      compliancePath: "",
+    });
+    expect(isMobileAdminAvailable(protocol)).toBe(true);
+    expect(isMobileAdminComplianceAvailable(protocol)).toBe(false);
+  });
+
+  test("enables the compliance gate only when the server explicitly declares it", () => {
+    const protocol = {
+      capabilities: {
+        admin: {
+          available: true,
+          api_base_path: "/api/v1/admin",
+          step_up_path: "/api/v1/user/totp/step-up",
+          compliance_path: " /api/v1/admin/compliance ",
+        },
+      },
+    } as any;
+
+    expect(resolveMobileAdminCapability(protocol)).toMatchObject({
+      compliancePath: "/api/v1/admin/compliance",
+    });
+    expect(isMobileAdminAvailable(protocol)).toBe(true);
+    expect(isMobileAdminComplianceAvailable(protocol)).toBe(true);
   });
 
   test("does not enable access for a malformed or false capability", () => {
@@ -56,5 +80,51 @@ describe("mobile admin capabilities", () => {
         capabilities: { admin: { available: false } },
       } as any),
     ).toBe(false);
+    expect(
+      isMobileAdminAvailable({
+        capabilities: {
+          admin: {
+            available: true,
+            api_base_path: "/api/v1/admin-preview",
+            step_up_path: "/api/v1/user/totp/step-up",
+          },
+        },
+      } as any),
+    ).toBe(false);
+    expect(
+      isMobileAdminAvailable({
+        capabilities: {
+          admin: {
+            available: true,
+            api_base_path: "/api/v1/admin",
+          },
+        },
+      } as any),
+    ).toBe(false);
+  });
+
+  test("keeps the legacy admin route usable when compliance is undeclared or malformed", () => {
+    const legacyProtocol = {
+      capabilities: {
+        admin: {
+          available: true,
+          api_base_path: "/api/v1/admin",
+          step_up_path: "/api/v1/user/totp/step-up",
+        },
+      },
+    } as any;
+    const malformedProtocol = {
+      capabilities: {
+        admin: {
+          ...legacyProtocol.capabilities.admin,
+          compliance_path: "/api/v1/admin/compliance-preview",
+        },
+      },
+    } as any;
+
+    expect(isMobileAdminAvailable(legacyProtocol)).toBe(true);
+    expect(isMobileAdminComplianceAvailable(legacyProtocol)).toBe(false);
+    expect(isMobileAdminAvailable(malformedProtocol)).toBe(true);
+    expect(isMobileAdminComplianceAvailable(malformedProtocol)).toBe(false);
   });
 });

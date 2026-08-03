@@ -17,6 +17,8 @@ export interface ManagedEnvelope<T> {
   code: number | string;
   message: string;
   data?: T;
+  /** Structured server context for recoverable error states. */
+  metadata?: Record<string, unknown>;
 }
 
 export class ManagedApiError extends Error {
@@ -27,6 +29,7 @@ export class ManagedApiError extends Error {
     readonly code?: number | string,
     readonly requestId = "unknown",
     readonly category: "http" | "api" = "http",
+    readonly metadata?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ManagedApiError";
@@ -796,6 +799,7 @@ export async function managedJsonRequest<T>(
       payload?.code,
       res.requestId,
       category,
+      payload?.metadata,
     );
   }
   return payload.data as T;

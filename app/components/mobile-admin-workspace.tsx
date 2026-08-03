@@ -1,9 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import styles from "./mobile-app.module.scss";
 import { localizedMobileDisplay } from "../client/mobile-display";
 import {
+  acceptMobileAdminCompliance,
+  getMobileAdminComplianceStatus,
   getMobileAdminDashboardSnapshot,
   getMobileAdminPaymentDashboard,
   getMobileAdminUserWalletHistory,
@@ -17,14 +25,19 @@ import {
   listMobileAdminUsageCleanupTasks,
   listMobileAdminUsers,
   listMobileAdminWithdrawals,
+  mobileAdminErrorCode,
+  mobileAdminErrorMetadata,
   mobileAdminRequestId,
   verifyMobileAdminStepUp,
 } from "../client/mobile-admin";
 import type {
   MobileAdminClient,
+  MobileAdminComplianceStatus,
   MobileAdminPage,
 } from "../client/mobile-admin";
 import type { ManagedMobileText } from "../client/managed-mobile-i18n";
+import { openExternalUrl } from "../client/android-native";
+import { isMobileAdminComplianceAvailable } from "../client/mobile-capabilities";
 
 type AdminView = "overview" | "users" | "operations" | "funds" | "audit";
 type AdminRecord = Record<string, unknown>;
@@ -122,6 +135,29 @@ function array(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   const current = record(value);
   return Array.isArray(current.items) ? current.items : [];
+}
+
+function stringField(value: Record<string, unknown> | undefined, key: string) {
+  const field = value?.[key];
+  return typeof field === "string" ? field.trim() : "";
+}
+
+function requiredComplianceFromError(error: unknown) {
+  if (
+    mobileAdminErrorCode(error).toUpperCase() !==
+    "ADMIN_COMPLIANCE_ACK_REQUIRED"
+  ) {
+    return null;
+  }
+  const metadata = mobileAdminErrorMetadata(error);
+  return {
+    required: true,
+    version: stringField(metadata, "version"),
+    document_path_zh: stringField(metadata, "document_path_zh") || undefined,
+    document_path_en: stringField(metadata, "document_path_en") || undefined,
+    document_url_zh: stringField(metadata, "document_url_zh") || undefined,
+    document_url_en: stringField(metadata, "document_url_en") || undefined,
+  } satisfies MobileAdminComplianceStatus;
 }
 
 function first(value: AdminRecord, keys: string[]) {
@@ -279,12 +315,56 @@ export function MobileAdminWorkspace(props: {
   const [error, setError] = useState("");
   const [requestId, setRequestId] = useState("");
   const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+  const [compliance, setCompliance] =
+    useState<MobileAdminComplianceStatus | null>(null);
+  const [complianceLoading, setComplianceLoading] = useState(true);
+  const [compliancePhrase, setCompliancePhrase] = useState("");
+  const [complianceMessage, setComplianceMessage] = useState("");
+  const [complianceBusy, setComplianceBusy] = useState(false);
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpMessage, setStepUpMessage] = useState("");
   const [stepUpBusy, setStepUpBusy] = useState(false);
   const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
 
   const client = useMemo(() => props.client, [props.client]);
+  const complianceSupported = isMobileAdminComplianceAvailable(
+    client.mobileProtocol,
+  );
+
+  const refreshCompliance = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!complianceSupported) {
+        const legacyStatus: MobileAdminComplianceStatus = {
+          required: false,
+          version: "",
+        };
+        setCompliance(legacyStatus);
+        setComplianceLoading(false);
+        return legacyStatus;
+      }
+      setComplianceLoading(true);
+      try {
+        const result = await getMobileAdminComplianceStatus(client, {
+          signal,
+          locale: props.text.dateLocale,
+        });
+        if (signal?.aborted) return null;
+        setCompliance(result.data);
+        setRequestId(result.requestId);
+        return result.data;
+      } catch (caught) {
+        if (signal?.aborted) return null;
+        setCompliance(null);
+        setError(caught instanceof Error ? caught.message : labels.unavailable);
+        setRequestId(mobileAdminRequestId(caught));
+        return null;
+      } finally {
+        if (!signal?.aborted) setComplianceLoading(false);
+      }
+    },
+    [client, complianceSupported, labels.unavailable, props.text.dateLocale],
+  );
 
   const load = useCallback(
     async (nextView: AdminView, signal?: AbortSignal) => {
@@ -311,7 +391,7 @@ export function MobileAdminWorkspace(props: {
         } else if (nextView === "users") {
           const result = await listMobileAdminUsers<AdminRecord>(
             client,
-            { page: 1, page_size: 20, search: search.trim() },
+            { page: 1, page_size: 20, search: appliedSearch },
             { signal, locale: props.text.dateLocale },
           );
           setData((current) => ({ ...current, users: result.data }));
@@ -386,20 +466,45 @@ export function MobileAdminWorkspace(props: {
         }
       } catch (caught) {
         if (signal?.aborted) return;
-        setError(caught instanceof Error ? caught.message : labels.unavailable);
+        const requiredCompliance = requiredComplianceFromError(caught);
+        if (requiredCompliance && complianceSupported) {
+          setCompliance(requiredCompliance);
+          setError("");
+          void refreshCompliance();
+        } else {
+          setError(
+            caught instanceof Error ? caught.message : labels.unavailable,
+          );
+        }
         setRequestId(mobileAdminRequestId(caught));
       } finally {
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [client, labels.unavailable, props.text.dateLocale, search],
+    [
+      appliedSearch,
+      client,
+      complianceSupported,
+      labels.unavailable,
+      props.text.dateLocale,
+      refreshCompliance,
+    ],
+  );
+
+  const loadView = useCallback(
+    async (nextView: AdminView, signal?: AbortSignal) => {
+      const status = await refreshCompliance(signal);
+      if (signal?.aborted || !status || status.required) return;
+      await load(nextView, signal);
+    },
+    [load, refreshCompliance],
   );
 
   useEffect(() => {
     const controller = new AbortController();
-    void load(view, controller.signal);
+    void loadView(view, controller.signal);
     return () => controller.abort();
-  }, [load, view]);
+  }, [loadView, view]);
 
   async function verifyStepUpCode() {
     if (!/^\d{6}$/.test(stepUpCode.trim())) {
@@ -451,6 +556,14 @@ export function MobileAdminWorkspace(props: {
       });
       setRequestId(reconciliation.requestId || history.requestId);
     } catch (caught) {
+      const requiredCompliance = requiredComplianceFromError(caught);
+      if (requiredCompliance && complianceSupported) {
+        setCompliance(requiredCompliance);
+        setSelectedUser(null);
+        void refreshCompliance();
+        setRequestId(mobileAdminRequestId(caught));
+        return;
+      }
       setSelectedUser({
         user,
         loading: false,
@@ -460,10 +573,183 @@ export function MobileAdminWorkspace(props: {
     }
   }
 
+  const complianceLanguage = props.text.dateLocale.startsWith("zh")
+    ? "zh"
+    : "en";
+  const expectedCompliancePhrase =
+    complianceLanguage === "zh"
+      ? compliance?.ack_phrase_zh || ""
+      : compliance?.ack_phrase_en || "";
+  const complianceDocumentUrl =
+    complianceLanguage === "zh"
+      ? compliance?.document_url_zh || ""
+      : compliance?.document_url_en || "";
+
+  async function submitCompliance() {
+    if (
+      !compliancePhrase.trim() ||
+      (expectedCompliancePhrase &&
+        compliancePhrase.trim() !== expectedCompliancePhrase)
+    ) {
+      setComplianceMessage(labels.compliancePhraseRequired);
+      return;
+    }
+    setComplianceBusy(true);
+    setComplianceMessage("");
+    try {
+      const result = await acceptMobileAdminCompliance(
+        client,
+        {
+          phrase: compliancePhrase,
+          language: complianceLanguage,
+        },
+        {
+          locale: props.text.dateLocale,
+          idempotencyKey: `mobile-admin-compliance-${
+            compliance?.version || "current"
+          }-${complianceLanguage}`,
+        },
+      );
+      setCompliance(result.data);
+      setCompliancePhrase("");
+      setComplianceMessage(labels.complianceAccepted);
+      setRequestId(result.requestId);
+      if (!result.data.required) await load(view);
+    } catch (caught) {
+      const code = mobileAdminErrorCode(caught).toUpperCase();
+      setComplianceMessage(
+        code === "ADMIN_COMPLIANCE_INVALID_PHRASE"
+          ? labels.compliancePhraseRequired
+          : caught instanceof Error
+          ? caught.message
+          : labels.complianceUnavailable,
+      );
+      setRequestId(mobileAdminRequestId(caught));
+    } finally {
+      setComplianceBusy(false);
+    }
+  }
+
+  async function openComplianceDocument() {
+    if (!complianceDocumentUrl) {
+      setComplianceMessage(labels.complianceUnavailable);
+      return;
+    }
+    try {
+      await openExternalUrl(complianceDocumentUrl);
+    } catch {
+      setComplianceMessage(labels.complianceUnavailable);
+    }
+  }
+
+  function submitUserSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextSearch = search.trim();
+    if (nextSearch === appliedSearch) {
+      void loadView("users");
+      return;
+    }
+    setAppliedSearch(nextSearch);
+  }
+
   const snapshot = record(data.snapshot);
   const overview = record(snapshot.overview || snapshot.data || snapshot);
   const payment = record(data.payment);
   const users = data.users || page(undefined);
+
+  if (complianceLoading) {
+    return (
+      <div className={styles["admin-workspace"]}>
+        <p className={styles["admin-readonly-hint"]}>{labels.readonlyHint}</p>
+        <p className={styles["empty-copy"]}>{labels.complianceChecking}</p>
+      </div>
+    );
+  }
+
+  if (!compliance) {
+    return (
+      <div className={styles["admin-workspace"]}>
+        <p className={styles["admin-readonly-hint"]}>{labels.readonlyHint}</p>
+        <div className={styles["form-error"]}>
+          {error || labels.complianceUnavailable}
+        </div>
+        <div className={styles["admin-toolbar"]}>
+          <button type="button" onClick={() => void loadView(view)}>
+            {labels.refresh}
+          </button>
+        </div>
+        {requestId && (
+          <small className={styles["admin-request-id"]}>
+            {labels.request}: {requestId}
+          </small>
+        )}
+      </div>
+    );
+  }
+
+  if (compliance.required) {
+    return (
+      <div className={styles["admin-workspace"]}>
+        <p className={styles["admin-readonly-hint"]}>{labels.readonlyHint}</p>
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{labels.compliance}</h2>
+            {compliance.version && <span>{compliance.version}</span>}
+          </div>
+          <p className={styles["empty-copy"]}>
+            {labels.complianceRequiredHint}
+          </p>
+          <button
+            type="button"
+            onClick={() => void openComplianceDocument()}
+            disabled={!complianceDocumentUrl}
+          >
+            {labels.complianceDocument}
+          </button>
+          {expectedCompliancePhrase && (
+            <p className={styles["admin-request-id"]}>
+              {expectedCompliancePhrase}
+            </p>
+          )}
+          <label className={styles["field-card"]}>
+            <span>{labels.compliancePhraseHint}</span>
+            <textarea
+              value={compliancePhrase}
+              onChange={(event) =>
+                setCompliancePhrase(event.currentTarget.value)
+              }
+              placeholder={labels.compliancePhraseHint}
+              rows={3}
+            />
+          </label>
+          <div className={styles["dialog-actions"]}>
+            <button
+              type="button"
+              onClick={() => void submitCompliance()}
+              disabled={
+                complianceBusy ||
+                !expectedCompliancePhrase ||
+                compliancePhrase.trim() !== expectedCompliancePhrase
+              }
+            >
+              {complianceBusy ? labels.loading : labels.complianceAccept}
+            </button>
+            <button type="button" onClick={() => void loadView(view)}>
+              {labels.refresh}
+            </button>
+          </div>
+          {complianceMessage && (
+            <p className={styles["form-error"]}>{complianceMessage}</p>
+          )}
+        </section>
+        {requestId && (
+          <small className={styles["admin-request-id"]}>
+            {labels.request}: {requestId}
+          </small>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={styles["admin-workspace"]}>
@@ -492,8 +778,8 @@ export function MobileAdminWorkspace(props: {
       <div className={styles["admin-toolbar"]}>
         <button
           type="button"
-          onClick={() => void load(view)}
-          disabled={loading}
+          onClick={() => void loadView(view)}
+          disabled={loading || complianceLoading}
         >
           {labels.refresh}
         </button>
@@ -562,14 +848,22 @@ export function MobileAdminWorkspace(props: {
       {view === "users" && (
         <>
           <section className={styles["section"]}>
-            <label className={styles["field-card"]}>
-              <span>{labels.userSearch}</span>
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.currentTarget.value)}
-                placeholder={labels.userSearch}
-              />
-            </label>
+            <form
+              onSubmit={submitUserSearch}
+              className={styles["admin-toolbar"]}
+            >
+              <label className={styles["field-card"]}>
+                <span>{labels.userSearch}</span>
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.currentTarget.value)}
+                  placeholder={labels.userSearch}
+                />
+              </label>
+              <button type="submit" disabled={loading}>
+                {labels.search}
+              </button>
+            </form>
           </section>
           <AdminList
             title={`${labels.users} · ${users.total}`}
