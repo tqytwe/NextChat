@@ -1,18 +1,18 @@
 {
   "platform": "android",
-  "version": "2.0.70",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.70-270",
-  "size": "7.1 MB",
-  "sha256": "6b1dc324f0d0be1a6fd0f11f1ad9518d85336dfe936ede6389632fd4a99404d7",
+  "version": "2.0.71",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.71-271",
+  "size": "7.2 MB",
+  "sha256": "229a5ab32470f31dd13755b00c40973b239e7592f5115cfdc76ed2c067bd71a5",
   "minAndroidVersion": "8.0",
-  "releaseDate": "2026-08-02",
+  "releaseDate": "2026-08-03",
   "notes": [
     "修复首页双击返回退出、批量参考图任务、会话模型继承和完成态操作图标"
   ],
-  "versionCode": 270,
-  "bytes": 7493348,
+  "versionCode": 271,
+  "bytes": 7513022,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "2.0.70",
-  "sourceCommit": "96d361229bae24d81827ee8140165303550ecb67"
+  "latestVersion": "2.0.71",
+  "sourceCommit": "c4f84c40a35a2d334c74507e3e9c917657fa3972"
 }
