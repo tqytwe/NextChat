@@ -1,20 +1,20 @@
 {
   "platform": "android",
-  "version": "2.0.74",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.74-274",
+  "version": "2.0.76",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.76-276",
   "size": "7.2 MB",
-  "sha256": "49c46cfdd10111908e1e55208dc8cc03f6ccf53f846fd8d568dfff154eda67c8",
+  "sha256": "d6bc6aea21aa9e1e936727a0fdd787aeb25d6642483c108a535edadd04d99653",
   "minAndroidVersion": "8.0",
   "releaseDate": "2026-08-03",
   "notes": [
     "内容创作工作台支持场景镜头编辑与单项重试",
     "管理员能力按服务端协议和二次验证保护"
   ],
-  "versionCode": 274,
-  "bytes": 7514246,
+  "versionCode": 276,
+  "bytes": 7514422,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "2.0.74",
-  "sourceCommit": "540cb4e697a405e571540139a75d21de68d78af3",
-  "builtFromCommit": "540cb4e697a405e571540139a75d21de68d78af3"
+  "latestVersion": "2.0.76",
+  "sourceCommit": "bf740f48cda3b2ae1fb4b9ac0340cc6302a8c802",
+  "builtFromCommit": "bf740f48cda3b2ae1fb4b9ac0340cc6302a8c802"
 }
