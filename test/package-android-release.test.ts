@@ -23,6 +23,9 @@ type FixtureOptions = {
   actualVersionCode?: number;
   outputVersion?: string;
   outputVersionCode?: number;
+  embeddedVersion?: string;
+  embeddedVersionCode?: number;
+  embeddedApkUrl?: string;
   signingCertificateSha256?: string;
   publishedManifest?: Record<string, unknown>;
 };
@@ -43,9 +46,14 @@ function createFixture(options: FixtureOptions = {}) {
   temporaryRoots.push(root);
 
   const releaseDir = path.join(root, "android/app/build/outputs/apk/release");
+  const embeddedAssetsDir = path.join(
+    root,
+    "android/app/src/main/assets/public",
+  );
   const downloadsDir = path.join(root, "public/downloads");
   const toolsDir = path.join(root, "tools");
   mkdirSync(releaseDir, { recursive: true });
+  mkdirSync(embeddedAssetsDir, { recursive: true });
   mkdirSync(downloadsDir, { recursive: true });
   mkdirSync(toolsDir, { recursive: true });
 
@@ -79,6 +87,24 @@ function createFixture(options: FixtureOptions = {}) {
       versionCode: 265,
       apkUrl: "/downloads/jisudengchat-android.apk?v=2.0.65-265",
     },
+  );
+  const embeddedVersion = options.embeddedVersion ?? "2.0.66";
+  const embeddedVersionCode = options.embeddedVersionCode ?? 266;
+  const embeddedApkUrl =
+    options.embeddedApkUrl ??
+    `/downloads/jisudengchat-android.apk?v=${embeddedVersion}-${embeddedVersionCode}`;
+  const embeddedConfig = JSON.stringify({
+    // The web bundle version is intentionally independent from Android release
+    // metadata. The release gate validates only androidVersion/versionCode.
+    version: "v2.16.1",
+    isAndroidApp: true,
+    androidVersion: embeddedVersion,
+    androidVersionCode: embeddedVersionCode,
+    androidApkUrl: embeddedApkUrl,
+  }).replace(/"/g, "&quot;");
+  writeFileSync(
+    path.join(embeddedAssetsDir, "index.html"),
+    `<meta name="config" content="${embeddedConfig}">`,
   );
 
   const aaptPath = path.join(toolsDir, "aapt");
@@ -210,6 +236,27 @@ describe("Android release package version gate", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
       "ANDROID_VERSION_NAME/CODE does not match the release APK",
+    );
+    expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
+    expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
+  });
+
+  test("rejects an embedded web config that disagrees with the APK release", () => {
+    const fixture = createFixture({
+      embeddedVersion: "2.16.1",
+      embeddedVersionCode: 21601,
+    });
+    const originalManifest = readFileSync(fixture.manifestPath, "utf-8");
+    const originalApk = readFileSync(fixture.publishedApk, "utf-8");
+
+    const result = packageRelease(fixture, {
+      ANDROID_VERSION_NAME: "2.0.66",
+      ANDROID_VERSION_CODE: "266",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Embedded Android web build config does not match the release APK",
     );
     expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);

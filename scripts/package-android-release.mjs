@@ -21,6 +21,10 @@ const metadataPath = path.join(
   root,
   "android/app/build/outputs/apk/release/output-metadata.json",
 );
+const embeddedWebIndexPath = path.join(
+  root,
+  "android/app/src/main/assets/public/index.html",
+);
 const downloadsDir = path.join(root, "public/downloads");
 const apkTarget = path.join(downloadsDir, "jisudengchat-android.apk");
 const manifestPath = path.join(downloadsDir, "android-version.json");
@@ -337,6 +341,74 @@ function assertReleaseVersionsMatch(expected, actual, source) {
   }
 }
 
+function decodeHtmlAttribute(value) {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#34;/g, '"')
+    .replace(/&amp;/g, "&");
+}
+
+function readEmbeddedAndroidBuildConfig() {
+  if (!existsSync(embeddedWebIndexPath)) {
+    throw new Error(
+      `Embedded Android web index not found: ${embeddedWebIndexPath}`,
+    );
+  }
+
+  const html = readFileSync(embeddedWebIndexPath, "utf-8");
+  const configTag = html.match(/<meta\b[^>]*\bname=["']config["'][^>]*>/i)?.[0];
+  const encodedConfig = configTag?.match(/\bcontent=["']([^"']*)["']/i)?.[1];
+  if (!encodedConfig) {
+    throw new Error("Embedded Android web index is missing its build config");
+  }
+
+  try {
+    return JSON.parse(decodeHtmlAttribute(encodedConfig));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Embedded Android build config is invalid: ${reason}`);
+  }
+}
+
+function assertEmbeddedAndroidBuildMatchesApk(apkRelease) {
+  const config = readEmbeddedAndroidBuildConfig();
+  if (config?.isAndroidApp !== true) {
+    throw new Error("Embedded build config is not marked as an Android app");
+  }
+
+  const embeddedRelease = {
+    version: normalizeVersionName(
+      config.androidVersion,
+      "Embedded Android build config",
+    ).replace(/^v/i, ""),
+    versionCode: normalizeVersionCode(
+      config.androidVersionCode,
+      "Embedded Android build config",
+    ),
+  };
+  assertReleaseVersionsMatch(
+    apkRelease,
+    embeddedRelease,
+    "Embedded Android web build config",
+  );
+
+  const expectedCacheKey = `${apkRelease.version}-${apkRelease.versionCode}`;
+  let embeddedUrl;
+  try {
+    embeddedUrl = new URL(String(config.androidApkUrl || ""), "https://local");
+  } catch {
+    throw new Error("Embedded Android build config has an invalid APK URL");
+  }
+  if (
+    embeddedUrl.pathname !== "/downloads/jisudengchat-android.apk" ||
+    embeddedUrl.searchParams.get("v") !== expectedCacheKey
+  ) {
+    throw new Error(
+      `Embedded Android APK URL must use canonical cache key ${expectedCacheKey}`,
+    );
+  }
+}
+
 function readPreviousManifest() {
   if (!existsSync(manifestPath)) {
     return {};
@@ -418,6 +490,7 @@ assertReleaseVersionsMatch(
   configuredRelease,
   "ANDROID_VERSION_NAME/CODE",
 );
+assertEmbeddedAndroidBuildMatchesApk(apkRelease);
 const existingManifest = readPreviousManifest();
 const previousVersionCode = existingManifest.versionCode || 0;
 if (previousVersionCode && apkRelease.versionCode <= previousVersionCode) {

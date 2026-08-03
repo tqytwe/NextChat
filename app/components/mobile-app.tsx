@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -52,6 +54,16 @@ import type {
   ManagedMobileContentKitAsset,
 } from "../store/mobile";
 import { localizedMobileDisplay } from "../client/mobile-display";
+import {
+  androidManifestReleaseVersion,
+  evaluateAndroidUpdate,
+  formatAndroidReleaseVersion,
+  normalizeAndroidReleaseVersion,
+} from "../client/android-release-version";
+import type {
+  AndroidReleaseManifest,
+  AndroidReleaseVersion,
+} from "../client/android-release-version";
 import { compressImage, removeImage } from "../utils/chat";
 import { indexedDBStorage } from "../utils/indexedDB-storage";
 import {
@@ -781,11 +793,7 @@ function serverSkillInputHint(skill: MobileSkill, text: ManagedMobileText) {
     : "Provide the goal, materials, context, and desired output; attach files or images when needed.";
 }
 
-type AndroidUpdateManifest = {
-  version?: string;
-  latestVersion?: string;
-  androidVersion?: string;
-  minSupportedVersion?: string;
+type AndroidUpdateManifest = AndroidReleaseManifest & {
   minAndroidVersion?: string;
   severity?: "normal" | "recommended" | "required";
   apkUrl?: string;
@@ -796,6 +804,48 @@ type AndroidUpdateManifest = {
   notes?: string[] | string;
   releaseNotes?: string[] | string;
 };
+
+type InstalledAndroidReleaseVersion = AndroidReleaseVersion & {
+  loaded: boolean;
+};
+
+const AndroidReleaseVersionContext =
+  createContext<InstalledAndroidReleaseVersion>({
+    name: "",
+    loaded: false,
+  });
+
+function AndroidReleaseVersionProvider(props: { children: ReactNode }) {
+  const [version, setVersion] = useState<InstalledAndroidReleaseVersion>({
+    name: "",
+    loaded: false,
+  });
+
+  useEffect(() => {
+    let active = true;
+    void getNativeDeviceInfo()
+      .then((device) => {
+        if (!active) return;
+        setVersion({ ...normalizeAndroidReleaseVersion(device), loaded: true });
+      })
+      .catch(() => {
+        if (active) setVersion({ name: "", loaded: true });
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <AndroidReleaseVersionContext.Provider value={version}>
+      {props.children}
+    </AndroidReleaseVersionContext.Provider>
+  );
+}
+
+function useInstalledAndroidReleaseVersion() {
+  return useContext(AndroidReleaseVersionContext);
+}
 
 const UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const UPDATE_CHECKED_AT_STORAGE_KEY = "managed-mobile-update-checked-at";
@@ -1925,27 +1975,6 @@ function chatSessionDisplayTitle(
   );
   const fallback = firstUser?.content.trim() || text.chat.unnamedSession;
   return fallback.slice(0, 28);
-}
-
-function normalizeVersion(version?: string) {
-  return (version || "")
-    .replace(/^v/i, "")
-    .split(/[.-]/)
-    .map((part) => Number.parseInt(part, 10))
-    .map((part) => (Number.isFinite(part) ? part : 0));
-}
-
-function compareVersions(a?: string, b?: string) {
-  const left = normalizeVersion(a);
-  const right = normalizeVersion(b);
-  const length = Math.max(left.length, right.length);
-
-  for (let i = 0; i < length; i += 1) {
-    const diff = (left[i] || 0) - (right[i] || 0);
-    if (diff !== 0) return diff;
-  }
-
-  return 0;
 }
 
 function resolveAndroidUrl(url: string, config?: ClientBuildConfig) {
@@ -3616,6 +3645,7 @@ function AndroidLogin() {
   const managed = useManagedNextChatStore();
   const text = useMobileText();
   const clientConfig = useMemo(() => getClientConfig(), []);
+  const installedRelease = useInstalledAndroidReleaseVersion();
   const backendBaseUrl = useMemo(
     () => fixedManagedBackendBaseUrl(clientConfig),
     [clientConfig],
@@ -3796,7 +3826,7 @@ function AndroidLogin() {
             backendBaseUrl,
             accessToken,
             "login",
-            clientConfig?.androidVersion || clientConfig?.version || "",
+            installedRelease.name,
             getInviteInstallationId(),
             {
               eventId: getStableInviteEventId(
@@ -3864,7 +3894,7 @@ function AndroidLogin() {
           backendBaseUrl,
           auth.access_token,
           "registered",
-          clientConfig?.androidVersion || clientConfig?.version || "",
+          installedRelease.name,
           getInviteInstallationId(),
           {
             eventId: getStableInviteEventId("registered"),
@@ -3875,7 +3905,7 @@ function AndroidLogin() {
         void reportMobileAttributionEvent({
           baseUrl: backendBaseUrl,
           eventType: "register",
-          appVersion: clientConfig?.androidVersion || clientConfig?.version,
+          appVersion: installedRelease.name,
           locale: text.dateLocale,
           accessToken: auth.access_token,
           userScope: auth.user?.id || "new-account",
@@ -12920,6 +12950,7 @@ function AndroidAccountSettings() {
   const location = useLocation();
   const navigate = useNavigate();
   const clientConfig = useMemo(() => getClientConfig(), []);
+  const installedRelease = useInstalledAndroidReleaseVersion();
   const [accountData, setAccountData] = useState<AccountData>({
     loading: true,
     error: "",
@@ -13064,15 +13095,12 @@ function AndroidAccountSettings() {
     [location.search],
   );
 
-  const currentVersion =
-    clientConfig?.androidVersion ||
-    clientConfig?.version ||
-    text.account.unknownVersion;
-  const latestVersion =
-    updateState.manifest?.version ||
-    updateState.manifest?.androidVersion ||
-    updateState.manifest?.latestVersion ||
-    "";
+  const currentVersion = formatAndroidReleaseVersion(
+    installedRelease,
+    text.account.unknownVersion,
+  );
+  const latestRelease = androidManifestReleaseVersion(updateState.manifest);
+  const latestVersion = formatAndroidReleaseVersion(latestRelease);
   const apkUrl = resolveAndroidUrl(
     updateState.manifest?.apkUrl ||
       updateState.manifest?.androidApkUrl ||
@@ -13081,8 +13109,11 @@ function AndroidAccountSettings() {
       "",
     clientConfig,
   );
-  const hasUpdate =
-    !!latestVersion && compareVersions(latestVersion, currentVersion) > 0;
+  const updateDecision = evaluateAndroidUpdate(
+    installedRelease,
+    updateState.manifest,
+  );
+  const hasUpdate = updateDecision.hasUpdate;
   const notes = manifestNotes(updateState.manifest);
   const supportLines = extractSupportLines(workspace?.support_contact);
   const paymentMethods = paymentMethodsFromCheckout(checkoutInfo);
@@ -14394,7 +14425,7 @@ function AndroidAccountSettings() {
       form.append("title", feedbackTitle.trim());
       form.append("category", feedbackCategory);
       form.append("content", feedbackContent.trim());
-      form.append("app_version", currentVersion);
+      form.append("app_version", installedRelease.name);
       form.append("platform", "android");
       form.append("installation_id", getInviteInstallationId());
       form.append("channel", "official_android");
@@ -17820,25 +17851,21 @@ function useMobileCrashLog() {
 function AndroidGlobalUpdatePrompt() {
   const text = useMobileText();
   const clientConfig = useMemo(() => getClientConfig(), []);
+  const installedRelease = useInstalledAndroidReleaseVersion();
   const [manifest, setManifest] = useState<AndroidUpdateManifest>();
   const [visible, setVisible] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState("");
   const pollRef = useRef<number | null>(null);
-  const currentVersion =
-    clientConfig?.androidVersion || clientConfig?.version || "0.0.0";
-  const latestVersion =
-    manifest?.latestVersion ||
-    manifest?.version ||
-    manifest?.androidVersion ||
-    "";
-  const required = Boolean(
-    manifest?.minSupportedVersion &&
-      compareVersions(currentVersion, manifest.minSupportedVersion) < 0,
+  const currentVersion = formatAndroidReleaseVersion(
+    installedRelease,
+    text.account.unknownVersion,
   );
-  const hasUpdate = Boolean(
-    latestVersion && compareVersions(latestVersion, currentVersion) > 0,
-  );
+  const latestRelease = androidManifestReleaseVersion(manifest);
+  const latestVersion = formatAndroidReleaseVersion(latestRelease);
+  const updateDecision = evaluateAndroidUpdate(installedRelease, manifest);
+  const required = updateDecision.required;
+  const hasUpdate = updateDecision.hasUpdate;
   const apkUrl = resolveAndroidUrl(
     manifest?.apkUrl || manifest?.androidApkUrl || manifest?.url || "",
     clientConfig,
@@ -17850,7 +17877,11 @@ function AndroidGlobalUpdatePrompt() {
       const checkedAt = Number(
         localStorage.getItem(UPDATE_CHECKED_AT_STORAGE_KEY) || 0,
       );
-      if (now - checkedAt < UPDATE_CHECK_INTERVAL_MS) return;
+      if (
+        !installedRelease.loaded ||
+        now - checkedAt < UPDATE_CHECK_INTERVAL_MS
+      )
+        return;
       const url = getAndroidManifestUrl(clientConfig);
       if (!url || navigator.onLine === false) return;
       try {
@@ -17864,19 +17895,13 @@ function AndroidGlobalUpdatePrompt() {
         if (!response.ok) return;
         const nextManifest = (await response.json()) as AndroidUpdateManifest;
         localStorage.setItem(UPDATE_CHECKED_AT_STORAGE_KEY, String(now));
-        const nextVersion =
-          nextManifest.latestVersion ||
-          nextManifest.version ||
-          nextManifest.androidVersion ||
-          "";
-        const mandatory = Boolean(
-          nextManifest.minSupportedVersion &&
-            compareVersions(currentVersion, nextManifest.minSupportedVersion) <
-              0,
+        const nextDecision = evaluateAndroidUpdate(
+          installedRelease,
+          nextManifest,
         );
-        const available = Boolean(
-          nextVersion && compareVersions(nextVersion, currentVersion) > 0,
-        );
+        const nextVersion = formatAndroidReleaseVersion(nextDecision.latest);
+        const mandatory = nextDecision.required;
+        const available = nextDecision.hasUpdate;
         if (!available && !mandatory) return;
         setManifest(nextManifest);
         const dismissed = localStorage.getItem(
@@ -17899,7 +17924,7 @@ function AndroidGlobalUpdatePrompt() {
       document.removeEventListener("visibilitychange", onResume);
       window.removeEventListener("jisudeng-native-resume", onResume);
     };
-  }, [clientConfig, currentVersion]);
+  }, [clientConfig, installedRelease]);
 
   useEffect(
     () => () => {
@@ -18007,11 +18032,20 @@ function AndroidGlobalUpdatePrompt() {
 }
 
 export function AndroidManagedGate(props: { children: ReactNode }) {
+  return (
+    <AndroidReleaseVersionProvider>
+      <AndroidManagedGateContent>{props.children}</AndroidManagedGateContent>
+    </AndroidReleaseVersionProvider>
+  );
+}
+
+function AndroidManagedGateContent(props: { children: ReactNode }) {
   const managed = useManagedNextChatStore();
   const mobileStore = useManagedMobileAppStore();
   const location = useLocation();
   const navigate = useNavigate();
   const text = useMobileText();
+  const installedRelease = useInstalledAndroidReleaseVersion();
   const [secureRestoreDone, setSecureRestoreDone] = useState(false);
   const secureRestoreStartedRef = useRef(false);
   const billingRefreshRef = useRef(new Set<string>());
@@ -18024,8 +18058,8 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
   useMobileCrashLog();
 
   useEffect(() => {
-    if (!backendBaseUrl) return;
-    const version = clientConfig?.androidVersion || clientConfig?.version || "";
+    if (!backendBaseUrl || !installedRelease.name) return;
+    const version = installedRelease.name;
     const referral = loadInviteReferral();
     if (referral?.token && managed.accessToken) {
       void attributeInviteCampaign(
@@ -18071,7 +18105,7 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", reportActive);
       window.removeEventListener("jisudeng-native-resume", reportActive);
     };
-  }, [backendBaseUrl, clientConfig, managed.accessToken]);
+  }, [backendBaseUrl, installedRelease.name, managed.accessToken]);
 
   useEffect(() => {
     const consumeInviteDeepLink = (detail: any) => {
@@ -18081,12 +18115,12 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
       storeInviteReferral(referral);
       localStorage.removeItem("jisudeng-native-pending-invite");
       window.dispatchEvent(new Event("jisudeng-invite-referral-updated"));
-      if (backendBaseUrl) {
+      if (backendBaseUrl && installedRelease.name) {
         void reportInviteLifecycleEvent(
           backendBaseUrl,
           useManagedNextChatStore.getState().accessToken,
           "poster_scanned",
-          clientConfig?.androidVersion || clientConfig?.version || "",
+          installedRelease.name,
           getInviteInstallationId(),
           {
             eventId: getStableInviteEventId(
@@ -18110,7 +18144,7 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
     window.addEventListener("jisudeng-invite-deeplink", onInviteDeepLink);
     return () =>
       window.removeEventListener("jisudeng-invite-deeplink", onInviteDeepLink);
-  }, [backendBaseUrl, clientConfig]);
+  }, [backendBaseUrl, installedRelease.name]);
 
   useEffect(() => {
     if (!managed.imageSession) return;
@@ -18231,8 +18265,9 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
   }, [managed._hasHydrated, managed.backendBaseUrl, backendBaseUrl]);
 
   useEffect(() => {
-    if (!managed._hasHydrated || !backendBaseUrl) return;
-    const appVersion = clientConfig?.androidVersion || clientConfig?.version;
+    if (!managed._hasHydrated || !backendBaseUrl || !installedRelease.name)
+      return;
+    const appVersion = installedRelease.name;
     const reportOpen = () => {
       void reportMobileAttributionEvent({
         baseUrl: backendBaseUrl,
@@ -18252,11 +18287,21 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", onResume);
       window.removeEventListener("jisudeng-native-resume", reportOpen);
     };
-  }, [managed._hasHydrated, backendBaseUrl, clientConfig, text.dateLocale]);
+  }, [
+    managed._hasHydrated,
+    backendBaseUrl,
+    installedRelease.name,
+    text.dateLocale,
+  ]);
 
   useEffect(() => {
-    if (!managed.accessToken || !managed.backendBaseUrl) return;
-    const appVersion = clientConfig?.androidVersion || clientConfig?.version;
+    if (
+      !managed.accessToken ||
+      !managed.backendBaseUrl ||
+      !installedRelease.name
+    )
+      return;
+    const appVersion = installedRelease.name;
     const userScope = managed.user?.id || managed.session?.user_id;
     if (!userScope) return;
     void reportMobileAttributionEvent({
@@ -18278,7 +18323,7 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
       metadata: { surface: "android_app", event_name: "active" },
     });
   }, [
-    clientConfig,
+    installedRelease.name,
     managed.accessToken,
     managed.backendBaseUrl,
     managed.session?.user_id,
@@ -18355,7 +18400,12 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
   }, [managed._hasHydrated, managed.accessToken, managed.backendBaseUrl]);
 
   useEffect(() => {
-    if (!managed.accessToken || !managed.backendBaseUrl) return;
+    if (
+      !managed.accessToken ||
+      !managed.backendBaseUrl ||
+      !installedRelease.name
+    )
+      return;
     const sentKey = accountStorageKey(DIAGNOSTICS_CURSOR_STORAGE_KEY);
     let disposed = false;
     const submitDiagnostics = async () => {
@@ -18431,16 +18481,21 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [clientConfig, managed.accessToken, managed.backendBaseUrl]);
+  }, [installedRelease.name, managed.accessToken, managed.backendBaseUrl]);
 
   useEffect(() => {
-    if (!managed.accessToken || !managed.backendBaseUrl) return;
+    if (
+      !managed.accessToken ||
+      !managed.backendBaseUrl ||
+      !installedRelease.name
+    )
+      return;
     let disposed = false;
     let removeListeners: (() => void) | undefined;
     void registerMobilePush(
       managed.backendBaseUrl,
       managed.accessToken,
-      clientConfig?.androidVersion || clientConfig?.version || "",
+      installedRelease.name,
     ).then((remove) => {
       if (disposed) {
         remove();
@@ -18452,7 +18507,7 @@ export function AndroidManagedGate(props: { children: ReactNode }) {
       disposed = true;
       removeListeners?.();
     };
-  }, [clientConfig, managed.accessToken, managed.backendBaseUrl]);
+  }, [installedRelease.name, managed.accessToken, managed.backendBaseUrl]);
 
   if (!managed._hasHydrated || !secureRestoreDone) {
     return <MobileLoading />;

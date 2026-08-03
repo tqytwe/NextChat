@@ -22,7 +22,29 @@ export const getBuildConfig = () => {
       ? ""
       : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
   const version = "v" + tauriConfig.package.version;
-  const androidVersion = process.env.NEXT_PUBLIC_ANDROID_VERSION ?? version;
+  // Android release metadata is independent from the embedded web bundle.
+  // Release builds receive these values from Gradle's release environment.
+  const configuredAndroidVersion =
+    process.env.NEXT_PUBLIC_ANDROID_VERSION ??
+    process.env.ANDROID_VERSION_NAME ??
+    "";
+  const androidVersion = configuredAndroidVersion.replace(/^v/i, "");
+  const configuredAndroidVersionCode =
+    process.env.NEXT_PUBLIC_ANDROID_VERSION_CODE ??
+    process.env.ANDROID_VERSION_CODE ??
+    "";
+  const androidVersionCode = /^\d+$/.test(configuredAndroidVersionCode)
+    ? Number(configuredAndroidVersionCode)
+    : undefined;
+  const androidReleaseCacheKey =
+    androidVersionCode && androidVersion
+      ? `${androidVersion}-${androidVersionCode}`
+      : androidVersion;
+  const defaultAndroidApkUrl = androidReleaseCacheKey
+    ? `/downloads/jisudengchat-android.apk?v=${encodeURIComponent(
+        androidReleaseCacheKey,
+      )}`
+    : "/downloads/jisudengchat-android.apk";
 
   const commitInfo = (() => {
     try {
@@ -57,14 +79,12 @@ export const getBuildConfig = () => {
     nextchatWebUrl:
       process.env.NEXT_PUBLIC_NEXTCHAT_WEB_URL ?? "https://www.jisudeng.com",
     androidApkUrl:
-      process.env.NEXT_PUBLIC_ANDROID_APK_URL ??
-      `/downloads/jisudengchat-android.apk?v=${encodeURIComponent(
-        androidVersion,
-      )}`,
+      process.env.NEXT_PUBLIC_ANDROID_APK_URL ?? defaultAndroidApkUrl,
     androidManifestUrl:
       process.env.NEXT_PUBLIC_ANDROID_MANIFEST_URL ??
       "/downloads/android-version.json",
     androidVersion,
+    androidVersionCode,
     androidApkSha256: process.env.NEXT_PUBLIC_ANDROID_APK_SHA256 ?? "",
     androidApkSize: process.env.NEXT_PUBLIC_ANDROID_APK_SIZE ?? "",
     androidReleaseNotes: process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES ?? "",
