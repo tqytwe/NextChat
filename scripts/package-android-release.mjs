@@ -441,6 +441,44 @@ function readPreviousManifest() {
   };
 }
 
+function highestPublishedVersionCode() {
+  const commits = gitOutput([
+    "log",
+    "--format=%H",
+    "--",
+    "public/downloads/android-version.json",
+  ])
+    .split(/\r?\n/)
+    .filter(Boolean);
+  let highest = 0;
+
+  for (const commit of commits) {
+    try {
+      const raw = execFileSync(
+        "git",
+        ["show", `${commit}:public/downloads/android-version.json`],
+        { cwd: root, encoding: "utf-8" },
+      );
+      const manifest = JSON.parse(raw);
+      const versionCode = normalizeVersionCode(
+        manifest?.versionCode,
+        `Published Android manifest at ${commit.slice(0, 12)}`,
+      );
+      highest = Math.max(highest, versionCode);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Unable to inspect historical Android release manifest ${commit.slice(
+          0,
+          12,
+        )}: ${reason}`,
+      );
+    }
+  }
+
+  return highest;
+}
+
 function assertManifestMatchesApk(manifest, apkRelease, source) {
   const manifestRelease = {
     version: normalizeVersionName(manifest.version, `${source} manifest`),
@@ -483,10 +521,13 @@ assertReleaseVersionsMatch(
 );
 assertEmbeddedAndroidBuildMatchesApk(apkRelease);
 const existingManifest = readPreviousManifest();
-const previousVersionCode = existingManifest.versionCode || 0;
+const previousVersionCode = Math.max(
+  existingManifest.versionCode || 0,
+  highestPublishedVersionCode(),
+);
 if (previousVersionCode && apkRelease.versionCode <= previousVersionCode) {
   throw new Error(
-    `Android versionCode must increase (previous ${previousVersionCode}, received ${apkRelease.versionCode})`,
+    `Android versionCode must exceed every previously published versionCode (highest ${previousVersionCode}, received ${apkRelease.versionCode})`,
   );
 }
 

@@ -56,6 +56,14 @@ The public Android download page refreshes its APK link and QR code from the
 same release manifest. It accepts only the relative canonical APK path, so a
 stale build variable or an unexpected download host cannot redirect users.
 
+`scripts/verify-android-release-artifact.mjs` is the final artifact gate. It
+checks the canonical APK hash, the native APK package/version, the embedded
+Android release config, and the public manifest together. It also requires the
+embedded web bundle to expose `webVersion` separately from the APK release
+fields. Do not manually replace the APK or downgrade the manifest: the
+packager rejects any `versionCode` that is not greater than every version code
+already recorded in Git history.
+
 For a mandatory update, publish `minSupportedVersionCode` in
 `public/downloads/android-version.json`. Do not use a semantic string version
 for mandatory-update policy.

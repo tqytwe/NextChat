@@ -211,6 +211,39 @@ describe("Android release package version gate", () => {
     expect(result.status).toBe(0);
   });
 
+  test("rejects a reused version code after a manifest was manually downgraded", () => {
+    const fixture = createFixture();
+    const originalManifest = JSON.parse(
+      readFileSync(fixture.manifestPath, "utf-8"),
+    );
+    writeJson(fixture.manifestPath, {
+      ...originalManifest,
+      version: "2.0.66",
+      latestVersion: "2.0.66",
+      versionCode: 266,
+      apkUrl: "/downloads/jisudengchat-android.apk?v=2.0.66-266",
+    });
+    git(fixture.root, ["add", "public/downloads/android-version.json"]);
+    git(fixture.root, ["commit", "--quiet", "-m", "publish 266"]);
+
+    writeJson(fixture.manifestPath, originalManifest);
+    git(fixture.root, ["add", "public/downloads/android-version.json"]);
+    git(fixture.root, ["commit", "--quiet", "-m", "bad downgrade"]);
+
+    const result = packageRelease(fixture, {
+      ANDROID_VERSION_NAME: "2.0.66",
+      ANDROID_VERSION_CODE: "266",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Android versionCode must exceed every previously published versionCode (highest 266, received 266)",
+    );
+    expect(JSON.parse(readFileSync(fixture.manifestPath, "utf-8"))).toEqual(
+      originalManifest,
+    );
+  });
+
   test("rejects an environment version mismatch before replacing public files", () => {
     const fixture = createFixture();
     const originalManifest = readFileSync(fixture.manifestPath, "utf-8");
@@ -296,7 +329,9 @@ describe("Android release package version gate", () => {
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("androidReleaseVersion is missing versionName");
+    expect(result.stderr).toContain(
+      "androidReleaseVersion is missing versionName",
+    );
     expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
   });

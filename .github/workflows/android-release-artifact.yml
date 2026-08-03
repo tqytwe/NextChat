@@ -20,6 +20,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install Android package inspector
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes aapt
       - name: Verify canonical APK and manifest
         run: node scripts/verify-android-release-artifact.mjs
       - name: Upload canonical Android release artifact
