@@ -22,6 +22,7 @@ const temporaryRoots: string[] = [];
 type FixtureOptions = {
   embeddedReleaseVersion?: string;
   embeddedVersionCode?: number;
+  includeEmbeddedManifest?: boolean;
   nativeVersion?: string;
   nativeVersionCode?: number;
   includeAndroidReleaseVersion?: boolean;
@@ -36,9 +37,11 @@ function createFixture(options: FixtureOptions = {}) {
   temporaryRoots.push(root);
   const payloadRoot = path.join(root, "payload");
   const embeddedDir = path.join(payloadRoot, "assets/public");
+  const embeddedDownloadsDir = path.join(embeddedDir, "downloads");
   const downloadsDir = path.join(root, "public/downloads");
   const toolsDir = path.join(root, "tools");
   mkdirSync(embeddedDir, { recursive: true });
+  mkdirSync(embeddedDownloadsDir, { recursive: true });
   mkdirSync(downloadsDir, { recursive: true });
   mkdirSync(toolsDir, { recursive: true });
 
@@ -67,7 +70,17 @@ function createFixture(options: FixtureOptions = {}) {
     path.join(embeddedDir, "index.html"),
     '<meta name="config" content="' + embeddedConfig + '">',
   );
-  execFileSync("zip", ["-q", apkPath, "assets/public/index.html"], {
+  const zipEntries = ["assets/public/index.html"];
+  if (options.includeEmbeddedManifest) {
+    writeJson(path.join(embeddedDownloadsDir, "android-version.json"), {
+      platform: "android",
+      version: "2.0.74",
+      versionCode: 274,
+      sha256: "stale-self-checksum",
+    });
+    zipEntries.push("assets/public/downloads/android-version.json");
+  }
+  execFileSync("zip", ["-q", apkPath, ...zipEntries], {
     cwd: payloadRoot,
   });
 
@@ -150,6 +163,15 @@ describe("canonical Android release verification", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
       "Canonical APK native package metadata does not match the Android release manifest",
+    );
+  });
+
+  test("rejects an embedded Android release manifest", () => {
+    const result = verify(createFixture({ includeEmbeddedManifest: true }));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Embedded Android release manifest must not be bundled in the APK",
     );
   });
 });

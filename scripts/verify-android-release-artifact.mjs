@@ -137,6 +137,30 @@ function readEmbeddedAndroidBuildConfig() {
   }
 }
 
+function assertNoEmbeddedAndroidManifest() {
+  const unzip = (process.env.UNZIP_PATH || "unzip").trim();
+  let listing;
+  try {
+    listing = execFileSync(unzip, ["-Z1", apkPath], { encoding: "utf-8" });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to inspect embedded Android assets: ${reason}`);
+  }
+
+  if (
+    listing
+      .split(/\r?\n/)
+      .some(
+        (entry) =>
+          entry.trim() === "assets/public/downloads/android-version.json",
+      )
+  ) {
+    throw new Error(
+      "Embedded Android release manifest must not be bundled in the APK",
+    );
+  }
+}
+
 const manifestVersion = normalizeVersionName(manifest.version);
 const manifestVersionCode = versionCode(manifest.versionCode);
 const expectedUrl = `/downloads/jisudengchat-android.apk?v=${encodeURIComponent(
@@ -189,6 +213,7 @@ if (embedded.androidApkUrl !== expectedUrl) {
     "Embedded Android APK URL does not match the release manifest",
   );
 }
+assertNoEmbeddedAndroidManifest();
 if (
   typeof embedded.webVersion !== "string" ||
   !embedded.webVersion.trim() ||
