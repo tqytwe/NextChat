@@ -284,6 +284,7 @@ export interface InvitePosterInput {
   body: string;
   locale?: string;
   theme?: InvitePosterTheme;
+  mode?: "invite" | "app";
 }
 
 export const INVITE_POSTER_THEMES = [
@@ -365,12 +366,21 @@ export function buildInvitePosterPayload(
   input: InvitePosterInput,
 ): InvitePosterPayload {
   const isChinese = /^zh(?:-|$)/i.test(input.locale || "");
+  const appOnly = input.mode === "app";
   return {
     ...input,
-    registerQrValue: input.registerUrl,
+    registerQrValue: appOnly ? input.appUrl : input.registerUrl,
     appQrValue: input.appUrl,
-    shareText: `${input.headline}\n${input.body}\n${input.registerUrl}`,
-    registerLabel: isChinese ? "扫码参加网页活动" : "Join on the web",
+    shareText: `${input.headline}\n${input.body}\n${
+      appOnly ? input.appUrl : input.registerUrl
+    }`,
+    registerLabel: appOnly
+      ? isChinese
+        ? "扫码下载 APP"
+        : "Download the APP"
+      : isChinese
+      ? "扫码参加网页活动"
+      : "Join on the web",
     appLabel: isChinese ? "扫码下载 APP" : "Download the APP",
   };
 }
@@ -411,33 +421,52 @@ export async function createInvitePosterDataUrl(
   drawPosterText(context, payload.body, 64, 294, width - 128, 42, 3);
   const registerImage = await loadImage(registerQr);
   const appImage = await loadImage(appQr);
-  const qrSize = Math.round(width * 0.33);
+  const appOnly = payload.mode === "app";
+  const qrSize = Math.round(width * (appOnly ? 0.48 : 0.33));
   const panelY = 500;
   const panelHeight = qrSize + 112;
   context.fillStyle = palette.panel;
-  context.fillRect(50, panelY, qrSize + 28, panelHeight);
-  context.fillRect(width - qrSize - 78, panelY, qrSize + 28, panelHeight);
-  context.drawImage(registerImage, 64, panelY + 14, qrSize, qrSize);
-  context.drawImage(appImage, width - qrSize - 64, panelY + 14, qrSize, qrSize);
-  context.fillStyle = "#111318";
-  drawCenteredPosterLabel(
-    context,
-    payload.registerLabel,
-    64,
-    panelY + qrSize + 62,
-    qrSize,
-  );
-  drawCenteredPosterLabel(
-    context,
-    payload.appLabel,
-    width - qrSize - 64,
-    panelY + qrSize + 62,
-    qrSize,
-  );
+  if (appOnly) {
+    const qrX = Math.round((width - qrSize) / 2);
+    context.fillRect(qrX - 14, panelY, qrSize + 28, panelHeight);
+    context.drawImage(appImage, qrX, panelY + 14, qrSize, qrSize);
+    context.fillStyle = "#111318";
+    drawCenteredPosterLabel(
+      context,
+      payload.appLabel,
+      qrX,
+      panelY + qrSize + 62,
+      qrSize,
+    );
+  } else {
+    context.fillRect(50, panelY, qrSize + 28, panelHeight);
+    context.fillRect(width - qrSize - 78, panelY, qrSize + 28, panelHeight);
+    context.drawImage(registerImage, 64, panelY + 14, qrSize, qrSize);
+    context.drawImage(appImage, width - qrSize - 64, panelY + 14, qrSize, qrSize);
+    context.fillStyle = "#111318";
+    drawCenteredPosterLabel(
+      context,
+      payload.registerLabel,
+      64,
+      panelY + qrSize + 62,
+      qrSize,
+    );
+    drawCenteredPosterLabel(
+      context,
+      payload.appLabel,
+      width - qrSize - 64,
+      panelY + qrSize + 62,
+      qrSize,
+    );
+  }
   context.fillStyle = palette.body;
   context.font = "26px sans-serif";
   const footer = /^zh(?:-|$)/i.test(payload.locale || "")
-    ? "网页参与或下载 APP，选择适合你的方式"
+    ? appOnly
+      ? "扫码下载 APP，开启创作"
+      : "网页参与或下载 APP，选择适合你的方式"
+    : appOnly
+    ? "Scan to download the APP and start creating"
     : "Join on the web or download the APP";
   drawPosterText(context, footer, 64, canvas.height - 92, width - 128, 34, 2);
   return canvas.toDataURL("image/png");

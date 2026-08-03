@@ -26,6 +26,8 @@ const apkTarget = path.join(downloadsDir, "jisudengchat-android.apk");
 const manifestPath = path.join(downloadsDir, "android-version.json");
 const legacyApkTarget = path.join(downloadsDir, "nextchat-android.apk");
 const androidPackageName = "com.jisudeng.chat";
+const releaseSigningCertificateSha256 =
+  "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e";
 const releaseArtifactPaths = new Set([
   "public/downloads/android-version.json",
   "public/downloads/jisudengchat-android.apk",
@@ -151,6 +153,30 @@ function aaptCandidates() {
   return [...new Set(candidates)];
 }
 
+function apksignerCandidates() {
+  const candidates = [];
+  const configuredPath = (process.env.APKSIGNER_PATH || "").trim();
+  if (configuredPath) {
+    candidates.push(configuredPath);
+  }
+
+  const sdkRoots = [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT]
+    .map((root) => (root || "").trim())
+    .filter(Boolean);
+  for (const sdkRoot of sdkRoots) {
+    const buildToolsDir = path.join(sdkRoot, "build-tools");
+    if (!existsSync(buildToolsDir)) continue;
+
+    for (const version of readdirSync(buildToolsDir).sort().reverse()) {
+      const candidate = path.join(buildToolsDir, version, "apksigner");
+      if (existsSync(candidate)) candidates.push(candidate);
+    }
+  }
+
+  candidates.push("apksigner");
+  return [...new Set(candidates)];
+}
+
 function readActualApkReleaseVersion() {
   let badging = "";
   let inspectedBy = "";
@@ -211,6 +237,61 @@ function readActualApkReleaseVersion() {
       `Release APK inspected by ${inspectedBy}`,
     ),
   };
+}
+
+function readActualApkSigningCertificate() {
+  let output = "";
+  let inspectedBy = "";
+  let lastMissingToolError;
+  for (const candidate of apksignerCandidates()) {
+    try {
+      output = execFileSync(
+        candidate,
+        ["verify", "--verbose", "--print-certs", apkSource],
+        { encoding: "utf-8" },
+      );
+      inspectedBy = candidate;
+      break;
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") {
+        lastMissingToolError = error;
+        continue;
+      }
+
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Unable to verify the release APK signature with ${candidate}: ${reason}`,
+      );
+    }
+  }
+
+  if (!inspectedBy) {
+    const reason = lastMissingToolError
+      ? ` (${lastMissingToolError.message})`
+      : "";
+    throw new Error(
+      `Unable to find Android apksigner. Set APKSIGNER_PATH or ANDROID_HOME before packaging${reason}`,
+    );
+  }
+
+  const certificates = [
+    ...output.matchAll(
+      /^Signer #\d+ certificate SHA-256 digest:\s*([0-9a-f]{64})\s*$/gim,
+    ),
+  ].map((match) => match[1].toLowerCase());
+  if (certificates.length !== 1) {
+    throw new Error(
+      `apksigner inspected by ${inspectedBy} must report exactly one release signing certificate`,
+    );
+  }
+
+  const certificate = certificates[0];
+  if (certificate !== releaseSigningCertificateSha256) {
+    throw new Error(
+      `Release APK signing certificate expected ${releaseSigningCertificateSha256}, received ${certificate}`,
+    );
+  }
+  return certificate;
 }
 
 function readConfiguredReleaseVersion() {
@@ -330,6 +411,7 @@ assertReleaseVersionsMatch(
   outputMetadataRelease,
   "APK output metadata",
 );
+const signingCertificateSha256 = readActualApkSigningCertificate();
 const configuredRelease = readConfiguredReleaseVersion();
 assertReleaseVersionsMatch(
   apkRelease,
@@ -363,8 +445,7 @@ const manifest = {
   versionCode: apkRelease.versionCode,
   sourceCommit,
   packageName: androidPackageName,
-  signingCertificateSha256:
-    "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
+  signingCertificateSha256,
   apkUrl: canonicalApkUrl,
   size: formatBytes(apk.length),
   bytes: apk.length,

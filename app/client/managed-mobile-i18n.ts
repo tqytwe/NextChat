@@ -71,6 +71,11 @@ export const MANAGED_MOBILE_TEXT = {
       emptyAmount: "请输入正确的金额",
       balancePaymentDisabled: "余额充值暂未开放，请选择套餐购买或稍后重试",
       paymentFailed: "创建支付订单失败，请稍后重试",
+      couponUnavailable: "该卡券当前不可用，请重新选择",
+      couponNotApplicable: "该卡券不适用于当前套餐、金额或支付方式",
+      couponExpired: "该卡券已过期",
+      couponAlreadyUsed: "该卡券已使用",
+      subscriptionUnavailable: "当前套餐暂不可购买，请刷新后重试",
       paymentGatewayReason: (reason: string) => `支付通道异常：${reason}`,
       paymentReturnUrlInvalid:
         "支付返回地址配置不正确，请更新 APP 或联系管理员检查网站域名",
@@ -118,15 +123,18 @@ export const MANAGED_MOBILE_TEXT = {
     },
     platform: {
       contentKit: {
-        title: "商品推广内容套件",
-        hint: "一次生成主图、竖版图、横幅图和发布文案，仅保存在本机",
-        newProject: "新建套件",
+        title: "内容创作工作台",
+        hint: "按创作场景生成视觉和发布文案，项目仅保存在本机",
+        newProject: "新建项目",
         moreSettings: "更多设置",
         hideMoreSettings: "收起更多设置",
-        projectName: "商品名称",
-        productPlaceholder: "例如：夏日轻便小白鞋",
-        sellingPoints: "核心卖点",
-        sellingPointsPlaceholder: "例如：轻便、透气、百搭",
+        projectName: "创作主题",
+        productPlaceholder: "例如：夏日轻便小白鞋、新品活动或应用下载",
+        sellingPoints: "核心信息与卖点",
+        sellingPointsPlaceholder:
+          "例如：轻便、透气、百搭，或本次活动的核心信息",
+        parameters: "参数与说明（选填）",
+        parametersPlaceholder: "例如：材质、尺寸、功能参数、活动规则或服务流程",
         audience: "目标人群",
         audiencePlaceholder: "例如：18-30 岁通勤女性",
         platform: "发布平台",
@@ -151,15 +159,21 @@ export const MANAGED_MOBILE_TEXT = {
         videoIntent: "标记为视频剪辑可用素材",
         references: "参考图（可选）",
         chooseModel: "生图模型",
-        create: "生成内容套件",
-        outputPlan: "输出计划",
+        create: "生成创作项目",
+        outputPlan: "创作场景与镜头计划",
         presetQuick: "快速试稿",
         presetEcommerce: "电商上新",
         presetCampaign: "活动推广",
+        presetSocial: "社媒种草",
+        presetBrand: "品牌海报",
+        presetService: "APP / 服务宣传",
         presetCustom: "自定义计划",
         presetQuickHint: "6 张候选，先确认风格",
-        presetEcommerceHint: "16 张商品、细节、场景和渠道图",
+        presetEcommerceHint: "主图、角度、细节、场景、卖点和详情页模块",
         presetCampaignHint: "24 张活动素材与多平台比例",
+        presetSocialHint: "封面、种草场景、轮播卡片和竖版渠道图",
+        presetBrandHint: "品牌主视觉、活动海报、场景图和横幅",
+        presetServiceHint: "功能卖点、流程说明、下载海报和横幅",
         presetCustomHint: "按镜头组设置 1-6 张变体，项目最多排队 48 张",
         addShot: "添加镜头组",
         removeShot: "移除镜头组",
@@ -196,16 +210,45 @@ export const MANAGED_MOBILE_TEXT = {
         shareSelected: "分享所选",
         noSelectedOutputs: "请先选择要导出的图片",
         outputGroups: "镜头组",
+        angle: "多角度展示",
         detail: "细节特写",
         lifestyle: "场景种草图",
+        sellingPoint: "卖点信息图底图",
+        detailPage: "详情页模块底图",
         poster: "卖点海报",
+        socialCover: "社媒封面",
+        socialCarousel: "社媒轮播卡片",
+        brandHero: "品牌主视觉",
+        feature: "功能卖点图",
+        workflow: "流程说明图",
+        download: "下载转化海报",
+        customShot: "自定义镜头",
+        shotPurpose: "镜头说明",
+        shotPurposePlaceholder:
+          "说明这张图要展示什么、给谁看、需要保留什么留白",
+        purposeMain: "作为商品、品牌或活动的核心主视觉",
+        purposeAngle: "展示不同角度、使用方式或对比视角",
+        purposeDetail: "展示材质、结构、纹理或功能细节",
+        purposeLifestyle: "在真实使用场景中展示主题",
+        purposeSellingPoint: "为本机标题和卖点叠字保留信息图版式",
+        purposeDetailPage: "为详情页参数和卖点叠字保留模块化版式",
+        purposePoster: "制作有标题留白的活动或品牌海报",
+        purposeVertical: "制作适合移动社媒或短视频封面的竖版视觉",
+        purposeBanner: "制作带独立文案留白的横幅视觉",
+        purposeSocialCover: "制作一眼传达主题的社媒封面",
+        purposeSocialCarousel: "制作社媒轮播中的说明卡片",
+        purposeBrandHero: "制作有明确艺术方向的品牌主视觉",
+        purposeFeature: "制作单一功能或服务卖点说明图",
+        purposeWorkflow: "制作服务流程或步骤说明图",
+        purposeDownload: "制作应用或服务下载转化海报",
+        purposeCustom: "自定义这张图的展示目标和构图方向",
         queued: "等待队列",
         partial: "部分完成",
         projects: "本机项目",
-        noProjects: "暂无内容套件项目",
-        main: "商品主图",
-        vertical: "竖版推广图",
-        banner: "横幅图",
+        noProjects: "暂无内容创作项目",
+        main: "主视觉图",
+        vertical: "竖版推广视觉",
+        banner: "横幅视觉",
         copy: "标题与发布文案",
         assets: "视觉素材",
         brief: "项目简介",
@@ -222,7 +265,7 @@ export const MANAGED_MOBILE_TEXT = {
         removeLocalFailed: "项目已删除，但部分本机图片未能清理",
         removeConfirm: (name: string) =>
           `删除“${name}”及本机结果？此操作无法恢复。`,
-        requiredProduct: "请输入商品名称和至少一个卖点",
+        requiredProduct: "请输入创作主题和至少一项核心信息",
         noImageModel: "当前分组没有可用图片模型",
         unsupportedSize: "当前模型不支持该输出尺寸，请调整计划或更换模型",
         noChatModel: "当前分组没有可用聊天模型，无法生成文案",
@@ -245,18 +288,18 @@ export const MANAGED_MOBILE_TEXT = {
         cancelled: "已取消",
       },
       materials: "素材库",
-      materialHint: "图片、文档、语音和外部分享素材",
-      materialEmpty: "暂无云端素材",
-      materialRefreshFailed: "素材库暂时无法同步",
+      materialHint: "图片、文档、语音和外部分享素材，均仅保存在本机",
+      materialEmpty: "暂无本机素材",
+      materialRefreshFailed: "本机素材库读取失败",
       uploadMaterial: "添加素材",
-      uploadWaiting: "上传中",
-      uploadReady: "已上传",
+      uploadWaiting: "正在添加",
+      uploadReady: "已添加到本机",
       uploadLocalReady: "已在本机附加",
-      uploadFailed: "上传失败",
-      uploadFailedHint: "素材上传失败，请移除后重新添加",
+      uploadFailed: "添加素材失败",
+      uploadFailedHint: "素材未能保存到本机，请重新添加",
       localFileUnsupported:
-        "云端素材存储暂不可用。图片会直接发送；仅纯文本文件可在本机附加到聊天。",
-      deleteAssetConfirm: "确定删除这个云端素材吗？",
+        "当前文件类型不能直接用于聊天或生图；图片和纯文本可在本机附加。",
+      deleteAssetConfirm: "确定删除这个本机素材吗？",
       assetDeleted: "素材已删除",
       addToChat: "加入聊天",
       addToImage: "加入生图",
@@ -355,6 +398,10 @@ export const MANAGED_MOBILE_TEXT = {
       noPinned: "暂无固定会话",
       inputPlaceholder: "输入消息...",
       model: "模型",
+      modelFallback: (model: string) =>
+        model
+          ? `已选模型不可用，已切换为 ${model}`
+          : "已选模型不可用，已切换为可用模型",
       group: "分组",
       sending: "发送中",
       stop: "停止",
@@ -544,6 +591,12 @@ export const MANAGED_MOBILE_TEXT = {
       productTag: "产品",
       posterTag: "海报",
       categoryUpdated: "标签已更新",
+      createCollection: "创建集合",
+      collectionName: "图片集合",
+      collectionNamePrompt: "输入集合名称",
+      collectionCreated: "已创建图片集合",
+      removeCollection: "取消集合",
+      collectionRemoved: "已取消图片集合",
       save: "保存图片",
       filePrefix: "jisudengchat-image",
     },
@@ -580,16 +633,31 @@ export const MANAGED_MOBILE_TEXT = {
       redeemCodeRequired: "请输入兑换码",
       redeemRecords: "兑换记录",
       noRedeemRecords: "暂无兑换记录",
+      accountHubs: "常用入口",
+      accountHubPlay: "玩法中心",
+      accountHubPlayHint: "签到、盲盒、答题、战队",
+      accountHubBilling: "权益与账单",
+      accountHubBillingHint: "套餐、用量、卡券、订单",
+      accountHubProjects: "我的项目与图库",
+      accountHubProjectsHint: "本机项目、图库、素材",
+      accountHubHelp: "帮助与设置",
+      accountHubHelpHint: "权限、更新、反馈、客服",
+      appShare: "分享 APP",
+      appShareHint: "生成带品牌和二维码的分享海报",
+      appShareTitle: "和我一起使用 JisudengChat",
+      appShareBody: "一个入口使用聊天、生图和内容创作工具",
+      appShareReady: "分享海报已准备好",
+      appShareUnavailable: "分享暂时不可用，请稍后重试",
       assetsAndRecords: "资产记录",
       moreServices: "更多服务",
       packages: "套餐",
       subscriptions: "套餐权益",
-      welfare: "福利与排行",
-      welfareHint: "查看会员权益、活动进度和公开排行",
-      welfareLoading: "正在同步福利与排行",
-      welfareUnavailable: "福利与排行暂时无法加载，请稍后再试",
+      welfare: "玩法中心",
+      welfareHint: "签到、盲盒、答题、战队、邀请和奖励排行",
+      welfareLoading: "正在同步玩法中心",
+      welfareUnavailable: "玩法中心暂时无法加载，请稍后再试",
       welfarePartialUnavailable: (count: number) =>
-        `${count} 项排行数据暂时不可用，已展示其余内容`,
+        `${count} 项玩法数据暂时不可用，已展示其余内容`,
       welfareMemberBenefits: "会员权益",
       welfareCurrentVIP: "当前会员等级",
       welfareMemberPaid: "累计净实付",
@@ -629,6 +697,48 @@ export const MANAGED_MOBILE_TEXT = {
       welfareRewardsIssued: "已发放奖励",
       welfareNoLeaderboard: "当前暂无排行数据",
       welfareNoRewards: "当前暂无已发放奖励",
+      welfarePlayTitle: "每日玩法",
+      welfarePlayHint: "完成签到、盲盒和每日答题，奖励到账后会同步账户余额",
+      welfareCheckinTitle: "每日签到",
+      welfareCheckinStreak: "连续签到",
+      welfareCheckinReward: "今日预计奖励",
+      welfareCheckinAction: "立即签到",
+      welfareCheckinMakeup: (date: string) => `补签 ${date}`,
+      welfareCheckinChecked: "今日已签到",
+      welfareCheckinNotEligible: "当前暂不满足签到条件",
+      welfareCheckinUnavailable: "签到服务暂时不可用，请稍后重试",
+      welfareCheckinPoolUnavailable: "签到奖励池暂未发布，暂时不能签到",
+      welfareCheckinCompleted: "签到成功",
+      welfareCheckinSuccess: (amount: string) => `签到成功，到账 ${amount}`,
+      welfareCheckinMakeupSuccess: (amount: string) =>
+        `补签成功，到账 ${amount}`,
+      welfareBlindboxTitle: "每日盲盒",
+      welfareBlindboxCost: "本次消耗",
+      welfareBlindboxExpected: "预计奖励",
+      welfareBlindboxCount: "今日次数",
+      welfareBlindboxAction: "开启盲盒",
+      welfareBlindboxLimit: "今日已达到开启上限",
+      welfareBlindboxUnavailable: "盲盒暂未开放，请稍后重试",
+      welfareBlindboxPoolUnavailable: "奖励池暂未发布，暂时不能开启盲盒",
+      welfareBlindboxCompleted: "盲盒已开启",
+      welfareBlindboxSuccess: (amount: string) => `盲盒结果：奖励 ${amount}`,
+      welfareRewardCoupon: (name: string) => `获得卡券：${name}`,
+      welfareRewardCode: (code: string) => `获得兑换码：${code}`,
+      welfareQuizTitle: "每日答题",
+      welfareQuizRewardPerCorrect: (amount: string) =>
+        `每答对一题奖励 ${amount}`,
+      welfareQuizSubmit: "提交答案",
+      welfareQuizSubmitting: "提交中...",
+      welfareQuizAnswerProgress: (answered: number, total: number) =>
+        `已完成 ${answered}/${total}`,
+      welfareQuizNeedAnswers: "请先完成全部题目",
+      welfareQuizSubmitted: (score: number, total: number) =>
+        `今日已完成：${score}/${total}`,
+      welfareQuizNoQuestions: "今日暂无题目",
+      welfareQuizUnavailable: "答题服务暂时不可用，请稍后重试",
+      welfareQuizPoolUnavailable: "答题奖励池暂未发布，暂时不能答题",
+      welfareRewardMessage: (amount: string) => `奖励到账 ${amount}`,
+      welfareRewardNone: "本次未获得可用奖励",
       welfareRank: "排名",
       welfareUser: "用户",
       welfareTeam: "团队",
@@ -773,6 +883,46 @@ export const MANAGED_MOBILE_TEXT = {
       adminNeedsBackend: "需要后端接口支持",
       adminBackendHint:
         "用户中心、全站订单、用户余额、用户分组、全站任务历史和审计记录需要服务端提供管理员移动端接口。当前 APP 不会伪造这些数据，也不会在未授权接口上做危险操作。",
+      adminWorkspace: {
+        overview: "概览",
+        users: "用户",
+        operations: "运营",
+        funds: "资金",
+        audit: "审计",
+        refresh: "刷新当前数据",
+        loading: "正在读取管理员数据...",
+        unavailable: "管理员数据暂时不可用",
+        request: "请求编号",
+        summary: "运行概览",
+        paymentSummary: "支付概览",
+        userSearch: "搜索邮箱或用户名",
+        noUsers: "未找到用户",
+        userBalance: "余额核对",
+        balanceHistory: "余额流水",
+        reconciliation: "核对结果",
+        groups: "模型分组",
+        models: "模型目录",
+        usage: "用量记录",
+        cleanup: "清理任务",
+        orders: "订单",
+        withdrawals: "提现申请",
+        refunds: "退款申请",
+        auditLogs: "审计日志",
+        empty: "暂无数据",
+        stepUp: "管理员二次验证",
+        stepUpHint:
+          "输入动态验证码后，服务端会授予短时敏感操作验证窗口。移动端此版本仅提供查询。",
+        stepUpCode: "6 位动态验证码",
+        stepUpVerify: "验证",
+        stepUpVerified: (seconds: number) => `二次验证有效期约 ${seconds} 秒`,
+        stepUpFailed: "二次验证失败，请检查动态验证码后重试",
+        readonlyHint:
+          "移动端仅展示后端已开放的只读数据；资金、配置和用户修改请在网页管理后台完成。",
+        status: "状态",
+        total: "总数",
+        viewUser: "查看余额明细",
+        closeUser: "关闭用户明细",
+      },
       deleteSessionConfirm: "确定删除这个会话吗？",
       openSystemSettings: "打开系统设置",
       openSystemSettingsHint: "如果权限被拒绝，请到系统设置中手动开启",
@@ -1007,6 +1157,13 @@ export const MANAGED_MOBILE_TEXT = {
       balancePaymentDisabled:
         "Balance top-up is not available. Choose a plan or try again later.",
       paymentFailed: "Failed to create payment order. Please try again later.",
+      couponUnavailable: "This coupon is not available. Choose another one.",
+      couponNotApplicable:
+        "This coupon does not apply to the selected plan, amount, or payment method.",
+      couponExpired: "This coupon has expired.",
+      couponAlreadyUsed: "This coupon has already been used.",
+      subscriptionUnavailable:
+        "This plan is not available right now. Refresh and try again.",
       paymentGatewayReason: (reason: string) =>
         `Payment gateway error: ${reason}`,
       paymentReturnUrlInvalid:
@@ -1060,15 +1217,20 @@ export const MANAGED_MOBILE_TEXT = {
     },
     platform: {
       contentKit: {
-        title: "Product promotion kit",
-        hint: "Generate a main image, vertical visual, banner, and post copy. Saved on this device only.",
-        newProject: "New kit",
+        title: "Content creation workspace",
+        hint: "Create visuals and publishing copy by scenario. Projects stay on this device.",
+        newProject: "New project",
         moreSettings: "More settings",
         hideMoreSettings: "Hide more settings",
-        projectName: "Product name",
-        productPlaceholder: "e.g. Lightweight summer sneakers",
-        sellingPoints: "Key selling points",
-        sellingPointsPlaceholder: "e.g. Lightweight, breathable, versatile",
+        projectName: "Creative subject",
+        productPlaceholder:
+          "e.g. Lightweight summer sneakers, launch campaign, or app download",
+        sellingPoints: "Core information and selling points",
+        sellingPointsPlaceholder:
+          "e.g. Lightweight, breathable, versatile, or the campaign's key message",
+        parameters: "Parameters and details (optional)",
+        parametersPlaceholder:
+          "e.g. Materials, dimensions, feature facts, campaign terms, or service steps",
         audience: "Target audience",
         audiencePlaceholder: "e.g. Urban commuters aged 18-30",
         platform: "Publishing platform",
@@ -1093,16 +1255,25 @@ export const MANAGED_MOBILE_TEXT = {
         videoIntent: "Mark as suitable for video editing",
         references: "Reference images (optional)",
         chooseModel: "Image model",
-        create: "Generate content kit",
-        outputPlan: "Output plan",
+        create: "Generate creative project",
+        outputPlan: "Scene and shot plan",
         presetQuick: "Quick draft",
         presetEcommerce: "E-commerce launch",
         presetCampaign: "Campaign promotion",
+        presetSocial: "Social content",
+        presetBrand: "Brand poster",
+        presetService: "App / service promotion",
         presetCustom: "Custom plan",
         presetQuickHint: "6 candidates to confirm the direction",
         presetEcommerceHint:
-          "16 product, detail, lifestyle, and channel visuals",
+          "Listing, angle, detail, lifestyle, selling-point, and detail-page modules",
         presetCampaignHint: "24 campaign visuals in multiple formats",
+        presetSocialHint:
+          "Covers, lifestyle scenes, carousel cards, and vertical channel visuals",
+        presetBrandHint:
+          "Brand key visuals, campaign posters, scenes, and banners",
+        presetServiceHint:
+          "Feature explainers, workflow visuals, download posters, and banners",
         presetCustomHint:
           "Set 1-6 variants per shot group, with up to 48 outputs queued per project",
         addShot: "Add shot group",
@@ -1145,14 +1316,51 @@ export const MANAGED_MOBILE_TEXT = {
         shareSelected: "Share selected",
         noSelectedOutputs: "Select images to export first.",
         outputGroups: "Shot groups",
+        angle: "Product angles",
         detail: "Detail close-ups",
         lifestyle: "Lifestyle visuals",
+        sellingPoint: "Selling-point visual base",
+        detailPage: "Detail-page visual module",
         poster: "Selling-point posters",
+        socialCover: "Social cover",
+        socialCarousel: "Social carousel card",
+        brandHero: "Brand key visual",
+        feature: "Feature visual",
+        workflow: "Workflow visual",
+        download: "Download poster",
+        customShot: "Custom shot",
+        shotPurpose: "Shot direction",
+        shotPurposePlaceholder:
+          "Describe what this visual shows, who it is for, and any required copy-safe area",
+        purposeMain: "Core hero visual for a product, brand, or campaign",
+        purposeAngle: "Show another angle, use case, or comparison view",
+        purposeDetail: "Show material, structure, texture, or feature detail",
+        purposeLifestyle: "Show the subject in an authentic use context",
+        purposeSellingPoint:
+          "Use an information layout with areas for local title and selling-point copy",
+        purposeDetailPage:
+          "Use a modular layout with areas for local detail-page facts and specifications",
+        purposePoster:
+          "Create a campaign or brand poster with headline-safe space",
+        purposeVertical:
+          "Create a vertical visual for mobile social publishing or a short-video cover",
+        purposeBanner:
+          "Create a horizontal visual with an independent copy-safe area",
+        purposeSocialCover:
+          "Create a social cover that communicates the idea at a glance",
+        purposeSocialCarousel:
+          "Create an explanatory card for a social carousel",
+        purposeBrandHero:
+          "Create a brand key visual with an intentional art direction",
+        purposeFeature: "Create an explainer for one app or service capability",
+        purposeWorkflow: "Create a service process or workflow explainer",
+        purposeDownload: "Create an app or service download conversion poster",
+        purposeCustom: "Describe this visual's goal and composition direction",
         queued: "Queued",
         partial: "Partially completed",
         projects: "Local projects",
-        noProjects: "No content kit projects yet.",
-        main: "Product main visual",
+        noProjects: "No content creation projects yet.",
+        main: "Main visual",
         vertical: "Vertical promotion visual",
         banner: "Banner visual",
         copy: "Title and post copy",
@@ -1172,7 +1380,7 @@ export const MANAGED_MOBILE_TEXT = {
           "The project was deleted, but some local images could not be removed.",
         removeConfirm: (name: string) =>
           `Delete “${name}” and its local results? This cannot be undone.`,
-        requiredProduct: "Enter a product name and at least one selling point.",
+        requiredProduct: "Enter a creative subject and at least one key point.",
         noImageModel: "No image model is available in the current group.",
         unsupportedSize:
           "This model does not support one or more output sizes. Adjust the plan or choose another model.",
@@ -1196,18 +1404,20 @@ export const MANAGED_MOBILE_TEXT = {
         cancelled: "Cancelled",
       },
       materials: "Material library",
-      materialHint: "Images, documents, audio, and shared files",
-      materialEmpty: "No cloud materials yet.",
-      materialRefreshFailed: "Material library could not be refreshed.",
+      materialHint:
+        "Images, documents, audio, and shared files kept only on this device",
+      materialEmpty: "No local materials yet.",
+      materialRefreshFailed: "Local material library could not be read.",
       uploadMaterial: "Add material",
-      uploadWaiting: "Uploading",
-      uploadReady: "Uploaded",
+      uploadWaiting: "Adding",
+      uploadReady: "Saved on this device",
       uploadLocalReady: "Attached on this device",
-      uploadFailed: "Upload failed",
-      uploadFailedHint: "Upload failed. Remove the item and add it again.",
+      uploadFailed: "Could not add material",
+      uploadFailedHint:
+        "The material was not saved on this device. Add it again.",
       localFileUnsupported:
-        "Cloud material storage is unavailable. Images are sent directly; only plain-text files can be attached locally to chat.",
-      deleteAssetConfirm: "Delete this cloud material?",
+        "This file type cannot be used directly in chat or image creation. Images and plain text can be attached locally.",
+      deleteAssetConfirm: "Delete this local material?",
       assetDeleted: "Material deleted",
       addToChat: "Add to chat",
       addToImage: "Add to image",
@@ -1312,6 +1522,10 @@ export const MANAGED_MOBILE_TEXT = {
       noPinned: "No pinned chats",
       inputPlaceholder: "Message...",
       model: "Model",
+      modelFallback: (model: string) =>
+        model
+          ? `The selected model is unavailable. Switched to ${model}.`
+          : "The selected model is unavailable. Switched to an available model.",
       group: "Group",
       sending: "Sending",
       stop: "Stop",
@@ -1514,6 +1728,12 @@ export const MANAGED_MOBILE_TEXT = {
       productTag: "Product",
       posterTag: "Poster",
       categoryUpdated: "Tag updated",
+      createCollection: "Create collection",
+      collectionName: "Image collection",
+      collectionNamePrompt: "Enter a collection name",
+      collectionCreated: "Image collection created",
+      removeCollection: "Remove collection",
+      collectionRemoved: "Image collection removed",
       save: "Save image",
       filePrefix: "jisudengchat-image",
     },
@@ -1551,18 +1771,34 @@ export const MANAGED_MOBILE_TEXT = {
       redeemCodeRequired: "Enter a redeem code",
       redeemRecords: "Redeem records",
       noRedeemRecords: "No redeem records",
+      accountHubs: "Quick access",
+      accountHubPlay: "Play center",
+      accountHubPlayHint: "Check-in, blind box, quiz, teams",
+      accountHubBilling: "Benefits and billing",
+      accountHubBillingHint: "Plans, usage, coupons, orders",
+      accountHubProjects: "Projects and gallery",
+      accountHubProjectsHint: "Local projects, gallery, materials",
+      accountHubHelp: "Help and settings",
+      accountHubHelpHint: "Permissions, updates, feedback, support",
+      appShare: "Share the app",
+      appShareHint: "Create a branded poster with a QR code",
+      appShareTitle: "Try JisudengChat with me",
+      appShareBody: "Chat, image creation, and content tools in one place",
+      appShareReady: "Share poster is ready",
+      appShareUnavailable:
+        "Sharing is temporarily unavailable. Try again later.",
       assetsAndRecords: "Assets",
       moreServices: "More",
       packages: "Plans",
       subscriptions: "Entitlements",
-      welfare: "Benefits and rankings",
+      welfare: "Play center",
       welfareHint:
-        "View member benefits, activity progress, and public rankings",
-      welfareLoading: "Syncing benefits and rankings",
+        "Check-in, blind box, quiz, teams, invitations, and reward rankings",
+      welfareLoading: "Syncing play center",
       welfareUnavailable:
-        "Benefits and rankings are temporarily unavailable. Try again later.",
+        "The play center is temporarily unavailable. Try again later.",
       welfarePartialUnavailable: (count: number) =>
-        `${count} ranking data source${
+        `${count} play-center data source${
           count === 1 ? " is" : "s are"
         } temporarily unavailable. Other content is shown.`,
       welfareMemberBenefits: "Member benefits",
@@ -1604,6 +1840,54 @@ export const MANAGED_MOBILE_TEXT = {
       welfareRewardsIssued: "Rewards paid",
       welfareNoLeaderboard: "No ranking data yet.",
       welfareNoRewards: "No paid rewards yet.",
+      welfarePlayTitle: "Daily play",
+      welfarePlayHint:
+        "Check in, open the blind box, and finish the daily quiz. Rewards sync to your balance.",
+      welfareCheckinTitle: "Daily check-in",
+      welfareCheckinStreak: "Check-in streak",
+      welfareCheckinReward: "Today's expected reward",
+      welfareCheckinAction: "Check in",
+      welfareCheckinMakeup: (date: string) => `Make up ${date}`,
+      welfareCheckinChecked: "Checked in today",
+      welfareCheckinNotEligible: "You are not eligible for check-in right now",
+      welfareCheckinUnavailable: "Check-in is unavailable. Try again later.",
+      welfareCheckinPoolUnavailable:
+        "The check-in reward pool is not published yet.",
+      welfareCheckinCompleted: "Check-in complete",
+      welfareCheckinSuccess: (amount: string) =>
+        `Check-in complete. Added ${amount}`,
+      welfareCheckinMakeupSuccess: (amount: string) =>
+        `Make-up check-in complete. Added ${amount}`,
+      welfareBlindboxTitle: "Daily blind box",
+      welfareBlindboxCost: "Cost",
+      welfareBlindboxExpected: "Expected reward",
+      welfareBlindboxCount: "Today's opens",
+      welfareBlindboxAction: "Open blind box",
+      welfareBlindboxLimit: "Today's open limit has been reached",
+      welfareBlindboxUnavailable:
+        "The blind box is not available. Try again later.",
+      welfareBlindboxPoolUnavailable:
+        "The reward pool is not published yet. Opening is unavailable.",
+      welfareBlindboxCompleted: "Blind box opened",
+      welfareBlindboxSuccess: (amount: string) =>
+        `Blind-box result: reward ${amount}`,
+      welfareRewardCoupon: (name: string) => `Coupon received: ${name}`,
+      welfareRewardCode: (code: string) => `Redeem code received: ${code}`,
+      welfareQuizTitle: "Daily quiz",
+      welfareQuizRewardPerCorrect: (amount: string) =>
+        `Reward per correct answer: ${amount}`,
+      welfareQuizSubmit: "Submit answers",
+      welfareQuizSubmitting: "Submitting...",
+      welfareQuizAnswerProgress: (answered: number, total: number) =>
+        `${answered}/${total} answered`,
+      welfareQuizNeedAnswers: "Answer every question first",
+      welfareQuizSubmitted: (score: number, total: number) =>
+        `Completed today: ${score}/${total}`,
+      welfareQuizNoQuestions: "No questions are available today.",
+      welfareQuizUnavailable: "The quiz is unavailable. Try again later.",
+      welfareQuizPoolUnavailable: "The quiz reward pool is not published yet.",
+      welfareRewardMessage: (amount: string) => `Reward added: ${amount}`,
+      welfareRewardNone: "No reward was issued this time",
       welfareRank: "Rank",
       welfareUser: "User",
       welfareTeam: "Team",
@@ -1762,6 +2046,48 @@ export const MANAGED_MOBILE_TEXT = {
       adminNeedsBackend: "Backend API required",
       adminBackendHint:
         "User center, global orders, user balance, group management, global task history, and audit records require admin mobile APIs from the server. The app will not fabricate those records or perform risky actions against unauthorized endpoints.",
+      adminWorkspace: {
+        overview: "Overview",
+        users: "Users",
+        operations: "Operations",
+        funds: "Funds",
+        audit: "Audit",
+        refresh: "Refresh current data",
+        loading: "Loading administrator data...",
+        unavailable: "Administrator data is unavailable right now",
+        request: "Request ID",
+        summary: "Runtime overview",
+        paymentSummary: "Payment overview",
+        userSearch: "Search email or username",
+        noUsers: "No users found",
+        userBalance: "Balance review",
+        balanceHistory: "Balance history",
+        reconciliation: "Reconciliation",
+        groups: "Model groups",
+        models: "Model catalog",
+        usage: "Usage records",
+        cleanup: "Cleanup tasks",
+        orders: "Orders",
+        withdrawals: "Withdrawal requests",
+        refunds: "Refund requests",
+        auditLogs: "Audit logs",
+        empty: "No data yet",
+        stepUp: "Administrator step-up verification",
+        stepUpHint:
+          "Enter your one-time code to establish the server-side short-lived sensitive-operation window. This mobile release is read-only.",
+        stepUpCode: "6-digit one-time code",
+        stepUpVerify: "Verify",
+        stepUpVerified: (seconds: number) =>
+          `Step-up verification is valid for about ${seconds} seconds`,
+        stepUpFailed:
+          "Step-up verification failed. Check the one-time code and try again.",
+        readonlyHint:
+          "Mobile shows only server-approved read data. Complete fund, configuration, and user changes in the web admin console.",
+        status: "Status",
+        total: "Total",
+        viewUser: "View balance details",
+        closeUser: "Close user details",
+      },
       deleteSessionConfirm: "Delete this chat?",
       openSystemSettings: "Open system settings",
       openSystemSettingsHint:
@@ -1956,10 +2282,11 @@ export function localizeManagedMobileError(input: {
   message?: string;
   status?: number;
   path?: string;
+  code?: number | string;
 }) {
   const text = getManagedMobileText();
   const raw = (input.message || "").trim();
-  const normalized = raw.toLowerCase();
+  const normalized = `${String(input.code || "")} ${raw}`.toLowerCase();
 
   if (
     input.status === 404 &&
@@ -2101,6 +2428,41 @@ export function localizeManagedMobileError(input: {
     return text.errors.paymentReturnUrlInvalid;
   }
   if (
+    /coupon.*(?:expired|expire)|(?:expired|expire).*coupon|卡券.*过期/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.couponExpired;
+  }
+  if (
+    /coupon.*(?:used|already_used|consumed)|(?:used|already_used|consumed).*coupon|卡券.*已使用/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.couponAlreadyUsed;
+  }
+  if (
+    /coupon.*(?:scope|not_applicable|ineligible|minimum|amount|payment|plan)|(?:coupon_scope|coupon_not_applicable|coupon_ineligible)|卡券.*(?:不适用|门槛|支付方式|套餐)/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.couponNotApplicable;
+  }
+  if (
+    /coupon.*(?:not_found|invalid|unavailable|locked)|(?:coupon_not_found|coupon_unavailable)|卡券.*(?:不可用|无效|锁定|不存在)/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.couponUnavailable;
+  }
+  if (
+    /subscription.*(?:not_found|unavailable|invalid|disabled)|plan.*(?:not_found|unavailable|invalid|disabled)|套餐.*(?:不可用|不存在|已下架)/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.subscriptionUnavailable;
+  }
+  if (
     /permission denied|not available|camera|speech|microphone|权限/.test(
       normalized,
     )
@@ -2150,7 +2512,18 @@ export function localizeManagedMobileError(input: {
   if (/no image models|no available image|暂无可用图片模型/.test(normalized)) {
     return text.errors.noImageModels;
   }
-  if (raw) return raw;
+  // Do not surface a server's default-language error into the opposite locale.
+  // HTTP/category/request ID stay available through formatManagedMobileError.
+  if (raw) {
+    const hasCjk = /[\u3400-\u9fff]/.test(raw);
+    const hasLatinWords = /[a-z]{3,}/i.test(raw);
+    if (
+      (text.dateLocale.startsWith("zh") && hasCjk) ||
+      (!text.dateLocale.startsWith("zh") && hasLatinWords)
+    ) {
+      return raw;
+    }
+  }
   if (input.status) return text.errors.requestFailed(input.status);
   return text.errors.serviceUnavailable;
 }
@@ -2159,6 +2532,7 @@ export function formatManagedMobileError(input: {
   message?: string;
   status?: number;
   path?: string;
+  code?: number | string;
   category: string;
   requestId: string;
 }) {

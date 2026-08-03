@@ -5,6 +5,9 @@ export const PLAY_WELFARE_ENDPOINTS = {
   teamSeasons: "/api/v1/play/teams/seasons?limit=3",
   arenaMonthlyOverview:
     "/api/v1/play/arena/overview?period=monthly&include_history=1",
+  checkinStatus: "/api/v1/play/checkin/status",
+  blindboxStatus: "/api/v1/play/blindbox/status",
+  quizToday: "/api/v1/play/quiz/today",
 } as const;
 
 export const PLAY_WELFARE_TEAM_ENDPOINTS = {
@@ -16,6 +19,13 @@ export const PLAY_WELFARE_TEAM_ENDPOINTS = {
   application: "/api/v1/play/teams/applications",
   recruiting: "/api/v1/play/teams/recruiting",
   inviteRotate: "/api/v1/play/teams/invite/rotate",
+} as const;
+
+export const PLAY_WELFARE_REWARD_ENDPOINTS = {
+  checkin: "/api/v1/play/checkin",
+  checkinMakeup: "/api/v1/play/checkin/makeup",
+  blindboxOpen: "/api/v1/play/blindbox/open",
+  quizSubmit: "/api/v1/play/quiz/submit",
 } as const;
 
 export interface PlayWelfareVIPTier {
@@ -214,6 +224,106 @@ export interface PlayWelfareArenaOverview {
   }>;
 }
 
+export interface PlayWelfareRewardCoupon {
+  user_coupon_id?: number;
+  name?: string;
+  benefit_type?: string;
+  benefit_value?: number;
+  expires_at?: string;
+}
+
+export interface PlayWelfareRedeemCode {
+  id?: number;
+  code?: string;
+  type?: string;
+  value?: number;
+  expires_at?: string;
+}
+
+export interface PlayWelfareCheckinStatus {
+  enabled: boolean;
+  eligible: boolean;
+  ineligible_reason?: string;
+  checked_in_today: boolean;
+  reward_amount: number;
+  coupon_pool_ready: boolean;
+  server_date: string;
+  streak_count?: number;
+  next_milestone_days?: number;
+  next_milestone_bonus?: number;
+  can_makeup?: boolean;
+  makeup_date?: string;
+  recharge_boost_active?: boolean;
+  boost_checkin_multiplier?: number;
+}
+
+export interface PlayWelfareCheckinResult {
+  reward_amount: number;
+  balance_added: number;
+  reward_type?: string;
+  coupon?: PlayWelfareRewardCoupon;
+  redeem_code?: PlayWelfareRedeemCode;
+  server_date: string;
+  streak_count?: number;
+  milestone_bonus?: number;
+}
+
+export interface PlayWelfareBlindboxStatus {
+  enabled: boolean;
+  coupon_pool_ready: boolean;
+  cost_amount: number;
+  vip_tier?: { tier?: number; label?: string };
+  expected_reward?: number;
+  daily_limit?: number;
+  effective_limit?: number;
+  opens_today?: number;
+  can_open: boolean;
+  server_date: string;
+  recharge_boost_active?: boolean;
+  campaign_active?: boolean;
+}
+
+export interface PlayWelfareBlindboxResult {
+  cost_amount: number;
+  reward_amount: number;
+  net_amount: number;
+  reward_type?: string;
+  coupon?: PlayWelfareRewardCoupon;
+  redeem_code?: PlayWelfareRedeemCode;
+  opens_today?: number;
+  server_date: string;
+}
+
+export interface PlayWelfareQuizQuestion {
+  id: number;
+  prompt: string;
+  options: string[];
+}
+
+export interface PlayWelfareQuizToday {
+  enabled: boolean;
+  coupon_pool_ready: boolean;
+  questions: PlayWelfareQuizQuestion[];
+  already_submitted: boolean;
+  previous_score?: number;
+  previous_total?: number;
+  previous_reward?: number;
+  previous_reward_type?: string;
+  previous_coupon?: PlayWelfareRewardCoupon;
+  reward_per_correct: number;
+  server_date: string;
+}
+
+export interface PlayWelfareQuizSubmitResult {
+  score: number;
+  total: number;
+  reward_amount: number;
+  reward_type?: string;
+  coupon?: PlayWelfareRewardCoupon;
+  redeem_code?: PlayWelfareRedeemCode;
+  server_date: string;
+}
+
 export type PlayWelfareRequest = <T>(path: string) => Promise<T>;
 
 type PlayWelfareUnavailable =
@@ -235,6 +345,9 @@ export interface PlayWelfareData {
   teamLeaderboard?: PlayWelfareTeamLeaderboard;
   teamCaptainApplications?: PlayWelfareTeamApplication[];
   arenaMonthlyOverview?: PlayWelfareArenaOverview;
+  checkinStatus?: PlayWelfareCheckinStatus;
+  blindboxStatus?: PlayWelfareBlindboxStatus;
+  quizToday?: PlayWelfareQuizToday;
   unavailable: PlayWelfareUnavailable[];
 }
 
@@ -242,7 +355,7 @@ export function playWelfareTeamSeasonEndpoint(month: string) {
   return `/api/v1/play/teams/seasons/${encodeURIComponent(month)}?limit=10`;
 }
 
-// Public competition proof and a user's team eligibility start together. The
+// Account-wide play state and public competition proof load together. The
 // member-only leaderboard and captain queue are requested only after /me has
 // proven that they are relevant.
 export async function loadPlayWelfareData(
@@ -255,6 +368,9 @@ export async function loadPlayWelfareData(
     teamPublicLeaderboard,
     teamSeasons,
     arenaMonthlyOverview,
+    checkinStatus,
+    blindboxStatus,
+    quizToday,
     teamMe,
     teamAdmission,
     teamMyApplications,
@@ -268,6 +384,9 @@ export async function loadPlayWelfareData(
     request<PlayWelfareArenaOverview>(
       PLAY_WELFARE_ENDPOINTS.arenaMonthlyOverview,
     ),
+    request<PlayWelfareCheckinStatus>(PLAY_WELFARE_ENDPOINTS.checkinStatus),
+    request<PlayWelfareBlindboxStatus>(PLAY_WELFARE_ENDPOINTS.blindboxStatus),
+    request<PlayWelfareQuizToday>(PLAY_WELFARE_ENDPOINTS.quizToday),
     request<PlayWelfareTeamMe>(PLAY_WELFARE_TEAM_ENDPOINTS.me),
     request<PlayWelfareTeamAdmission>(PLAY_WELFARE_TEAM_ENDPOINTS.admission),
     request<PlayWelfareTeamApplication[]>(
@@ -289,6 +408,15 @@ export async function loadPlayWelfareData(
   if (arenaMonthlyOverview.status === "fulfilled") {
     data.arenaMonthlyOverview = arenaMonthlyOverview.value;
   } else unavailable.push("arenaMonthlyOverview");
+  if (checkinStatus.status === "fulfilled") {
+    data.checkinStatus = checkinStatus.value;
+  } else unavailable.push("checkinStatus");
+  if (blindboxStatus.status === "fulfilled") {
+    data.blindboxStatus = blindboxStatus.value;
+  } else unavailable.push("blindboxStatus");
+  if (quizToday.status === "fulfilled") {
+    data.quizToday = quizToday.value;
+  } else unavailable.push("quizToday");
   if (teamMe.status === "fulfilled") data.teamMe = teamMe.value;
   else unavailable.push("teamMe");
   if (teamAdmission.status === "fulfilled") {

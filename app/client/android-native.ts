@@ -44,6 +44,13 @@ export interface NativeAppImage {
   createdAt?: number;
   updatedAt?: number;
   ownerUserId?: string;
+  /** Local content-workspace ownership metadata. Never sent to the API. */
+  projectId?: string;
+  runId?: string;
+  shotId?: string;
+  kind?: string;
+  label?: string;
+  collectionId?: string;
 }
 
 export interface NativeDeviceInfo {
@@ -154,6 +161,12 @@ interface NextChatNativePlugin {
     model?: string;
     taskId?: string;
     ownerUserId?: string;
+    projectId?: string;
+    runId?: string;
+    shotId?: string;
+    kind?: string;
+    label?: string;
+    collectionId?: string;
   }): Promise<NativeAppImage>;
   listAppImages?(options?: {
     ownerUserId?: string;
@@ -599,6 +612,12 @@ export async function saveImageToAppStorage(
     model?: string;
     taskId?: string;
     ownerUserId?: string;
+    projectId?: string;
+    runId?: string;
+    shotId?: string;
+    kind?: string;
+    label?: string;
+    collectionId?: string;
   } = {},
 ) {
   const dataUrl = await imageUrlToDataUrl(url);
@@ -625,6 +644,13 @@ export async function saveImageToAppStorage(
     mimeType: dataUrl.slice(5, dataUrl.indexOf(";")) || "image/png",
     prompt: metadata.prompt,
     model: metadata.model,
+    ownerUserId: metadata.ownerUserId,
+    projectId: metadata.projectId,
+    runId: metadata.runId,
+    shotId: metadata.shotId,
+    kind: metadata.kind,
+    label: metadata.label,
+    collectionId: metadata.collectionId,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };

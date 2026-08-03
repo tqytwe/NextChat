@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "@jest/globals";
 
+import { contentWorkbenchPlan } from "../app/client/content-workbench";
 import { useManagedMobileAppStore } from "../app/store/mobile";
 
 describe("managed mobile account isolation", () => {
@@ -170,6 +171,77 @@ describe("managed mobile account isolation", () => {
     expect(project.assets).toHaveLength(16);
     expect(new Set(project.assets.map((asset) => asset.id)).size).toBe(16);
     expect(project.runs?.[0]).toMatchObject({ total: 16, status: "queued" });
+  });
+
+  test("persists the structured workspace brief and output ownership metadata", () => {
+    const store = useManagedMobileAppStore.getState();
+    store.activateAccount(505);
+    const [shot] = contentWorkbenchPlan("ecommerce");
+    const runId = "run-workbench-1";
+    const projectId = store.createContentKit({
+      scene: "ecommerce",
+      productName: "Structured product",
+      sellingPoints: "durable",
+      parameters: "5000mAh battery",
+      audience: "buyers",
+      platform: "store",
+      tone: "clear",
+      model: "image-model",
+      referenceImages: [],
+      presetId: "ecommerce",
+      shotPlan: [shot],
+      activeRunId: runId,
+      runs: [
+        {
+          id: runId,
+          presetId: "ecommerce",
+          status: "queued",
+          total: 1,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+      assets: [
+        {
+          id: "workbench-output-1",
+          runId,
+          shotId: shot.id,
+          scene: shot.scene,
+          kind: shot.kind,
+          label: shot.label,
+          purpose: shot.purpose,
+          aspect: shot.aspect,
+          copyFields: shot.copyFields,
+          prompt: "structured shot prompt",
+          size: shot.size,
+          variant: 1,
+          status: "queued",
+          updatedAt: Date.now(),
+        },
+      ],
+      copyStatus: "idle",
+    });
+
+    const project = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === projectId)!;
+    expect(project).toMatchObject({
+      scene: "ecommerce",
+      parameters: "5000mAh battery",
+    });
+    expect(project.shotPlan?.[0]).toMatchObject({
+      purpose: expect.any(String),
+      aspect: "square",
+      promptTemplate: expect.any(String),
+      copyFields: expect.any(Array),
+    });
+    expect(project.assets[0]).toMatchObject({
+      projectId,
+      runId,
+      shotId: shot.id,
+      scene: "ecommerce",
+      kind: shot.kind,
+    });
   });
 
   test("does not silently discard older local projects", () => {

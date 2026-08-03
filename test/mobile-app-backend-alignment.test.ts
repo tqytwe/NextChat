@@ -23,10 +23,14 @@ describe("mobile app backend alignment", () => {
   });
 
   test("routes reference image generation through the managed gateway transport", () => {
-    expect(source).toContain('const imageOperation = taskReferences.length');
+    expect(source).toContain("const imageOperation = taskReferences.length");
     expect(source).toContain('"images.edits"');
-    expect(source).toContain('const endpoint = imageOperation === "images.edits"');
-    expect(source).toContain("const taskBackendBaseUrl = managed.backendBaseUrl;");
+    expect(source).toMatch(
+      /const endpoint\s*=\s*\n?\s*imageOperation === "images\.edits"/,
+    );
+    expect(source).toContain(
+      "const taskBackendBaseUrl = managed.backendBaseUrl;",
+    );
     expect(source).toContain("body: request.body");
     expect(source).toContain("managedGatewayRequestText(");
     expect(source).not.toContain("request.body instanceof FormData");
@@ -91,18 +95,21 @@ describe("mobile app backend alignment", () => {
       source.indexOf("function AndroidContentKit()"),
       source.indexOf("function AndroidImageStudio()"),
     );
-    expect(kit).toContain('id: "quick"');
-    expect(kit).toContain('id: "ecommerce"');
-    expect(kit).toContain('id: "campaign"');
+    expect(source).toContain("contentWorkbenchPresets()");
+    expect(kit).toContain("contentKitAssetSpecs(");
+    expect(kit).toContain("scene: selectedPreset.id");
     expect(kit).toContain("presetId: selectedPreset.id");
     expect(kit).toContain("activeRunId: runId");
     expect(kit).toContain("CONTENT_KIT_GLOBAL_CONCURRENCY");
     expect(kit).toContain("recommendedParallelism");
     expect(kit).toContain("activeContentKitOutputs");
     expect(kit).toContain("content-kit-output-${asset.id}");
-    expect(kit).toContain('requestId: clientRequestID("content-kit-output")');
+    expect(source).toContain(
+      'requestId: clientRequestID("content-kit-output")',
+    );
     expect(kit).toContain("n: 1");
     expect(kit).toContain("content-kit-output-grid");
+    expect(kit).not.toContain("source?.prompt");
   });
 
   test("recovers content-kit outputs safely and uses server limits for batch planning", () => {
@@ -192,6 +199,20 @@ describe("mobile app backend alignment", () => {
     expect(switchGroup).toContain("await managed.switchGroup(groupID)");
   });
 
+  test("derives administrator access from the server session capability", () => {
+    const managedStore = readFileSync(
+      resolve(process.cwd(), "app/store/managed.ts"),
+      "utf8",
+    );
+
+    expect(source).toContain("isMobileAdminAvailable(managed.mobileProtocol)");
+    expect(source).not.toContain("function isManagedAdminWorkspace");
+    expect(managedStore).toContain("getMobileSessionStatus");
+    expect(managedStore).toContain("void get().refreshMobileSessionStatus()");
+    expect(managedStore).toContain("set({ mobileProtocol: null })");
+    expect(managedStore).toContain("mobileProtocol: _mobileProtocol");
+  });
+
   test("uses the document scroller for long pages while keeping chat independent", () => {
     expect(source).not.toContain("scrollCapture");
     expect(source).toContain("documentScroll?: boolean;");
@@ -258,16 +279,28 @@ describe("mobile app backend alignment", () => {
       source.indexOf("function AndroidChat()"),
       source.indexOf("function AndroidImageStudio()"),
     );
-    expect(chat).toContain(
-      "if (!effectiveChatGroupId) return;\n    persistChatPreference(",
-    );
+    expect(chat).toContain("if (!effectiveChatGroupId) return;");
+    expect(chat).toContain("const selectedModelIsAvailable =");
+    expect(chat).toContain("if (!selectedModelIsAvailable) return;");
+    expect(chat).toContain("const requestModelAvailable = Boolean(");
+    expect(chat).toContain("if (!model || !requestModelAvailable)");
+    expect(chat).toContain("resolveChatPreference(");
+    expect(source).toContain("workspaceLoaded: Boolean(workspace)");
   });
 
   test("migrates a legacy default group to only the first signed-in account", () => {
+    const accountScope = source.slice(
+      source.indexOf("function accountStorageKey"),
+      source.indexOf("function readStoredJSON"),
+    );
     const storage = source.slice(
       source.indexOf("function readStoredJSON"),
       source.indexOf("function writeStoredJSON"),
     );
+    expect(accountScope).toContain(
+      "state.user?.id || state.session?.user_id || state.workspace?.user?.id",
+    );
+    expect(accountScope).toContain("`${key}:user:${userId}`");
     expect(storage).toContain("localStorage.setItem(scopedKey, raw)");
     expect(storage).toContain("localStorage.removeItem(key)");
   });
@@ -294,15 +327,86 @@ describe("mobile app backend alignment", () => {
       chat.indexOf("function newSession()"),
       chat.indexOf("function renameSession("),
     );
-    expect(newSession).toContain("const preferredModel = storedChatPreferenceModel()");
-    expect(newSession).toContain("currentSession?.model || draftModel || selectedModel");
+    expect(newSession).toContain(
+      "const storedPreference = readChatPreference()",
+    );
+    expect(newSession).toContain("storedPreference.groupId ||");
+    expect(newSession).toContain(
+      "rememberedMobileChatModel(storedPreference, requestedGroupId)",
+    );
+    expect(newSession).toContain(
+      "preferredModel || draftModel || currentSession?.model || selectedModel",
+    );
+    expect(newSession).toContain(
+      "const nextPreference = resolveChatPreference(workspace, requestedGroupId",
+    );
     expect(newSession).not.toContain(
       "modelValue(chatModelsForGroup(workspace, nextGroupId)[0])",
     );
   });
 
+  test("uses the same draft resolver for every home chat entry", () => {
+    const dashboard = source.slice(
+      source.indexOf("function AndroidDashboard()"),
+      source.indexOf("function ChatSessionDrawer("),
+    );
+    const prepareDraftChat = dashboard.slice(
+      dashboard.indexOf("function prepareDraftChat()"),
+      dashboard.indexOf("function openSession("),
+    );
+
+    expect(prepareDraftChat).toContain(
+      "resolveChatPreference(workspace, dashboardChatGroupId)",
+    );
+    expect(prepareDraftChat).toContain('mobileStore.setCurrentChatId("")');
+    expect(prepareDraftChat).toContain("function openChat()");
+    expect(prepareDraftChat).toContain("function openSkillCenter()");
+    expect(prepareDraftChat).toContain("function openCollaborationChat()");
+    expect(prepareDraftChat.match(/prepareDraftChat\(\)/g)?.length).toBe(4);
+  });
+
+  test("does not let browsing an older session replace the new-chat preference", () => {
+    const chat = source.slice(
+      source.indexOf("function AndroidChat()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    const activeSessionPreference = chat.slice(
+      chat.indexOf("if (!effectiveChatGroupId) return;"),
+      chat.indexOf(
+        "if (!currentSession) return;",
+        chat.indexOf("if (!effectiveChatGroupId) return;"),
+      ),
+    );
+
+    expect(activeSessionPreference).toContain("if (currentSession?.id)");
+    expect(activeSessionPreference).toContain(
+      "Browsing an older conversation must not replace the user's last choice.",
+    );
+  });
+
+  test("prefers the remembered model for a selected group and server current group recovery", () => {
+    const chat = source.slice(
+      source.indexOf("function AndroidChat()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    const switchGroup = chat.slice(
+      chat.indexOf("async function switchGroup(groupID: number)"),
+      chat.indexOf("async function switchToChatGroup()"),
+    );
+
+    expect(source).toContain(
+      "group.is_current && (group.models || []).some(isChatModel)",
+    );
+    expect(switchGroup).toContain(
+      "const rememberedModel = storedChatPreferenceModel(groupID)",
+    );
+    expect(switchGroup).toContain("rememberedModel,");
+  });
+
   test("uses a double native back press only for root tabs", () => {
-    expect(source).toContain("function handleNativeHomeBack(text: ManagedMobileText)");
+    expect(source).toContain(
+      "function handleNativeHomeBack(text: ManagedMobileText)",
+    );
     expect(source).toContain("now - lastNativeHomeBackAt <= 2000");
     expect(source).toContain("void finishNativeApp()");
     expect(source).toContain("void showNativeToast(text.common.exitAppHint)");

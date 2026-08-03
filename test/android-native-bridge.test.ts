@@ -129,3 +129,20 @@ test("native bridge implements a system toast and finish action for double back"
   expect(source).toContain('case "finishApp"');
   expect(source).toContain("finishAndRemoveTask()");
 });
+
+test("native app storage retains local project grouping metadata", () => {
+  const source = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  ["projectId", "runId", "shotId", "kind", "label", "collectionId"].forEach(
+    (field) => {
+      expect(source).toContain(`options.optString(\"${field}\", \"\")`);
+      expect(source).toContain(`metadata.put(\"${field}\"`);
+    },
+  );
+  expect(source).toContain('payload.put("localUrl", LOCAL_ORIGIN + APP_IMAGE_ROUTE');
+});

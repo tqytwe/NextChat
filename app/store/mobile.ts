@@ -1,4 +1,11 @@
 import { StoreKey } from "../constant";
+import {
+  normalizeContentWorkbenchShot,
+} from "../client/content-workbench";
+import type {
+  ContentWorkbenchBrandControls,
+  ContentWorkbenchShotPlan,
+} from "../client/content-workbench";
 import { createPersistStore } from "../utils/store";
 
 export type ManagedMobileChatRole = "user" | "assistant" | "system";
@@ -55,10 +62,15 @@ export interface ManagedMobileContentKitRun {
 
 export interface ManagedMobileContentKitAsset {
   id: string;
+  projectId?: string;
   runId: string;
   shotId: string;
+  scene?: string;
   kind: ContentKitAssetKind;
   label: string;
+  purpose?: string;
+  aspect?: "square" | "portrait" | "landscape" | "custom";
+  copyFields?: string[];
   prompt: string;
   size: string;
   variant: number;
@@ -80,28 +92,17 @@ export interface ManagedMobileContentKit {
   id: string;
   accountId: string;
   version: number;
+  scene?: string;
   productName: string;
   sellingPoints: string;
+  parameters?: string;
   audience: string;
   platform: string;
   tone: string;
-  brandControls?: {
-    lockProduct: boolean;
-    lockColor: boolean;
-    lockLogo: boolean;
-    composition: "center" | "left" | "right" | "closeup";
-    safeArea: "none" | "top" | "bottom" | "left" | "right";
-    videoIntent: boolean;
-  };
+  brandControls?: ContentWorkbenchBrandControls;
   model: string;
   referenceImages: string[];
-  shotPlan?: Array<{
-    id: string;
-    kind: string;
-    label: string;
-    size: string;
-    count: number;
-  }>;
+  shotPlan?: ContentWorkbenchShotPlan[];
   assets: ManagedMobileContentKitAsset[];
   presetId?: string;
   runs?: ManagedMobileContentKitRun[];
@@ -161,18 +162,39 @@ function hasLegacyMobileData(state: ManagedMobileState) {
 function migrateContentKit(kit: any): ManagedMobileContentKit {
   const fallbackRunId =
     kit.activeRunId || `content-kit-run-${kit.id || newId("legacy")}`;
-  const assets = (kit.assets || []).map((asset: any, index: number) => ({
-    ...asset,
-    id: asset.id || `${fallbackRunId}-output-${index + 1}`,
-    runId: asset.runId || fallbackRunId,
-    shotId: asset.shotId || asset.kind || `shot-${index + 1}`,
-    variant: Number(asset.variant || 1),
-    requestId: asset.requestId || newId("content-kit-output"),
-    billingStatus: asset.billingStatus || "pending",
-    status: asset.status === "running" ? "queued" : asset.status || "idle",
-    tags: Array.isArray(asset.tags) ? asset.tags : [],
-    updatedAt: Number(asset.updatedAt || kit.updatedAt || Date.now()),
-  }));
+  const shotPlan: ContentWorkbenchShotPlan[] | undefined = Array.isArray(
+    kit.shotPlan,
+  )
+    ? kit.shotPlan.map((shot: any) => normalizeContentWorkbenchShot(shot))
+    : undefined;
+  const shotByID = new Map<string, ContentWorkbenchShotPlan>(
+    (shotPlan || []).map(
+      (shot): [string, ContentWorkbenchShotPlan] => [shot.id, shot],
+    ),
+  );
+  const assets = (kit.assets || []).map((asset: any, index: number) => {
+    const shotId = asset.shotId || asset.kind || `shot-${index + 1}`;
+    const shot = shotByID.get(shotId);
+    return {
+      ...asset,
+      id: asset.id || `${fallbackRunId}-output-${index + 1}`,
+      projectId: asset.projectId || kit.id || "",
+      runId: asset.runId || fallbackRunId,
+      shotId,
+      scene: asset.scene || kit.scene || kit.presetId || "custom",
+      purpose: asset.purpose || shot?.purpose,
+      aspect: asset.aspect || shot?.aspect,
+      copyFields: Array.isArray(asset.copyFields)
+        ? asset.copyFields
+        : shot?.copyFields,
+      variant: Number(asset.variant || 1),
+      requestId: asset.requestId || newId("content-kit-output"),
+      billingStatus: asset.billingStatus || "pending",
+      status: asset.status === "running" ? "queued" : asset.status || "idle",
+      tags: Array.isArray(asset.tags) ? asset.tags : [],
+      updatedAt: Number(asset.updatedAt || kit.updatedAt || Date.now()),
+    };
+  });
   const runs =
     Array.isArray(kit.runs) && kit.runs.length
       ? kit.runs.map((run: any) => ({
@@ -200,8 +222,17 @@ function migrateContentKit(kit: any): ManagedMobileContentKit {
   return {
     ...kit,
     version: Number(kit.version || 1),
+    scene:
+      kit.scene ||
+      (kit.presetId === "campaign"
+        ? "brand"
+        : kit.presetId === "quick"
+        ? "social"
+        : kit.presetId || "custom"),
+    parameters: String(kit.parameters || ""),
     presetId: kit.presetId || "legacy",
     activeRunId: kit.activeRunId || fallbackRunId,
+    shotPlan,
     assets,
     runs,
   } as ManagedMobileContentKit;
@@ -480,6 +511,10 @@ export const useManagedMobileAppStore = createPersistStore<
           contentKits: [
             {
               ...input,
+              assets: input.assets.map((asset) => ({
+                ...asset,
+                projectId: asset.projectId || id,
+              })),
               id,
               accountId: state.activeAccountId,
               version: 1,
@@ -518,7 +553,7 @@ export const useManagedMobileAppStore = createPersistStore<
   },
   {
     name: StoreKey.ManagedMobileApp,
-    version: 6,
+    version: 7,
     migrate: (persistedState: any, _persistedVersion: number) => ({
       ...DEFAULT_MOBILE_STATE,
       ...(persistedState || {}),

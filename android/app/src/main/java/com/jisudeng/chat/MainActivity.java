@@ -680,7 +680,13 @@ public class MainActivity extends Activity {
                         options.optString("prompt", ""),
                         options.optString("model", ""),
                         options.optString("taskId", ""),
-                        options.optString("ownerUserId", "")
+                        options.optString("ownerUserId", ""),
+                        options.optString("projectId", ""),
+                        options.optString("runId", ""),
+                        options.optString("shotId", ""),
+                        options.optString("kind", ""),
+                        options.optString("label", ""),
+                        options.optString("collectionId", "")
                     );
                     break;
                 case "listAppImages":
@@ -1211,7 +1217,13 @@ public class MainActivity extends Activity {
         String prompt,
         String model,
         String taskId,
-        String ownerUserId
+        String ownerUserId,
+        String projectId,
+        String runId,
+        String shotId,
+        String kind,
+        String label,
+        String collectionId
     ) {
         try {
             byte[] data = decodeDataUrl(dataUrl);
@@ -1227,6 +1239,12 @@ public class MainActivity extends Activity {
             metadata.put("prompt", prompt == null ? "" : prompt);
             metadata.put("model", model == null ? "" : model);
             metadata.put("ownerUserId", ownerUserId == null ? "" : ownerUserId);
+            metadata.put("projectId", projectId == null ? "" : projectId);
+            metadata.put("runId", runId == null ? "" : runId);
+            metadata.put("shotId", shotId == null ? "" : shotId);
+            metadata.put("kind", kind == null ? "" : kind);
+            metadata.put("label", label == null ? "" : label);
+            metadata.put("collectionId", collectionId == null ? "" : collectionId);
             metadata.put("mimeType", mimeType);
             metadata.put("createdAt", System.currentTimeMillis());
             metadata.put("size", file.length());

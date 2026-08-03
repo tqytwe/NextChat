@@ -4,6 +4,7 @@ import {
   loadPlayWelfareData,
   loadPlayWelfareTeamSeason,
   PLAY_WELFARE_ENDPOINTS,
+  PLAY_WELFARE_REWARD_ENDPOINTS,
   PLAY_WELFARE_TEAM_ENDPOINTS,
   playWelfareTeamSeasonEndpoint,
 } from "../app/client/play-welfare";
@@ -117,6 +118,66 @@ describe("native play welfare team competition", () => {
     expect(data.teamDirectory).toEqual({
       path: PLAY_WELFARE_ENDPOINTS.teamDirectory,
     });
+  });
+
+  test("loads daily check-in, blind-box, and quiz states independently", async () => {
+    const request: PlayWelfareRequest = async (path) => {
+      if (path === PLAY_WELFARE_ENDPOINTS.checkinStatus) {
+        return { enabled: true, checked_in_today: false } as never;
+      }
+      if (path === PLAY_WELFARE_ENDPOINTS.blindboxStatus) {
+        return { enabled: true, can_open: true } as never;
+      }
+      if (path === PLAY_WELFARE_ENDPOINTS.quizToday) {
+        return { enabled: true, questions: [] } as never;
+      }
+      return { path } as never;
+    };
+
+    const data = await loadPlayWelfareData(request);
+
+    expect(data.checkinStatus?.checked_in_today).toBe(false);
+    expect(data.blindboxStatus?.can_open).toBe(true);
+    expect(data.quizToday?.questions).toEqual([]);
+    expect(data.unavailable).toEqual([]);
+  });
+
+  test("does not hide healthy daily play modules when one state endpoint fails", async () => {
+    const request: PlayWelfareRequest = async (path) => {
+      if (path === PLAY_WELFARE_ENDPOINTS.blindboxStatus) {
+        throw new Error("blind box not deployed");
+      }
+      if (path === PLAY_WELFARE_ENDPOINTS.checkinStatus) {
+        return { enabled: true } as never;
+      }
+      if (path === PLAY_WELFARE_ENDPOINTS.quizToday) {
+        return { enabled: true, questions: [] } as never;
+      }
+      return { path } as never;
+    };
+
+    const data = await loadPlayWelfareData(request);
+
+    expect(data.unavailable).toContain("blindboxStatus");
+    expect(data.checkinStatus).toEqual({ enabled: true });
+    expect(data.quizToday).toEqual({ enabled: true, questions: [] });
+  });
+
+  test("keeps reward mutations on the existing idempotent play routes", () => {
+    expect(PLAY_WELFARE_REWARD_ENDPOINTS).toEqual({
+      checkin: "/api/v1/play/checkin",
+      checkinMakeup: "/api/v1/play/checkin/makeup",
+      blindboxOpen: "/api/v1/play/blindbox/open",
+      quizSubmit: "/api/v1/play/quiz/submit",
+    });
+    const source = readFileSync(
+      new URL("../app/components/mobile-app.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("PLAY_WELFARE_REWARD_ENDPOINTS.checkin");
+    expect(source).toContain("PLAY_WELFARE_REWARD_ENDPOINTS.blindboxOpen");
+    expect(source).toContain("PLAY_WELFARE_REWARD_ENDPOINTS.quizSubmit");
+    expect(source).toContain('"Idempotency-Key": requestID');
   });
 
   test("uses an encoded, bounded public season endpoint", async () => {

@@ -20,6 +20,10 @@ import {
   switchManagedImageGroupCompatible,
   switchManagedChatGroupCompatible,
 } from "../client/managed-nextchat";
+import {
+  getMobileSessionStatus,
+  type MobileProtocol,
+} from "../client/mobile-platform";
 import { getManagedMobileText } from "../client/managed-mobile-i18n";
 import { ServiceProvider, StoreKey } from "../constant";
 import { createPersistStore } from "../utils/store";
@@ -46,6 +50,7 @@ const DEFAULT_MANAGED_STATE = {
   session: null as ManagedSession | null,
   imageSession: null as ManagedSession | null,
   workspace: null as ManagedWorkspaceBootstrap | null,
+  mobileProtocol: null as MobileProtocol | null,
   lastSyncAt: 0,
   lastError: "",
   loading: false,
@@ -72,6 +77,7 @@ export const useManagedNextChatStore = createPersistStore<
     refreshAuthToken: () => Promise<void>;
     ensureFreshAuthToken: (force?: boolean) => Promise<string>;
     bootstrap: (options?: { silent?: boolean }) => Promise<void>;
+    refreshMobileSessionStatus: () => Promise<void>;
     switchGroup: (groupID: number) => Promise<void>;
     switchImageGroup: (groupID: number) => Promise<void>;
     applyAuth: (auth: ManagedAuthResponse) => void;
@@ -319,6 +325,10 @@ export const useManagedNextChatStore = createPersistStore<
               bootstrap = await requestBootstrap(true);
             }
             get().applyBootstrap(bootstrap);
+            // Admin access is deliberately best-effort for the normal mobile
+            // bootstrap. A capability lookup failure must hide admin controls,
+            // not make chat or image usage unavailable or delay app entry.
+            void get().refreshMobileSessionStatus();
           } catch (error) {
             set({
               loading: false,
@@ -332,6 +342,27 @@ export const useManagedNextChatStore = createPersistStore<
           }
         })();
         return bootstrapInFlight;
+      },
+
+      async refreshMobileSessionStatus() {
+        const requestStatus = async (forceRefresh = false) => {
+          const accessToken = await get().ensureFreshAuthToken(forceRefresh);
+          return getMobileSessionStatus(get().backendBaseUrl, accessToken);
+        };
+
+        try {
+          set({ mobileProtocol: await requestStatus() });
+        } catch (error) {
+          if (isManagedAuthError(error) && get().refreshToken) {
+            try {
+              set({ mobileProtocol: await requestStatus(true) });
+              return;
+            } catch {
+              // Fall through and fail closed below.
+            }
+          }
+          set({ mobileProtocol: null });
+        }
       },
 
       async switchGroup(groupID: number) {
@@ -416,6 +447,7 @@ export const useManagedNextChatStore = createPersistStore<
           user: auth.user || get().user,
           pendingTotpToken: "",
           pendingTotpEmail: "",
+          mobileProtocol: null,
         });
         void saveManagedSessionSecrets({
           backendBaseUrl: get().backendBaseUrl,
@@ -541,6 +573,7 @@ export const useManagedNextChatStore = createPersistStore<
         accessTokenExpiresAt: _accessTokenExpiresAt,
         session: _session,
         imageSession: _imageSession,
+        mobileProtocol: _mobileProtocol,
         ...persisted
       } = state;
       return persisted;

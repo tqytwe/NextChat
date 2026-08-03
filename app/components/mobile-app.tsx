@@ -76,6 +76,26 @@ import {
   localizeManagedMobileError,
 } from "../client/managed-mobile-i18n";
 import {
+  buildContentWorkbenchCopyPrompt,
+  buildContentWorkbenchPrompt,
+  contentWorkbenchCustomShot,
+  contentWorkbenchPresets,
+  contentWorkbenchShotOptions,
+  normalizeContentWorkbenchShot,
+} from "../client/content-workbench";
+import type {
+  ContentWorkbenchBrief,
+  ContentWorkbenchShotPlan as WorkbenchShotPlan,
+} from "../client/content-workbench";
+import { renderContentTextOverlay } from "../client/content-text-overlay";
+import {
+  normalizeMobileChatPreference,
+  rememberedMobileChatModel,
+  resolveMobileChatPreference,
+  updateMobileChatPreference,
+} from "../client/mobile-chat-preference";
+import { isMobileAdminAvailable } from "../client/mobile-capabilities";
+import {
   formatUsageUSD,
   mergeSubscriptionProgress,
   needsSubscriptionProgressRefresh,
@@ -83,6 +103,7 @@ import {
   subscriptionUsagePeriods,
 } from "../client/mobile-subscription";
 import type { ManagedMobileText } from "../client/managed-mobile-i18n";
+import { MobileAdminWorkspace } from "./mobile-admin-workspace";
 import {
   getNativeDownloadStatus,
   getNativeDeviceInfo,
@@ -122,6 +143,14 @@ import type {
   NativeSharedMaterial,
 } from "../client/android-native";
 import {
+  deleteLocalMaterials,
+  importLocalMaterials,
+  listLocalMaterials,
+  readLocalMaterialBlob,
+  readLocalMaterialDataUrl,
+} from "../client/local-materials";
+import type { LocalMaterial } from "../client/local-materials";
+import {
   createMobilePlatformClient,
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
@@ -151,10 +180,14 @@ import type {
 import {
   loadPlayWelfareData,
   loadPlayWelfareTeamSeason,
+  PLAY_WELFARE_REWARD_ENDPOINTS,
   PLAY_WELFARE_TEAM_ENDPOINTS,
 } from "../client/play-welfare";
 import type {
+  PlayWelfareBlindboxResult,
   PlayWelfareData,
+  PlayWelfareCheckinResult,
+  PlayWelfareQuizSubmitResult,
   PlayWelfareTeamDirectoryEntry,
   PlayWelfareTeamInvite,
   PlayWelfareTeamSeasonDetail,
@@ -203,13 +236,7 @@ const CONTENT_KIT_MAX_OUTPUTS_PER_RUN = 24;
 const CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT = 48;
 const activeContentKitOutputs = new Set<string>();
 
-type ContentKitShotPlan = {
-  id: string;
-  kind: string;
-  label: string;
-  size: string;
-  count: number;
-};
+type ContentKitShotPlan = WorkbenchShotPlan;
 
 type ContentKitBatchEstimate = {
   estimated_cost: number;
@@ -228,6 +255,111 @@ type ContentKitUsagePage = {
 };
 
 type ContentKitAssetTag = "keep" | "review" | "reject" | "video";
+
+function contentKitShotLabel(
+  shot: ContentKitShotPlan,
+  text: ManagedMobileText,
+) {
+  const labels = {
+    main: text.platform.contentKit.main,
+    angle: text.platform.contentKit.angle,
+    detail: text.platform.contentKit.detail,
+    lifestyle: text.platform.contentKit.lifestyle,
+    sellingPoint: text.platform.contentKit.sellingPoint,
+    detailPage: text.platform.contentKit.detailPage,
+    poster: text.platform.contentKit.poster,
+    vertical: text.platform.contentKit.vertical,
+    banner: text.platform.contentKit.banner,
+    socialCover: text.platform.contentKit.socialCover,
+    socialCarousel: text.platform.contentKit.socialCarousel,
+    brandHero: text.platform.contentKit.brandHero,
+    feature: text.platform.contentKit.feature,
+    workflow: text.platform.contentKit.workflow,
+    download: text.platform.contentKit.download,
+    customShot: text.platform.contentKit.customShot,
+  } as const;
+  return shot.labelKey ? labels[shot.labelKey] : shot.label;
+}
+
+function contentKitShotPurpose(
+  shot: ContentKitShotPlan,
+  text: ManagedMobileText,
+) {
+  const purposes: Record<string, string> = {
+    main: text.platform.contentKit.purposeMain,
+    angle: text.platform.contentKit.purposeAngle,
+    detail: text.platform.contentKit.purposeDetail,
+    lifestyle: text.platform.contentKit.purposeLifestyle,
+    "selling-point": text.platform.contentKit.purposeSellingPoint,
+    "detail-page": text.platform.contentKit.purposeDetailPage,
+    poster: text.platform.contentKit.purposePoster,
+    vertical: text.platform.contentKit.purposeVertical,
+    banner: text.platform.contentKit.purposeBanner,
+    "social-cover": text.platform.contentKit.purposeSocialCover,
+    "social-carousel": text.platform.contentKit.purposeSocialCarousel,
+    "brand-hero": text.platform.contentKit.purposeBrandHero,
+    feature: text.platform.contentKit.purposeFeature,
+    workflow: text.platform.contentKit.purposeWorkflow,
+    download: text.platform.contentKit.purposeDownload,
+    custom: text.platform.contentKit.purposeCustom,
+  };
+  return purposes[shot.kind] || shot.purpose;
+}
+
+function localizedContentKitShot(
+  shot: ContentKitShotPlan,
+  text: ManagedMobileText,
+): ContentKitShotPlan {
+  const normalized = normalizeContentWorkbenchShot(shot);
+  return {
+    ...normalized,
+    label: contentKitShotLabel(normalized, text),
+    purpose: contentKitShotPurpose(normalized, text),
+  };
+}
+
+function contentKitBriefFromProject(
+  project: ManagedMobileContentKit,
+): ContentWorkbenchBrief {
+  return {
+    projectName: project.productName,
+    sellingPoints: project.sellingPoints,
+    parameters: project.parameters || "",
+    audience: project.audience,
+    platform: project.platform,
+    tone: project.tone,
+    scene: project.scene || project.presetId || "custom",
+    brandControls: project.brandControls,
+  };
+}
+
+function contentKitAssetSpecs(
+  runId: string,
+  plan: ContentKitShotPlan[],
+  brief: ContentWorkbenchBrief,
+  projectId = "",
+): Omit<ManagedMobileContentKitAsset, "status" | "updatedAt">[] {
+  return plan.flatMap((inputShot) => {
+    const shot = normalizeContentWorkbenchShot(inputShot);
+    return Array.from({ length: shot.count }, (_, index) => ({
+      id: `${runId}-${shot.id}-${index + 1}`,
+      projectId,
+      runId,
+      shotId: shot.id,
+      scene: shot.scene || brief.scene || "custom",
+      kind: shot.kind,
+      label: shot.label,
+      purpose: shot.purpose,
+      aspect: shot.aspect,
+      copyFields: shot.copyFields,
+      size: shot.size,
+      variant: index + 1,
+      requestId: clientRequestID("content-kit-output"),
+      tags: [],
+      prompt: buildContentWorkbenchPrompt(brief, shot),
+    }));
+  });
+}
 
 function clientRequestID(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -909,6 +1041,8 @@ type GalleryCategory = "products" | "posters" | "";
 type GalleryPreference = {
   favorite?: boolean;
   category?: GalleryCategory;
+  collectionId?: string;
+  collectionName?: string;
   updatedAt?: number;
 };
 
@@ -1631,25 +1765,6 @@ function formatMoney(value?: number | string) {
   return `¥${Number.isFinite(numberValue) ? numberValue.toFixed(2) : "0.00"}`;
 }
 
-function isManagedAdminWorkspace(workspace?: { user?: unknown } | null) {
-  const user = workspace?.user as any;
-  const roles = [
-    user?.role,
-    user?.user_role,
-    user?.account_role,
-    ...(Array.isArray(user?.roles) ? user.roles : []),
-    ...(Array.isArray(user?.permissions) ? user.permissions : []),
-  ]
-    .filter(Boolean)
-    .map((item) => String(item).toLowerCase());
-  return Boolean(
-    user?.is_admin ||
-      user?.is_root ||
-      user?.admin ||
-      roles.some((role) => /admin|root|owner|super/.test(role)),
-  );
-}
-
 function useMobileText() {
   return useMemo(() => getManagedMobileText(), []);
 }
@@ -2250,8 +2365,11 @@ function bestImageGroup(
 function bestChatGroup(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
-  return workspace?.models?.groups?.find((group) =>
-    (group.models || []).some(isChatModel),
+  const groups = workspace?.models?.groups || [];
+  return (
+    groups.find(
+      (group) => group.is_current && (group.models || []).some(isChatModel),
+    ) || groups.find((group) => (group.models || []).some(isChatModel))
   );
 }
 
@@ -2259,38 +2377,53 @@ function preferredChatGroupID(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
   storedGroupID?: number,
 ) {
-  const groups = workspace?.models?.groups ?? [];
-  if (
-    storedGroupID &&
-    groups.some(
-      (group) =>
-        group.id === storedGroupID && (group.models || []).some(isChatModel),
-    )
-  ) {
-    return storedGroupID;
-  }
-  return bestChatGroup(workspace)?.id;
+  return resolveChatPreference(workspace, storedGroupID).groupId;
 }
 
 function storedChatGroupID(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
-  const stored = storedChatPreferenceGroupID();
-  return preferredChatGroupID(workspace, stored || undefined);
+  return resolveChatPreference(workspace).groupId;
 }
 
 function storedChatPreferenceGroupID() {
-  return Number(readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0 }).groupId);
+  return readChatPreference().groupId || 0;
 }
 
-function storedChatPreferenceModel() {
-  return String(readStoredJSON(CHAT_PREF_STORAGE_KEY, { model: "" }).model || "");
+function storedChatPreferenceModel(groupId?: number) {
+  const preference = readChatPreference();
+  if (groupId) {
+    return rememberedMobileChatModel(preference, groupId);
+  }
+  return preference.model || "";
 }
 
 function persistChatPreference(groupId?: number, model = "") {
-  writeStoredJSON(CHAT_PREF_STORAGE_KEY, {
-    groupId: groupId || 0,
-    model,
+  writeStoredJSON(
+    CHAT_PREF_STORAGE_KEY,
+    updateMobileChatPreference(readChatPreference(), groupId, model),
+  );
+}
+
+function readChatPreference() {
+  return normalizeMobileChatPreference(
+    readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0, model: "" }),
+  );
+}
+
+function resolveChatPreference(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+  preferredGroupId?: number,
+  candidateModels: string[] = [],
+) {
+  return resolveMobileChatPreference({
+    groups: workspace?.models?.groups,
+    workspaceLoaded: Boolean(workspace),
+    preference: readChatPreference(),
+    preferredGroupId,
+    candidateModels,
+    isChatModel,
+    modelValue,
   });
 }
 
@@ -2401,6 +2534,16 @@ async function persistContentKitImageResult(
     prompt: string;
     model: string;
     ownerUserId: string;
+    projectId: string;
+    runId: string;
+    shotId: string;
+    kind: string;
+    label: string;
+    collectionId: string;
+    overlay?: {
+      brief: ContentWorkbenchBrief;
+      shot: WorkbenchShotPlan;
+    };
   },
 ) {
   let imageData = "";
@@ -2421,6 +2564,15 @@ async function persistContentKitImageResult(
       : `data:image/png;base64,${source}`;
   }
   if (!imageData) throw new Error("Image response did not contain an image.");
+  if (context.overlay) {
+    imageData = (
+      await renderContentTextOverlay({
+        imageDataUrl: imageData,
+        brief: context.overlay.brief,
+        shot: context.overlay.shot,
+      })
+    ).dataUrl;
+  }
   const saved = await saveImageToAppStorage(
     imageData,
     makeImageFileName("content-kit", context.taskId),
@@ -2458,7 +2610,7 @@ function writeGalleryPreferences(preferences: GalleryPreferences) {
 function accountStorageKey(key: string) {
   const state = useManagedNextChatStore.getState();
   const userId =
-    state.workspace?.user?.id || state.user?.id || state.session?.user_id;
+    state.user?.id || state.session?.user_id || state.workspace?.user?.id;
   return userId ? `${key}:user:${userId}` : key;
 }
 
@@ -2497,6 +2649,14 @@ function galleryItemPreference(item: any, preferences: GalleryPreferences) {
   return preferences[galleryItemPreferenceKey(item)] || {};
 }
 
+function galleryItemPreferenceKeys(item: any) {
+  if (Array.isArray(item?.preferenceKeys) && item.preferenceKeys.length) {
+    return item.preferenceKeys.filter(Boolean);
+  }
+  const key = galleryItemPreferenceKey(item);
+  return key ? [key] : [];
+}
+
 function galleryItemMatchesFilter(
   item: any,
   filter: GalleryFilter,
@@ -2524,6 +2684,61 @@ function nativeImageAsDrawItem(image: NativeAppImage) {
     created_at: image.createdAt || image.updatedAt || Date.now(),
     updated_at: image.updatedAt || image.createdAt || Date.now(),
     nativeOnly: true,
+    nativeMetadata: image,
+    projectId: image.projectId || "",
+    runId: image.runId || "",
+    shotId: image.shotId || "",
+    kind: image.kind || "",
+    label: image.label || "",
+    collectionId: image.collectionId || "",
+  };
+}
+
+function nativeImageCollectionKey(image: NativeAppImage) {
+  const collectionId = String(image.collectionId || "").trim();
+  if (collectionId) return `collection:${collectionId}`;
+  const projectId = String(image.projectId || "").trim();
+  if (projectId) return `project:${projectId}`;
+  const taskId = String(image.id || "").trim();
+  if (taskId) return `task:${taskId}`;
+  return `file:${image.fileName}`;
+}
+
+function nativeImageCollectionItem(
+  collectionKey: string,
+  images: NativeAppImage[],
+) {
+  const ordered = images
+    .slice()
+    .sort(
+      (left, right) =>
+        Number(right.updatedAt || right.createdAt || 0) -
+        Number(left.updatedAt || left.createdAt || 0),
+    );
+  const primary = ordered[0];
+  const isProject = Boolean(primary?.projectId || primary?.collectionId);
+  return {
+    ...nativeImageAsDrawItem(primary),
+    id: `native-${collectionKey}`,
+    img_data: primary.localUrl,
+    results: ordered.map((image) => image.localUrl),
+    local_files: ordered.map((image) => image.fileName),
+    params: {
+      prompt: primary.label || primary.prompt || primary.fileName,
+    },
+    created_at: Math.min(
+      ...ordered.map((image) =>
+        Number(image.createdAt || image.updatedAt || Date.now()),
+      ),
+    ),
+    updated_at: Math.max(
+      ...ordered.map((image) =>
+        Number(image.updatedAt || image.createdAt || Date.now()),
+      ),
+    ),
+    nativeImages: ordered,
+    nativeOnly: true,
+    contentProject: isProject,
   };
 }
 
@@ -2680,14 +2895,68 @@ function mergeGalleryItems(drawItems: any[], nativeImages: NativeAppImage[]) {
     imageLocalFileNames(item).forEach((name) => seen.add(name));
     merged.push(item);
   });
+  const nativeCollections = new Map<string, NativeAppImage[]>();
   nativeImages.forEach((image) => {
     if (seen.has(image.localUrl) || seen.has(image.fileName)) return;
-    merged.push(nativeImageAsDrawItem(image));
+    const key = nativeImageCollectionKey(image);
+    nativeCollections.set(key, [...(nativeCollections.get(key) || []), image]);
+  });
+  nativeCollections.forEach((images, key) => {
+    merged.push(nativeImageCollectionItem(key, images));
   });
   return merged.sort((left, right) => {
     const leftTime = Number(left.updated_at || left.created_at || 0);
     const rightTime = Number(right.updated_at || right.created_at || 0);
     return rightTime - leftTime;
+  });
+}
+
+function mergeManualGalleryCollections(
+  items: any[],
+  preferences: GalleryPreferences,
+) {
+  const collections = new Map<string, any[]>();
+  items.forEach((item) => {
+    const collectionId = galleryItemPreference(item, preferences).collectionId;
+    if (!collectionId) return;
+    collections.set(collectionId, [
+      ...(collections.get(collectionId) || []),
+      item,
+    ]);
+  });
+  const emitted = new Set<string>();
+  return items.flatMap((item) => {
+    const preference = galleryItemPreference(item, preferences);
+    const collectionId = preference.collectionId;
+    if (!collectionId) return [item];
+    if (emitted.has(collectionId)) return [];
+    emitted.add(collectionId);
+    const members = collections.get(collectionId) || [item];
+    const primary = members[0];
+    const collectionName = preference.collectionName || primary.params?.prompt;
+    return [
+      {
+        ...primary,
+        id: `manual-collection-${collectionId}`,
+        results: members.flatMap(imageResults),
+        local_files: members.flatMap(imageLocalFileNames),
+        params: { ...primary.params, prompt: collectionName },
+        memberIds: members.flatMap((member) => member.memberIds || [member.id]),
+        preferenceKeys: members.flatMap(galleryItemPreferenceKeys),
+        manualCollectionId: collectionId,
+        manualCollectionName: collectionName,
+        created_at: Math.min(
+          ...members.map((member) =>
+            Number(member.created_at || member.updated_at || Date.now()),
+          ),
+        ),
+        updated_at: Math.max(
+          ...members.map((member) =>
+            Number(member.updated_at || member.created_at || Date.now()),
+          ),
+        ),
+      },
+    ];
   });
 }
 
@@ -2770,6 +3039,24 @@ async function managedAuthenticatedJsonRequest<T>(
   );
 }
 
+function localizedMobileErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ManagedApiError) {
+    return error.message || fallback;
+  }
+  if (error instanceof ManagedTransportError) {
+    return formatManagedMobileError({
+      message: error.message,
+      path: error.path,
+      category: error.category,
+      requestId: error.requestId,
+    });
+  }
+  if (error instanceof Error && error.message) {
+    return localizeManagedMobileError({ message: error.message });
+  }
+  return fallback;
+}
+
 async function managedFormDataRequest<T>(
   path: string,
   body: FormData,
@@ -2810,6 +3097,7 @@ async function managedFormDataRequest<T>(
           message: payload?.message || bodyText,
           status: response.status,
           path,
+          code: payload?.code,
           category,
           requestId: response.requestId,
         }),
@@ -3915,8 +4203,11 @@ function AndroidDashboard() {
   const [dashboardChatGroupId, setDashboardChatGroupId] = useState<
     number | undefined
   >(() => storedChatPreferenceGroupID() || undefined);
-  const models = chatModelsForGroup(workspace, dashboardChatGroupId);
-  const fallbackModel = modelValue(models[0]);
+  const dashboardPreference = resolveChatPreference(
+    workspace,
+    dashboardChatGroupId,
+  );
+  const models = chatModelsForGroup(workspace, dashboardPreference.groupId);
   const sessions = mobileStore.chatSessions;
   const [dashboardFilter, setDashboardFilter] = useState<
     "all" | "pinned" | "image" | "tasks"
@@ -3935,7 +4226,7 @@ function AndroidDashboard() {
   );
   const showingImages = dashboardFilter === "image";
   const showingTasks = dashboardFilter === "tasks";
-  const isAdmin = isManagedAdminWorkspace(workspace);
+  const isAdmin = isMobileAdminAvailable(managed.mobileProtocol);
   const [sessionActionTarget, setSessionActionTarget] =
     useState<ManagedMobileChatSession | null>(null);
   const [renameTarget, setRenameTarget] =
@@ -3943,18 +4234,21 @@ function AndroidDashboard() {
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
 
   useEffect(() => {
-    const validGroupId = preferredChatGroupID(workspace, dashboardChatGroupId);
-    if (validGroupId && validGroupId !== dashboardChatGroupId) {
-      setDashboardChatGroupId(validGroupId);
-      const rememberedModel = storedChatPreferenceModel();
-      persistChatPreference(
-        validGroupId,
-        chatModelsForGroup(workspace, validGroupId).some(
-          (model) => modelValue(model) === rememberedModel,
-        )
-          ? rememberedModel
-          : modelValue(chatModelsForGroup(workspace, validGroupId)[0]),
-      );
+    const preference = resolveChatPreference(workspace, dashboardChatGroupId);
+    if (!preference.groupId) return;
+    if (preference.groupId !== dashboardChatGroupId) {
+      setDashboardChatGroupId(preference.groupId);
+    }
+    if (
+      preference.reason !== "pending" &&
+      preference.reason !== "fallback" &&
+      preference.reason !== "unavailable" &&
+      preference.model &&
+      chatModelsForGroup(workspace, preference.groupId).some(
+        (model) => modelValue(model) === preference.model,
+      )
+    ) {
+      persistChatPreference(preference.groupId, preference.model);
     }
   }, [dashboardChatGroupId, workspace]);
 
@@ -4037,18 +4331,32 @@ function AndroidDashboard() {
     }
   }
 
-  function openChat() {
+  function prepareDraftChat() {
+    const preference = resolveChatPreference(workspace, dashboardChatGroupId);
+    if (
+      preference.reason !== "pending" &&
+      preference.reason !== "fallback" &&
+      preference.reason !== "unavailable" &&
+      preference.groupId &&
+      preference.model
+    ) {
+      persistChatPreference(preference.groupId, preference.model);
+    }
     mobileStore.setCurrentChatId("");
+  }
+
+  function openChat() {
+    prepareDraftChat();
     navigate(Path.Chat);
   }
 
   function openSkillCenter() {
-    mobileStore.setCurrentChatId("");
+    prepareDraftChat();
     navigate(Path.Chat, { state: { openSkillSheet: true } });
   }
 
   function openCollaborationChat() {
-    mobileStore.setCurrentChatId("");
+    prepareDraftChat();
     navigate(Path.Chat, { state: { selectAgentId: COLLABORATION_AGENT_ID } });
   }
 
@@ -4408,12 +4716,16 @@ function AndroidDashboard() {
         onClose={() => setGroupSheetOpen(false)}
         onSelect={(id) => {
           const groupId = Number(id);
-          const nextModels = chatModelsForGroup(workspace, groupId);
-          if (!Number.isFinite(groupId) || !nextModels.length) {
+          const preference = resolveChatPreference(workspace, groupId);
+          const nextModel = preference.model;
+          if (
+            !Number.isFinite(groupId) ||
+            preference.groupId !== groupId ||
+            !nextModel
+          ) {
             setTaskError(text.errors.noModel);
             return;
           }
-          const nextModel = modelValue(nextModels[0]);
           persistChatPreference(groupId, nextModel);
           setDashboardChatGroupId(groupId);
           setTaskError("");
@@ -5772,11 +6084,16 @@ function AndroidChat() {
   const [serverSkillSelections, setServerSkillSelections] = useState<
     Record<string, ServerSkillSelection>
   >(() => readStoredJSON(SERVER_SKILL_SELECTION_KEY, {}));
-  const [draftModel, setDraftModel] = useState("");
+  const [draftModel, setDraftModel] = useState(() =>
+    storedChatPreferenceModel(storedChatPreferenceGroupID() || undefined),
+  );
   const [draftAgentId, setDraftAgentId] = useState("");
   const [draftSkillSelection, setDraftSkillSelection] =
     useState<ServerSkillSelection | null>(null);
   const selectedModel = currentSession?.model || draftModel || fallbackModel;
+  const selectedModelIsAvailable =
+    Boolean(selectedModel) &&
+    models.some((model) => modelValue(model) === selectedModel);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
@@ -5960,20 +6277,36 @@ function AndroidChat() {
     const state = location.state as any;
     const dataUrl = String(state?.materialDataUrl || "");
     const asset = state?.materialAsset as MobileAsset | undefined;
-    if ((!dataUrl && !asset) || !currentSession?.id) return;
+    const localMaterial = state?.materialLocal as LocalMaterial | undefined;
+    const materialText = String(state?.materialText || "");
+    if (
+      (!dataUrl && !asset && !localMaterial && !materialText) ||
+      !currentSession?.id
+    )
+      return;
     if (dataUrl && (!asset || asset.kind === "image")) {
       setAttachments((items) => [...items, dataUrl].slice(0, 6));
     }
-    if (asset) {
+    if (materialText.trim()) {
+      setInput((value) =>
+        value.trim()
+          ? `${value}\n\n${materialText.slice(0, 120_000)}`
+          : materialText.slice(0, 120_000),
+      );
+    }
+    if (asset || localMaterial) {
       setSharedMaterials((items) =>
         [
           ...items,
           {
             localId: clientRequestID("existing-material"),
-            name: mobileAssetTitle(asset, text),
-            kind: asset.kind,
-            state: "ready" as const,
-            previewUrl: asset.kind === "image" ? dataUrl : undefined,
+            name: localMaterial?.name || mobileAssetTitle(asset!, text),
+            kind: localMaterial?.kind || asset?.kind || "file",
+            state: localMaterial ? ("local" as const) : ("ready" as const),
+            previewUrl:
+              (localMaterial?.kind || asset?.kind) === "image"
+                ? dataUrl
+                : undefined,
             asset,
           },
         ].slice(-8),
@@ -6041,53 +6374,130 @@ function AndroidChat() {
   }, [currentSession?.id, running]);
 
   useEffect(() => {
-    if (!currentSession && !draftGroupId && defaultChatGroupId) {
-      setDraftGroupId(defaultChatGroupId);
+    if (currentSession) return;
+    const preference = resolveChatPreference(
+      workspace,
+      draftGroupId || preferredChatGroupId || defaultChatGroupId,
+      [draftModel],
+    );
+    if (!preference.groupId || !preference.model) return;
+    const preferenceModels = chatModelsForGroup(workspace, preference.groupId);
+    if (
+      !preferenceModels.some((model) => modelValue(model) === preference.model)
+    ) {
+      return;
     }
-  }, [currentSession, defaultChatGroupId, draftGroupId]);
+    if (preference.groupId !== preferredChatGroupId) {
+      setPreferredChatGroupId(preference.groupId);
+    }
+    if (preference.groupId !== draftGroupId) {
+      setDraftGroupId(preference.groupId);
+    }
+    if (preference.model !== draftModel) {
+      setDraftModel(preference.model);
+    }
+    if (preference.reason === "fallback") {
+      setChatError(text.chat.modelFallback(preference.model));
+    }
+    persistChatPreference(preference.groupId, preference.model);
+  }, [
+    currentSession,
+    defaultChatGroupId,
+    draftGroupId,
+    draftModel,
+    preferredChatGroupId,
+    text,
+    workspace,
+  ]);
 
   useEffect(() => {
     if (!effectiveChatGroupId) return;
+    if (currentSession?.id) {
+      // Browsing an older conversation must not replace the user's last choice.
+      if (preferredChatGroupId !== effectiveChatGroupId) {
+        setPreferredChatGroupId(effectiveChatGroupId);
+      }
+      return;
+    }
+    if (!selectedModelIsAvailable) return;
     persistChatPreference(effectiveChatGroupId, selectedModel || "");
-  }, [effectiveChatGroupId, selectedModel]);
+  }, [
+    currentSession?.id,
+    effectiveChatGroupId,
+    preferredChatGroupId,
+    selectedModel,
+    selectedModelIsAvailable,
+  ]);
 
   useEffect(() => {
-    if (
-      currentSession &&
-      fallbackModel &&
-      !models.some((model) => modelValue(model) === currentSession.model)
-    ) {
-      mobileStore.updateChatSession(currentSession.id, {
-        model: fallbackModel,
-      });
+    if (!currentSession) return;
+    if (models.some((model) => modelValue(model) === currentSession.model)) {
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const preference = resolveChatPreference(
+      workspace,
+      currentSession.groupId,
+      [storedChatPreferenceModel(currentSession.groupId), currentSession.model],
+    );
+    if (
+      preference.groupId !== currentSession.groupId ||
+      !preference.model ||
+      !chatModelsForGroup(workspace, preference.groupId).some(
+        (model) => modelValue(model) === preference.model,
+      )
+    ) {
+      return;
+    }
+    mobileStore.updateChatSession(currentSession.id, {
+      model: preference.model,
+    });
+    if (preference.reason === "fallback") {
+      persistChatPreference(preference.groupId, preference.model);
+      setChatError(text.chat.modelFallback(preference.model));
+    }
+    // The resolver only reaches a first-model fallback after the saved choice
+    // is absent from a loaded group; it never does so while models are pending.
   }, [
-    fallbackModel,
-    currentSession?.id,
     currentSession?.groupId,
-    models.length,
+    currentSession?.id,
+    currentSession?.model,
+    models,
+    text,
+    workspace,
   ]);
 
   useEffect(() => {
     if (!currentSession || !effectiveChatGroupId) return;
     if (currentSession.groupId === effectiveChatGroupId) return;
-    const sessionModelStillAvailable = chatModelsForGroup(
-      workspace,
-      effectiveChatGroupId,
-    ).some((model) => modelValue(model) === currentSession.model);
+    const preference = resolveChatPreference(workspace, effectiveChatGroupId, [
+      storedChatPreferenceModel(effectiveChatGroupId),
+      currentSession.model,
+    ]);
+    if (
+      preference.groupId !== effectiveChatGroupId ||
+      !preference.model ||
+      !chatModelsForGroup(workspace, preference.groupId).some(
+        (model) => modelValue(model) === preference.model,
+      )
+    ) {
+      return;
+    }
     mobileStore.updateChatSession(currentSession.id, {
       groupId: effectiveChatGroupId,
-      model: sessionModelStillAvailable
-        ? currentSession.model
-        : fallbackModel || currentSession.model,
+      model: preference.model,
     });
+    if (preference.reason === "fallback") {
+      persistChatPreference(preference.groupId, preference.model);
+      setChatError(text.chat.modelFallback(preference.model));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     currentSession?.id,
     currentSession?.groupId,
+    currentSession?.model,
     effectiveChatGroupId,
-    fallbackModel,
+    text,
+    workspace,
   ]);
 
   useEffect(() => {
@@ -6493,13 +6903,22 @@ function AndroidChat() {
       setChatError(text.errors.loginRequired);
       return;
     }
+    const requestGroupId =
+      currentSession?.groupId || draftChatGroupId || effectiveChatGroupId;
     const model = selectedModel || fallbackModel;
-    if (!model) {
+    const requestModelAvailable = Boolean(
+      requestGroupId &&
+        chatModelsForGroup(workspace, requestGroupId).some(
+          (item) => modelValue(item) === model,
+        ),
+    );
+    if (!model || !requestModelAvailable) {
       setChatError(text.errors.noModel);
       return;
     }
-    const requestGroupId =
-      currentSession?.groupId || draftChatGroupId || effectiveChatGroupId;
+    if (requestGroupId) {
+      persistChatPreference(requestGroupId, model);
+    }
     const gatewayRequestId =
       retryRequestId || clientRequestID("chat-completion");
     const existingSessionId = currentSession?.id || "";
@@ -7037,6 +7456,12 @@ function AndroidChat() {
   }
 
   function changeModel(model: string) {
+    if (
+      effectiveChatGroupId &&
+      models.some((item) => modelValue(item) === model)
+    ) {
+      persistChatPreference(effectiveChatGroupId, model);
+    }
     if (currentSession?.id) {
       mobileStore.updateChatSession(currentSession.id, { model });
       setDraftModel("");
@@ -7151,9 +7576,15 @@ function AndroidChat() {
     setGroupSwitching(true);
     setChatError("");
     try {
-      const nextModels = chatModelsForGroup(workspace, groupID);
-      const nextModel = modelValue(nextModels[0]);
-      if (!nextModel) {
+      const rememberedModel = storedChatPreferenceModel(groupID);
+      const requestedPreference = resolveChatPreference(workspace, groupID, [
+        rememberedModel,
+        currentSession?.model || "",
+        draftModel,
+        selectedModel,
+      ]);
+      const nextModel = requestedPreference.model;
+      if (requestedPreference.groupId !== groupID || !nextModel) {
         await showNativeNotification(
           text.chat.group,
           text.errors.noModel,
@@ -7167,14 +7598,21 @@ function AndroidChat() {
       const latestWorkspace = currentSession?.id
         ? useManagedNextChatStore.getState().workspace || workspace
         : workspace;
-      const latestModels = chatModelsForGroup(latestWorkspace, groupID);
-      const sessionModelStillAvailable = latestModels.some(
-        (model) => modelValue(model) === selectedModel,
+      const confirmedPreference = resolveChatPreference(
+        latestWorkspace,
+        groupID,
+        [
+          rememberedModel,
+          currentSession?.model || "",
+          draftModel,
+          selectedModel,
+          nextModel,
+        ],
       );
       const confirmedModel =
-        (sessionModelStillAvailable
-          ? selectedModel
-          : modelValue(latestModels[0])) || nextModel;
+        confirmedPreference.groupId === groupID
+          ? confirmedPreference.model
+          : nextModel;
       persistChatPreference(groupID, confirmedModel);
       setPreferredChatGroupId(groupID);
       if (currentSession?.id) {
@@ -7215,18 +7653,29 @@ function AndroidChat() {
   }
 
   function newSession() {
-    const nextGroupId =
-      preferredChatGroupId || defaultChatGroupId || chatGroup?.id;
-    const nextModels = chatModelsForGroup(workspace, nextGroupId);
-    const preferredModel = storedChatPreferenceModel();
+    const storedPreference = readChatPreference();
+    const requestedGroupId =
+      storedPreference.groupId ||
+      draftGroupId ||
+      preferredChatGroupId ||
+      defaultChatGroupId ||
+      currentSession?.groupId ||
+      chatGroup?.id;
+    const preferredModel =
+      rememberedMobileChatModel(storedPreference, requestedGroupId) ||
+      storedPreference.model ||
+      "";
     const inheritedModel =
-      currentSession?.model || draftModel || selectedModel || preferredModel;
-    const nextModel =
-      (nextModels.some((item) => modelValue(item) === preferredModel)
-        ? preferredModel
-        : nextModels.some((item) => modelValue(item) === inheritedModel)
-        ? inheritedModel
-        : modelValue(nextModels[0])) || fallbackModel;
+      preferredModel || draftModel || currentSession?.model || selectedModel;
+    const nextPreference = resolveChatPreference(workspace, requestedGroupId, [
+      inheritedModel,
+      preferredModel,
+    ]);
+    const nextGroupId = nextPreference.groupId || requestedGroupId;
+    const nextModel = nextPreference.model || fallbackModel;
+    if (nextGroupId && nextModel) {
+      persistChatPreference(nextGroupId, nextModel);
+    }
     mobileStore.setCurrentChatId("");
     setDraftGroupId(nextGroupId);
     setDraftModel(nextModel);
@@ -7237,7 +7686,11 @@ function AndroidChat() {
     setSharedMaterials([]);
     setQuotedMessage(null);
     setDrawerOpen(false);
-    setChatError("");
+    setChatError(
+      nextPreference.reason === "fallback"
+        ? text.chat.modelFallback(nextModel)
+        : "",
+    );
   }
 
   function renameSession(id: string) {
@@ -7803,6 +8256,7 @@ function AndroidContentKit() {
   const chatModel = modelValue(currentChatModels(managed.workspace)[0]);
   const [productName, setProductName] = useState("");
   const [sellingPoints, setSellingPoints] = useState("");
+  const [parameters, setParameters] = useState("");
   const [audience, setAudience] = useState("");
   const [platform, setPlatform] = useState("");
   const [tone, setTone] = useState("");
@@ -7823,29 +8277,11 @@ function AndroidContentKit() {
   const [showComposer, setShowComposer] = useState(false);
   const [showAdvancedFields, setShowAdvancedFields] = useState(false);
   const [presetId, setPresetId] = useState("ecommerce");
-  const [customShots, setCustomShots] = useState<ContentKitShotPlan[]>(() => [
-    {
-      id: "main",
-      kind: "main",
-      label: text.platform.contentKit.main,
-      size: "1024x1024",
-      count: 2,
-    },
-    {
-      id: "lifestyle",
-      kind: "lifestyle",
-      label: text.platform.contentKit.lifestyle,
-      size: "1024x1536",
-      count: 2,
-    },
-    {
-      id: "vertical",
-      kind: "vertical",
-      label: text.platform.contentKit.vertical,
-      size: "1024x1536",
-      count: 2,
-    },
-  ]);
+  const [customShots, setCustomShots] = useState<ContentKitShotPlan[]>(() =>
+    contentWorkbenchShotOptions()
+      .filter((shot) => ["main", "lifestyle", "vertical"].includes(shot.kind))
+      .map((shot) => localizedContentKitShot(shot, text)),
+  );
   const fileRef = useRef<HTMLInputElement | null>(null);
   const queueRef = useRef(new Set<string>());
   const recoveredQueuesRef = useRef(false);
@@ -7866,48 +8302,12 @@ function AndroidContentKit() {
 
   const selectedModel = imageModels.find((item) => modelValue(item) === model);
 
-  const presetOptions = [
-    {
-      id: "custom",
-      title: text.platform.contentKit.presetCustom,
-      hint: text.platform.contentKit.presetCustomHint,
-      shots: [] as const,
-    },
-    {
-      id: "quick",
-      title: text.platform.contentKit.presetQuick,
-      hint: text.platform.contentKit.presetQuickHint,
-      shots: [
-        ["main", text.platform.contentKit.main, "1024x1024", 2],
-        ["vertical", text.platform.contentKit.vertical, "1024x1536", 2],
-        ["banner", text.platform.contentKit.banner, "1536x1024", 2],
-      ],
-    },
-    {
-      id: "ecommerce",
-      title: text.platform.contentKit.presetEcommerce,
-      hint: text.platform.contentKit.presetEcommerceHint,
-      shots: [
-        ["main", text.platform.contentKit.main, "1024x1024", 3],
-        ["detail", text.platform.contentKit.detail, "1024x1024", 4],
-        ["lifestyle", text.platform.contentKit.lifestyle, "1024x1536", 4],
-        ["vertical", text.platform.contentKit.vertical, "1024x1536", 3],
-        ["banner", text.platform.contentKit.banner, "1536x1024", 2],
-      ],
-    },
-    {
-      id: "campaign",
-      title: text.platform.contentKit.presetCampaign,
-      hint: text.platform.contentKit.presetCampaignHint,
-      shots: [
-        ["main", text.platform.contentKit.main, "1024x1024", 4],
-        ["lifestyle", text.platform.contentKit.lifestyle, "1024x1536", 6],
-        ["poster", text.platform.contentKit.poster, "1024x1536", 6],
-        ["vertical", text.platform.contentKit.vertical, "1024x1536", 4],
-        ["banner", text.platform.contentKit.banner, "1536x1024", 4],
-      ],
-    },
-  ] as const;
+  const presetOptions = contentWorkbenchPresets().map((preset) => ({
+    ...preset,
+    title: text.platform.contentKit[preset.titleKey],
+    hint: text.platform.contentKit[preset.hintKey],
+    shots: preset.shots.map((shot) => localizedContentKitShot(shot, text)),
+  }));
   const selectedPreset =
     presetOptions.find((item) => item.id === presetId) ||
     presetOptions.find((item) => item.id === "ecommerce") ||
@@ -7939,116 +8339,42 @@ function AndroidContentKit() {
     : ["1024x1024", "1024x1536", "1536x1024"];
 
   const selectedPlanShots: ContentKitShotPlan[] =
-    presetId === "custom"
-      ? customShots
-      : selectedPreset.shots.map(([kind, label, size, count]) => ({
-          id: kind,
-          kind,
-          label,
-          size,
-          count,
-        }));
+    presetId === "custom" ? customShots : selectedPreset.shots;
   const selectedPlanCount = selectedPlanShots.reduce(
     (total, shot) => total + shot.count,
     0,
   );
   const planSignature = selectedPlanShots
-    .map((shot) => `${shot.id}:${shot.size}:${shot.count}`)
+    .map(
+      (shot) =>
+        `${shot.id}:${shot.kind}:${shot.purpose}:${shot.aspect}:${shot.size}:${shot.count}:${shot.promptTemplate}`,
+    )
     .join("|");
-  const customShotOptions: ContentKitShotPlan[] = [
-    {
-      id: "main",
-      kind: "main",
-      label: text.platform.contentKit.main,
-      size: "1024x1024",
-      count: 1,
-    },
-    {
-      id: "detail",
-      kind: "detail",
-      label: text.platform.contentKit.detail,
-      size: "1024x1024",
-      count: 1,
-    },
-    {
-      id: "lifestyle",
-      kind: "lifestyle",
-      label: text.platform.contentKit.lifestyle,
-      size: "1024x1536",
-      count: 1,
-    },
-    {
-      id: "poster",
-      kind: "poster",
-      label: text.platform.contentKit.poster,
-      size: "1024x1536",
-      count: 1,
-    },
-    {
-      id: "vertical",
-      kind: "vertical",
-      label: text.platform.contentKit.vertical,
-      size: "1024x1536",
-      count: 1,
-    },
-    {
-      id: "banner",
-      kind: "banner",
-      label: text.platform.contentKit.banner,
-      size: "1536x1024",
-      count: 1,
-    },
-  ];
+  const customShotOptions = contentWorkbenchShotOptions().map((shot) =>
+    localizedContentKitShot(shot, text),
+  );
 
   function assetSpecs(
     runId: string,
     plan = selectedPlanShots,
   ): Omit<ManagedMobileContentKitAsset, "status" | "updatedAt">[] {
-    const product = productName.trim();
-    const details = [
-      sellingPoints.trim(),
-      audience.trim(),
-      platform.trim(),
-      tone.trim(),
-    ]
-      .filter(Boolean)
-      .join("; ");
-    const controls = [
-      lockProduct && "keep the product shape and packaging consistent",
-      lockColor && "keep the product colors consistent",
-      lockLogo && "preserve visible product branding without invented text",
-      `composition: ${composition}`,
-      safeArea !== "none" &&
-        `leave clean headline safe area on the ${safeArea}`,
-      videoIntent &&
-        "compose this as a clean source visual suitable for video motion editing",
-    ]
-      .filter(Boolean)
-      .join("; ");
-    const prompts: Record<string, string> = {
-      main: `${product} product hero image, premium commercial product photography, centered composition, clean background`,
-      detail: `${product} material and selling-point close-up, sharp product detail, clean e-commerce layout`,
-      lifestyle: `${product} lifestyle scene for social media, product clearly visible, authentic commercial photography`,
-      poster: `${product} promotional poster visual, clear product, leave clean space for later headline overlay`,
-      vertical: `${product} vertical promotional visual for mobile social media, product clearly visible, room for headline`,
-      banner: `${product} horizontal marketing banner, product and selling-point composition, clean commercial layout`,
-    };
-    return plan.flatMap((shot) =>
-      Array.from({ length: shot.count }, (_, index) => ({
-        id: `${runId}-${shot.id}-${index + 1}`,
-        runId,
-        shotId: shot.id,
-        kind: shot.kind,
-        label: shot.label,
-        size: shot.size,
-        variant: index + 1,
-        requestId: clientRequestID("content-kit-output"),
-        tags: [],
-        prompt: `${
-          prompts[shot.kind] || prompts.main
-        }. ${details}. ${controls}`,
-      })),
-    );
+    return contentKitAssetSpecs(runId, plan, {
+      projectName: productName.trim(),
+      sellingPoints: sellingPoints.trim(),
+      parameters: parameters.trim(),
+      audience: audience.trim(),
+      platform: platform.trim(),
+      tone: tone.trim(),
+      scene: selectedPreset.id,
+      brandControls: {
+        lockProduct,
+        lockColor,
+        lockLogo,
+        composition,
+        safeArea,
+        videoIntent,
+      },
+    });
   }
 
   useEffect(() => {
@@ -8248,6 +8574,13 @@ function AndroidContentKit() {
         parameters: {
           size: asset.size,
           content_kit: project.id,
+          project_id: project.id,
+          run_id: asset.runId,
+          shot_id: asset.shotId,
+          scene: asset.scene || project.scene || project.presetId || "custom",
+          kind: asset.kind,
+          purpose: asset.purpose || "",
+          aspect: asset.aspect || "",
           asset: asset.shotId,
           output_id: asset.id,
           variant: asset.variant,
@@ -8313,14 +8646,42 @@ function AndroidContentKit() {
         );
       }
       const image = openAIImageData(json)[0];
+      const configuredShot = project.shotPlan?.find(
+        (shot) => shot.id === asset.shotId,
+      );
+      const overlayShot = normalizeContentWorkbenchShot(
+        configuredShot || {
+          id: asset.shotId,
+          scene: asset.scene || project.scene || project.presetId || "custom",
+          kind: asset.kind,
+          label: asset.label,
+          purpose: asset.purpose || asset.label,
+          aspect: asset.aspect || "custom",
+          size: asset.size,
+          count: 1,
+          copyFields: (asset.copyFields ||
+            []) as WorkbenchShotPlan["copyFields"],
+        },
+      );
       const saved = await persistContentKitImageResult(image, {
         taskId: localTaskId,
         prompt: asset.prompt,
         model: project.model,
         ownerUserId: String(managed.user?.id || managed.session?.user_id || ""),
+        projectId: project.id,
+        runId: asset.runId,
+        shotId: asset.shotId,
+        kind: asset.kind,
+        label: asset.label,
+        collectionId: project.id,
+        overlay: {
+          brief: contentKitBriefFromProject(project),
+          shot: overlayShot,
+        },
       });
       patchAsset(project.id, asset.id, {
         status: "completed",
+        projectId: project.id,
         imageUrl: saved.url,
         fileName: saved.fileName,
         error: "",
@@ -8374,13 +8735,9 @@ function AndroidContentKit() {
         messages: [
           {
             role: "user",
-            content: `Create product promotion copy for ${
-              project.productName
-            }. Selling points: ${project.sellingPoints}. Audience: ${
-              project.audience || "general"
-            }. Platform: ${project.platform || "general"}. Tone: ${
-              project.tone || "clear"
-            }. Return a product title, 3-5 selling points, and one ready-to-publish post. Use the user's language.`,
+            content: buildContentWorkbenchCopyPrompt(
+              contentKitBriefFromProject(project),
+            ),
           },
         ],
       });
@@ -8557,32 +8914,18 @@ function AndroidContentKit() {
       return;
     }
     const runId = clientRequestID("content-kit-run");
-    const sourceByShot = new Map<string, ManagedMobileContentKitAsset>();
-    project.assets.forEach((asset) => {
-      if (!sourceByShot.has(asset.shotId))
-        sourceByShot.set(asset.shotId, asset);
-    });
-    const assets = plan.flatMap((shot) =>
-      Array.from({ length: shot.count }, (_, index) => {
-        const source = sourceByShot.get(shot.id);
-        return {
-          id: `${runId}-${shot.id}-${index + 1}`,
-          runId,
-          shotId: shot.id,
-          kind: shot.kind,
-          label: shot.label,
-          prompt:
-            source?.prompt ||
-            `${project.productName}. ${project.sellingPoints}`,
-          size: shot.size,
-          variant: index + 1,
-          requestId: clientRequestID("content-kit-output"),
-          tags: [],
-          status: "queued" as const,
-          updatedAt: Date.now(),
-        };
-      }),
-    );
+    // A new run must rebuild every shot from the saved structured brief. Reusing
+    // a previous output prompt makes detail and layout shots regress into heroes.
+    const assets = contentKitAssetSpecs(
+      runId,
+      plan,
+      contentKitBriefFromProject(project),
+      project.id,
+    ).map((asset) => ({
+      ...asset,
+      status: "queued" as const,
+      updatedAt: Date.now(),
+    }));
     mobileStore.updateContentKit(project.id, {
       activeRunId: runId,
       runs: [
@@ -8668,8 +9011,10 @@ function AndroidContentKit() {
       };
     });
     const projectId = mobileStore.createContentKit({
+      scene: selectedPreset.id,
       productName: productName.trim(),
       sellingPoints: sellingPoints.trim(),
+      parameters: parameters.trim(),
       audience: audience.trim(),
       platform: platform.trim(),
       tone: tone.trim(),
@@ -8885,6 +9230,14 @@ function AndroidContentKit() {
     const previewAsset = selectedProject.assets.find(
       (asset) => asset.id === previewAssetId,
     );
+    const projectScene =
+      presetOptions.find(
+        (preset) =>
+          preset.id === (selectedProject.scene || selectedProject.presetId),
+      )?.title ||
+      selectedProject.scene ||
+      selectedProject.presetId ||
+      text.platform.contentKit.presetCustom;
     const tagOptions: Array<{ id: ContentKitAssetTag; label: string }> = [
       { id: "keep", label: text.platform.contentKit.tagKeep },
       { id: "review", label: text.platform.contentKit.tagReview },
@@ -9241,8 +9594,16 @@ function AndroidContentKit() {
             <h2>{text.platform.contentKit.brief}</h2>
           </div>
           <div className={styles["content-kit-brief"]}>
+            <span>{text.platform.contentKit.outputPlan}</span>
+            <p>{projectScene}</p>
             <span>{text.platform.contentKit.sellingPoints}</span>
             <p>{selectedProject.sellingPoints}</p>
+            {selectedProject.parameters && (
+              <>
+                <span>{text.platform.contentKit.parameters}</span>
+                <p>{selectedProject.parameters}</p>
+              </>
+            )}
             {selectedProject.audience && (
               <>
                 <span>{text.platform.contentKit.audience}</span>
@@ -9321,6 +9682,15 @@ function AndroidContentKit() {
               />
             </label>
             <label>
+              <span>{text.platform.contentKit.parameters}</span>
+              <textarea
+                aria-label="content-kit-parameters"
+                placeholder={text.platform.contentKit.parametersPlaceholder}
+                value={parameters}
+                onChange={(event) => setParameters(event.currentTarget.value)}
+              />
+            </label>
+            <label>
               <span>{text.platform.contentKit.chooseModel}</span>
               <select
                 aria-label="content-kit-model"
@@ -9341,7 +9711,7 @@ function AndroidContentKit() {
             <div>
               {presetOptions.map((preset) => {
                 const count = preset.shots.reduce(
-                  (total, shot) => total + shot[3],
+                  (total, shot) => total + shot.count,
                   0,
                 );
                 return (
@@ -9365,91 +9735,153 @@ function AndroidContentKit() {
           {presetId === "custom" && (
             <div className={styles["content-kit-custom-plan"]}>
               {customShots.map((shot) => (
-                <div key={shot.id}>
-                  <span>
-                    <strong>{shot.label}</strong>
-                    <small>{shot.size}</small>
-                  </span>
+                <div
+                  key={shot.id}
+                  className={styles["content-kit-custom-shot"]}
+                >
                   <div>
-                    <button
-                      type="button"
-                      aria-label={`${shot.label} -`}
-                      disabled={shot.count <= 1}
-                      onClick={() =>
+                    <span>
+                      {shot.kind === "custom" ? (
+                        <input
+                          aria-label={`${text.platform.contentKit.customShot} name`}
+                          value={shot.label}
+                          onChange={(event) =>
+                            setCustomShots((items) =>
+                              items.map((item) =>
+                                item.id === shot.id
+                                  ? {
+                                      ...item,
+                                      label: event.currentTarget.value,
+                                    }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                      ) : (
+                        <strong>{shot.label}</strong>
+                      )}
+                      <small>{`${shot.size} · ${shot.aspect}`}</small>
+                    </span>
+                    <div>
+                      <button
+                        type="button"
+                        aria-label={`${shot.label} -`}
+                        disabled={shot.count <= 1}
+                        onClick={() =>
+                          setCustomShots((items) =>
+                            items.map((item) =>
+                              item.id === shot.id
+                                ? {
+                                    ...item,
+                                    count: Math.max(1, item.count - 1),
+                                  }
+                                : item,
+                            ),
+                          )
+                        }
+                      >
+                        -
+                      </button>
+                      <strong>{shot.count}</strong>
+                      <button
+                        type="button"
+                        aria-label={`${shot.label} +`}
+                        disabled={shot.count >= 6 || selectedPlanCount >= 48}
+                        onClick={() =>
+                          setCustomShots((items) =>
+                            items.map((item) =>
+                              item.id === shot.id
+                                ? {
+                                    ...item,
+                                    count: Math.min(6, item.count + 1),
+                                  }
+                                : item,
+                            ),
+                          )
+                        }
+                      >
+                        +
+                      </button>
+                    </div>
+                    <select
+                      aria-label={`${shot.label} size`}
+                      value={shot.size}
+                      onChange={(event) =>
                         setCustomShots((items) =>
                           items.map((item) =>
                             item.id === shot.id
-                              ? { ...item, count: Math.max(1, item.count - 1) }
+                              ? { ...item, size: event.currentTarget.value }
                               : item,
                           ),
                         )
                       }
                     >
-                      -
-                    </button>
-                    <strong>{shot.count}</strong>
+                      {supportedContentKitSizes.map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       type="button"
-                      aria-label={`${shot.label} +`}
-                      disabled={shot.count >= 6 || selectedPlanCount >= 48}
+                      aria-label={`${text.platform.contentKit.removeShot} ${shot.label}`}
                       onClick={() =>
                         setCustomShots((items) =>
-                          items.map((item) =>
-                            item.id === shot.id
-                              ? { ...item, count: Math.min(6, item.count + 1) }
-                              : item,
-                          ),
+                          items.filter((item) => item.id !== shot.id),
                         )
                       }
                     >
-                      +
+                      <DeleteIcon />
                     </button>
                   </div>
-                  <select
-                    aria-label={`${shot.label} size`}
-                    value={shot.size}
-                    onChange={(event) =>
-                      setCustomShots((items) =>
-                        items.map((item) =>
-                          item.id === shot.id
-                            ? { ...item, size: event.currentTarget.value }
-                            : item,
-                        ),
-                      )
-                    }
-                  >
-                    {supportedContentKitSizes.map((size) => (
-                      <option key={size} value={size}>
-                        {size}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    aria-label={`${text.platform.contentKit.removeShot} ${shot.label}`}
-                    onClick={() =>
-                      setCustomShots((items) =>
-                        items.filter((item) => item.id !== shot.id),
-                      )
-                    }
-                  >
-                    <DeleteIcon />
-                  </button>
+                  <label>
+                    <span>{text.platform.contentKit.shotPurpose}</span>
+                    <input
+                      aria-label={`${shot.label} purpose`}
+                      placeholder={
+                        text.platform.contentKit.shotPurposePlaceholder
+                      }
+                      value={shot.purpose}
+                      onChange={(event) =>
+                        setCustomShots((items) =>
+                          items.map((item) =>
+                            item.id === shot.id
+                              ? {
+                                  ...item,
+                                  purpose: event.currentTarget.value,
+                                }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
                 </div>
               ))}
               <div className={styles["content-kit-add-shots"]}>
                 {customShotOptions
                   .filter(
                     (option) =>
+                      option.kind === "custom" ||
                       !customShots.some((shot) => shot.id === option.id),
                   )
                   .map((option) => (
                     <button
                       key={option.id}
                       type="button"
-                      onClick={() =>
-                        setCustomShots((items) => [...items, option])
-                      }
+                      onClick={() => {
+                        const next =
+                          option.kind === "custom"
+                            ? localizedContentKitShot(
+                                contentWorkbenchCustomShot(
+                                  clientRequestID("content-kit-custom-shot"),
+                                ),
+                                text,
+                              )
+                            : option;
+                        setCustomShots((items) => [...items, next]);
+                      }}
                     >
                       <AddIcon />
                       <span>{option.label}</span>
@@ -10043,7 +10475,9 @@ function AndroidImageStudio() {
     );
     // Snapshot inputs once. A batch must not change from edit to generation if
     // the composer state is refreshed while one of its individual requests runs.
-    const taskReferences = Array.isArray(overrides?.referenceImages || references)
+    const taskReferences = Array.isArray(
+      overrides?.referenceImages || references,
+    )
       ? [...(overrides?.referenceImages || references)]
       : [];
     const imageOperation = taskReferences.length
@@ -10166,9 +10600,10 @@ function AndroidImageStudio() {
     updateTask(id, { status: "running", progress: 12 });
     startProgress(id);
 
-    const endpoint = imageOperation === "images.edits"
-      ? "/images/edits"
-      : "/images/generations";
+    const endpoint =
+      imageOperation === "images.edits"
+        ? "/images/edits"
+        : "/images/generations";
     const taskBackendBaseUrl = managed.backendBaseUrl;
     const initialImageApiKey = managed.imageSession?.api_key || "";
     const basePayload: Record<string, any> = {
@@ -10669,14 +11104,20 @@ function AndroidImageStudio() {
   }
 
   async function shareItems(ids: string[]) {
-    const first = gallery.find((item: any) => ids.includes(item.id));
-    const firstUrl = imageResults(first)[0];
-    if (!first || !firstUrl) return;
-    await shareImage(
-      firstUrl,
-      makeImageFileName(text.image.filePrefix, first.id, 0),
-      first?.params?.prompt,
+    const selected = gallery.filter((item: any) => ids.includes(item.id));
+    const images = selected.flatMap((item: any) =>
+      imageResults(item).map((url: string, index: number) => ({
+        url,
+        fileName: makeImageFileName(text.image.filePrefix, item.id, index),
+      })),
     );
+    if (!images.length) return;
+    const shareTextValue = selected[0]?.params?.prompt;
+    if (images.length === 1) {
+      await shareImage(images[0].url, images[0].fileName, shareTextValue);
+      return;
+    }
+    await shareImages(images, shareTextValue);
   }
 
   const selectedImageModelInfo = imageModelOptions.find(
@@ -11241,9 +11682,9 @@ function AndroidGallery() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [nativeImages, setNativeImages] = useState<NativeAppImage[]>([]);
-  const [cloudAssets, setCloudAssets] = useState<MobileAsset[]>([]);
-  const [cloudLoading, setCloudLoading] = useState(false);
-  const cloudFileRef = useRef<HTMLInputElement | null>(null);
+  const [localMaterials, setLocalMaterials] = useState<LocalMaterial[]>([]);
+  const [localMaterialsLoading, setLocalMaterialsLoading] = useState(false);
+  const localMaterialFileRef = useRef<HTMLInputElement | null>(null);
   const [preferences, setPreferences] = useState<GalleryPreferences>(() =>
     readGalleryPreferences(),
   );
@@ -11251,10 +11692,14 @@ function AndroidGallery() {
   const drawGallery = sdStore.draw.filter(
     (item: any) => item.status === "success" && imageResults(item).length > 0,
   );
-  const gallery = useMemo(
+  const rawGallery = useMemo(
     () => mergeGalleryItems(drawGallery, nativeImages),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sdStore.currentId, sdStore.draw.length, nativeImages],
+  );
+  const gallery = useMemo(
+    () => mergeManualGalleryCollections(rawGallery, preferences),
+    [rawGallery, preferences],
   );
   const filteredGallery = useMemo(
     () =>
@@ -11262,6 +11707,9 @@ function AndroidGallery() {
         galleryItemMatchesFilter(item, filter, preferences),
       ),
     [gallery, filter, preferences],
+  );
+  const activeAccountId = String(
+    managed.user?.id || managed.session?.user_id || "",
   );
 
   function showNotice(message: string) {
@@ -11283,97 +11731,84 @@ function AndroidGallery() {
     }
   }
 
-  async function refreshCloudAssets() {
-    if (!managed.accessToken) return;
-    setCloudLoading(true);
+  async function refreshLocalMaterials() {
+    if (!activeAccountId) {
+      setLocalMaterials([]);
+      return;
+    }
+    setLocalMaterialsLoading(true);
     try {
-      const client = await mobilePlatformClient();
-      const page = await client.assets.list({ limit: 60, order: "desc" });
-      setCloudAssets(page.items || []);
+      setLocalMaterials(await listLocalMaterials(activeAccountId));
       setError("");
     } catch {
       setError(text.platform.materialRefreshFailed);
     } finally {
-      setCloudLoading(false);
+      setLocalMaterialsLoading(false);
     }
   }
 
-  async function uploadCloudAssets(event: ChangeEvent<HTMLInputElement>) {
+  async function importMaterials(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
     const files = Array.from(input.files || []).slice(0, 8);
     if (!files.length) return;
-    setCloudLoading(true);
+    if (!activeAccountId) {
+      setError(text.errors.loginRequired);
+      input.value = "";
+      return;
+    }
+    setLocalMaterialsLoading(true);
     try {
-      await Promise.all(
-        files.map((file) => uploadMaterial(file, file.name, "upload")),
-      );
-      await refreshCloudAssets();
+      const imported = await importLocalMaterials(activeAccountId, files);
+      setLocalMaterials((items) => [...imported, ...items]);
       showNotice(text.platform.uploadReady);
-    } catch (uploadError) {
-      setError(
-        uploadError instanceof Error
-          ? localizeManagedMobileError({ message: uploadError.message })
-          : text.platform.uploadFailedHint,
-      );
+    } catch {
+      setError(text.platform.uploadFailedHint);
     } finally {
       input.value = "";
-      setCloudLoading(false);
+      setLocalMaterialsLoading(false);
     }
   }
 
-  async function deleteCloudAsset(asset: MobileAsset) {
+  async function deleteLocalMaterial(material: LocalMaterial) {
     if (!window.confirm(text.platform.deleteAssetConfirm)) return;
     try {
-      const client = await mobilePlatformClient();
-      await client.assets.delete(asset.id);
-      setCloudAssets((items) => items.filter((item) => item.id !== asset.id));
-      showNotice(text.platform.assetDeleted);
-    } catch (deleteError) {
-      setError(
-        deleteError instanceof Error
-          ? localizeManagedMobileError({ message: deleteError.message })
-          : text.platform.materialRefreshFailed,
+      await deleteLocalMaterials(activeAccountId, [material.id]);
+      setLocalMaterials((items) =>
+        items.filter((item) => item.id !== material.id),
       );
+      showNotice(text.platform.assetDeleted);
+    } catch {
+      setError(text.platform.materialRefreshFailed);
     }
   }
 
-  async function cloudAssetDataUrl(asset: MobileAsset) {
-    const path =
-      asset.content_url ||
-      `/api/v1/mobile/assets/${encodeURIComponent(asset.id)}/content`;
-    const response = await requestWithManagedAuth(
-      async ({ baseUrl, accessToken }) => {
-        const res = await fetch(managedApiUrl(baseUrl, path), {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          cache: "no-store",
-        });
-        if (!res.ok) {
-          throw new ManagedApiError(
-            text.platform.materialRefreshFailed,
-            res.status,
-            path,
-          );
-        }
-        return res;
-      },
-    );
-    const blob = await response.blob();
-    return asset.kind === "image"
-      ? compressImage(blob, 2 * 1024 * 1024)
-      : blobToDataUrl(blob);
-  }
-
-  async function reuseCloudAsset(asset: MobileAsset, target: "chat" | "image") {
+  async function reuseLocalMaterial(
+    material: LocalMaterial,
+    target: "chat" | "image",
+  ) {
     try {
-      if (asset.kind !== "image" && target === "image") {
+      if (target === "image" && material.kind !== "image") {
         throw new Error(text.platform.materialRefreshFailed);
       }
-      const materialDataUrl = await cloudAssetDataUrl(asset);
+      if (target === "chat" && !["image", "text"].includes(material.kind)) {
+        throw new Error(text.platform.localFileUnsupported);
+      }
+      const materialDataUrl =
+        material.kind === "image"
+          ? await readLocalMaterialDataUrl(activeAccountId, material.id)
+          : "";
+      let materialText = "";
+      if (material.kind === "text") {
+        const blob = await readLocalMaterialBlob(activeAccountId, material.id);
+        if (!blob) throw new Error(text.platform.materialRefreshFailed);
+        materialText = await blobToText(blob);
+      }
       navigate(target === "chat" ? Path.Chat : Path.Sd, {
         state: {
           materialDataUrl,
-          materialName: mobileAssetTitle(asset, text),
-          materialAsset: asset,
+          materialName: material.name,
+          materialText,
+          materialLocal: material,
         },
       });
     } catch (reuseError) {
@@ -11387,9 +11822,9 @@ function AndroidGallery() {
 
   useEffect(() => {
     refreshNativeImages().catch(() => {});
-    refreshCloudAssets().catch(() => {});
+    refreshLocalMaterials().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sdStore.currentId]);
+  }, [sdStore.currentId, activeAccountId]);
 
   useEffect(() => {
     return () => {
@@ -11409,6 +11844,9 @@ function AndroidGallery() {
     setError("");
     try {
       const items = gallery.filter((item: any) => ids.includes(item.id));
+      const sourceIds = new Set(
+        items.flatMap((item: any) => item.memberIds || [item.id]),
+      );
       const removedUrls = items.flatMap(imageResults);
       const localFileNames = items.flatMap(imageLocalFileNames);
       if (localFileNames.length) {
@@ -11420,7 +11858,7 @@ function AndroidGallery() {
           .map((url: string) => removeImage(url)),
       );
       sdStore.update((state) => {
-        state.draw = state.draw.filter((item: any) => !ids.includes(item.id));
+        state.draw = state.draw.filter((item: any) => !sourceIds.has(item.id));
         state.currentId += 1;
       });
       setNativeImages((items) =>
@@ -11453,14 +11891,20 @@ function AndroidGallery() {
   }
 
   async function shareItems(ids: string[]) {
-    const first = gallery.find((item: any) => ids.includes(item.id));
-    const firstUrl = imageResults(first)[0];
-    if (!first || !firstUrl) return;
-    await shareImage(
-      firstUrl,
-      makeImageFileName(text.image.filePrefix, first.id, 0),
-      first?.params?.prompt,
+    const selected = gallery.filter((item: any) => ids.includes(item.id));
+    const images = selected.flatMap((item: any) =>
+      imageResults(item).map((url: string, index: number) => ({
+        url,
+        fileName: makeImageFileName(text.image.filePrefix, item.id, index),
+      })),
     );
+    if (!images.length) return;
+    const shareTextValue = selected[0]?.params?.prompt;
+    if (images.length === 1) {
+      await shareImage(images[0].url, images[0].fileName, shareTextValue);
+      return;
+    }
+    await shareImages(images, shareTextValue);
   }
 
   function updateGalleryPreferences(
@@ -11473,13 +11917,17 @@ function AndroidGallery() {
       gallery
         .filter((item: any) => ids.includes(item.id))
         .forEach((item: any) => {
-          const key = galleryItemPreferenceKey(item);
-          if (!key) return;
-          const updated = updater(next[key] || {});
-          next[key] = { ...updated, updatedAt: Date.now() };
-          if (!next[key].favorite && !next[key].category) {
-            delete next[key];
-          }
+          galleryItemPreferenceKeys(item).forEach((key: string) => {
+            const updated = updater(next[key] || {});
+            next[key] = { ...updated, updatedAt: Date.now() };
+            if (
+              !next[key].favorite &&
+              !next[key].category &&
+              !next[key].collectionId
+            ) {
+              delete next[key];
+            }
+          });
         });
       writeGalleryPreferences(next);
       return next;
@@ -11501,6 +11949,31 @@ function AndroidGallery() {
       category,
     }));
     showNotice(text.image.categoryUpdated);
+  }
+
+  function createManualCollection() {
+    if (selectedIds.length < 2) return;
+    const name = window.prompt(text.image.collectionNamePrompt)?.trim();
+    if (!name) return;
+    const collectionId = clientRequestID("gallery-collection");
+    updateGalleryPreferences(selectedIds, (current) => ({
+      ...current,
+      collectionId,
+      collectionName: name,
+    }));
+    setSelectedIds([]);
+    setSelectionMode(false);
+    showNotice(text.image.collectionCreated);
+  }
+
+  function removeManualCollection(item: any) {
+    if (!item?.manualCollectionId) return;
+    updateGalleryPreferences([item.id], (current) => ({
+      ...current,
+      collectionId: "",
+      collectionName: "",
+    }));
+    showNotice(text.image.collectionRemoved);
   }
 
   useNativeBackHandler(true, () => {
@@ -11540,7 +12013,7 @@ function AndroidGallery() {
           <strong>JisudengChat</strong>
           <span>{text.image.localGalleryHint}</span>
         </div>
-        <em>{text.shortCount(gallery.length + cloudAssets.length)}</em>
+        <em>{text.shortCount(gallery.length + localMaterials.length)}</em>
       </section>
 
       <section className={styles["section"]}>
@@ -11550,55 +12023,53 @@ function AndroidGallery() {
             <span>{text.platform.materialHint}</span>
           </div>
           <button
-            onClick={() => cloudFileRef.current?.click()}
-            disabled={cloudLoading}
+            onClick={() => localMaterialFileRef.current?.click()}
+            disabled={localMaterialsLoading}
           >
             {text.platform.uploadMaterial}
           </button>
           <input
-            ref={cloudFileRef}
+            ref={localMaterialFileRef}
             hidden
             multiple
             type="file"
             accept="image/*,audio/*,video/*,application/pdf,text/plain,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
-            onChange={uploadCloudAssets}
+            onChange={importMaterials}
           />
         </div>
-        {!cloudLoading && cloudAssets.length === 0 && (
+        {!localMaterialsLoading && localMaterials.length === 0 && (
           <p className={styles["empty-copy"]}>{text.platform.materialEmpty}</p>
         )}
         <div className={styles["cloud-asset-list"]}>
-          {cloudAssets.map((asset) => {
-            const previewUrl =
-              asset.thumbnail_url || asset.preview_url || asset.content_url;
+          {localMaterials.map((material) => {
             return (
-              <article key={asset.id}>
+              <article key={material.id}>
                 <i>
-                  {asset.kind === "image" && previewUrl ? (
-                    <img
-                      src={managedApiUrl(managed.backendBaseUrl, previewUrl)}
-                      alt={mobileAssetTitle(asset, text)}
-                    />
-                  ) : (
-                    <UploadIcon />
-                  )}
+                  <UploadIcon />
                 </i>
                 <span>
-                  <strong>{mobileAssetTitle(asset, text)}</strong>
-                  <small>{formatDateTime(asset.created_at, text)}</small>
+                  <strong>{material.name}</strong>
+                  <small>{formatDateTime(material.createdAt, text)}</small>
                 </span>
                 <div>
-                  <button onClick={() => reuseCloudAsset(asset, "chat")}>
+                  <button
+                    disabled={
+                      material.kind !== "image" && material.kind !== "text"
+                    }
+                    onClick={() => reuseLocalMaterial(material, "chat")}
+                  >
                     {text.platform.addToChat}
                   </button>
-                  {asset.kind === "image" && (
-                    <button onClick={() => reuseCloudAsset(asset, "image")}>
+                  {material.kind === "image" && (
+                    <button
+                      onClick={() => reuseLocalMaterial(material, "image")}
+                    >
                       {text.platform.addToImage}
                     </button>
                   )}
                   <button
                     className={styles["danger-inline"]}
-                    onClick={() => deleteCloudAsset(asset)}
+                    onClick={() => deleteLocalMaterial(material)}
                   >
                     <DeleteIcon />
                     <span>{text.common.delete}</span>
@@ -11690,6 +12161,13 @@ function AndroidGallery() {
             >
               <MaxIcon />
               <span>{text.image.posterTag}</span>
+            </button>
+            <button
+              onClick={createManualCollection}
+              disabled={selectedIds.length < 2}
+            >
+              <CopyIcon />
+              <span>{text.image.createCollection}</span>
             </button>
           </div>
         )}
@@ -11811,6 +12289,12 @@ function AndroidGallery() {
                 <button onClick={() => markCategory([preview.id], "")}>
                   <CloseIcon />
                   <span>{text.image.clearTag}</span>
+                </button>
+              )}
+              {preview.manualCollectionId && (
+                <button onClick={() => removeManualCollection(preview)}>
+                  <CloseIcon />
+                  <span>{text.image.removeCollection}</span>
                 </button>
               )}
             </div>
@@ -12395,6 +12879,8 @@ function AndroidAccountSettings() {
   } | null>(null);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteShareBusy, setInviteShareBusy] = useState(false);
+  const [appShareBusy, setAppShareBusy] = useState(false);
+  const [appShareMessage, setAppShareMessage] = useState("");
   const [inviteMessage, setInviteMessage] = useState("");
   const [inviteCampaign, setInviteCampaign] =
     useState<InviteCampaignProgress | null>(null);
@@ -12405,6 +12891,10 @@ function AndroidAccountSettings() {
   const [welfareData, setWelfareData] = useState<PlayWelfareData | null>(null);
   const [welfareLoading, setWelfareLoading] = useState(false);
   const [welfareError, setWelfareError] = useState("");
+  const [playActionBusy, setPlayActionBusy] = useState<string | null>(null);
+  const [playActionMessage, setPlayActionMessage] = useState("");
+  const [playActionError, setPlayActionError] = useState("");
+  const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
   const [teamActionBusy, setTeamActionBusy] = useState<string | null>(null);
   const [teamActionMessage, setTeamActionMessage] = useState("");
   const [teamActionError, setTeamActionError] = useState("");
@@ -12424,6 +12914,15 @@ function AndroidAccountSettings() {
   const [supportReply, setSupportReply] = useState("");
   const [supportBusy, setSupportBusy] = useState(false);
   const [supportError, setSupportError] = useState("");
+  const welfareAccountID = workspace?.user?.id || managed.user?.id || 0;
+
+  useEffect(() => {
+    setWelfareData(null);
+    setPlayActionBusy(null);
+    setPlayActionMessage("");
+    setPlayActionError("");
+    setQuizAnswers({});
+  }, [welfareAccountID]);
 
   async function signOut(clearAll: boolean) {
     setShowLogoutConfirm(false);
@@ -12487,7 +12986,15 @@ function AndroidAccountSettings() {
   const accountGroupID = storedChatGroupID(workspace);
   const accountGroupName = stableChatGroupName(workspace, text);
   const route = location.pathname;
-  const isAdmin = isManagedAdminWorkspace(workspace);
+  const isAdmin = isMobileAdminAvailable(managed.mobileProtocol);
+  const adminClient = useMemo(
+    () => ({
+      baseUrl: managed.backendBaseUrl,
+      accessToken: managed.accessToken,
+      mobileProtocol: managed.mobileProtocol,
+    }),
+    [managed.accessToken, managed.backendBaseUrl, managed.mobileProtocol],
+  );
   const inviteRegisterUrl = useMemo(() => {
     if (!inviteSummary?.aff_code && !inviteSummary?.attribution_token)
       return "";
@@ -12678,6 +13185,175 @@ function AndroidAccountSettings() {
     return localized === raw || localized === error.message
       ? fallback
       : localized;
+  }
+
+  function playMutationHeaders(prefix: string) {
+    const requestID = clientRequestID(prefix);
+    return {
+      "Idempotency-Key": requestID,
+      "X-Request-ID": requestID,
+    };
+  }
+
+  function playRewardMessage(result: {
+    reward_amount?: number;
+    balance_added?: number;
+    coupon?: { name?: string };
+    redeem_code?: { code?: string };
+  }) {
+    const amount = result.balance_added ?? result.reward_amount ?? 0;
+    const details = [
+      amount > 0 ? text.account.welfareRewardMessage(formatMoney(amount)) : "",
+      result.coupon?.name
+        ? text.account.welfareRewardCoupon(result.coupon.name)
+        : "",
+      result.redeem_code?.code
+        ? text.account.welfareRewardCode(result.redeem_code.code)
+        : "",
+    ].filter(Boolean);
+    return details.join(" · ") || text.account.welfareRewardNone;
+  }
+
+  async function submitDailyCheckin(makeup = false) {
+    if (playActionBusy) return;
+    const status = welfareData?.checkinStatus;
+    if (
+      !status?.enabled ||
+      (makeup
+        ? !status.can_makeup
+        : !status.coupon_pool_ready ||
+          status.checked_in_today ||
+          !status.eligible)
+    ) {
+      return;
+    }
+    setPlayActionBusy(makeup ? "checkin-makeup" : "checkin");
+    setPlayActionMessage("");
+    setPlayActionError("");
+    try {
+      const result =
+        await managedAuthenticatedJsonRequest<PlayWelfareCheckinResult>(
+          makeup
+            ? PLAY_WELFARE_REWARD_ENDPOINTS.checkinMakeup
+            : PLAY_WELFARE_REWARD_ENDPOINTS.checkin,
+          {
+            method: "POST",
+            headers: playMutationHeaders(
+              makeup ? "play-checkin-makeup" : "play-checkin",
+            ),
+          },
+        );
+      const amount = formatMoney(result.balance_added ?? result.reward_amount);
+      setPlayActionMessage(
+        makeup
+          ? text.account.welfareCheckinMakeupSuccess(amount)
+          : [
+              text.account.welfareCheckinCompleted,
+              playRewardMessage(result),
+            ].join(" · "),
+      );
+      await Promise.all([
+        refreshWelfare(),
+        refreshAccountData().catch(() => undefined),
+      ]);
+    } catch (error) {
+      setPlayActionError(
+        welfareTeamError(error, text.account.welfareCheckinUnavailable),
+      );
+    } finally {
+      setPlayActionBusy(null);
+    }
+  }
+
+  async function openDailyBlindbox() {
+    if (playActionBusy) return;
+    const status = welfareData?.blindboxStatus;
+    if (!status?.enabled || !status.coupon_pool_ready || !status.can_open) {
+      return;
+    }
+    setPlayActionBusy("blindbox");
+    setPlayActionMessage("");
+    setPlayActionError("");
+    try {
+      const result =
+        await managedAuthenticatedJsonRequest<PlayWelfareBlindboxResult>(
+          PLAY_WELFARE_REWARD_ENDPOINTS.blindboxOpen,
+          {
+            method: "POST",
+            headers: playMutationHeaders("play-blindbox"),
+          },
+        );
+      setPlayActionMessage(
+        [text.account.welfareBlindboxCompleted, playRewardMessage(result)]
+          .filter(Boolean)
+          .join(" · "),
+      );
+      await Promise.all([
+        refreshWelfare(),
+        refreshAccountData().catch(() => undefined),
+      ]);
+    } catch (error) {
+      setPlayActionError(
+        welfareTeamError(error, text.account.welfareBlindboxUnavailable),
+      );
+    } finally {
+      setPlayActionBusy(null);
+    }
+  }
+
+  async function submitDailyQuiz() {
+    if (playActionBusy) return;
+    const quiz = welfareData?.quizToday;
+    if (
+      !quiz?.enabled ||
+      !quiz.coupon_pool_ready ||
+      quiz.already_submitted ||
+      !quiz.questions.length
+    ) {
+      return;
+    }
+    const answers = quiz.questions.map((question) => ({
+      question_id: question.id,
+      choice_index: quizAnswers[question.id],
+    }));
+    if (answers.some((answer) => !Number.isInteger(answer.choice_index))) {
+      setPlayActionError(text.account.welfareQuizNeedAnswers);
+      return;
+    }
+    setPlayActionBusy("quiz");
+    setPlayActionMessage("");
+    setPlayActionError("");
+    try {
+      const result =
+        await managedAuthenticatedJsonRequest<PlayWelfareQuizSubmitResult>(
+          PLAY_WELFARE_REWARD_ENDPOINTS.quizSubmit,
+          {
+            method: "POST",
+            headers: {
+              ...playMutationHeaders("play-quiz"),
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ answers }),
+          },
+        );
+      setQuizAnswers({});
+      setPlayActionMessage(
+        `${text.account.welfareQuizSubmitted(
+          result.score,
+          result.total,
+        )} · ${playRewardMessage(result)}`,
+      );
+      await Promise.all([
+        refreshWelfare(),
+        refreshAccountData().catch(() => undefined),
+      ]);
+    } catch (error) {
+      setPlayActionError(
+        welfareTeamError(error, text.account.welfareQuizUnavailable),
+      );
+    } finally {
+      setPlayActionBusy(null);
+    }
   }
 
   async function submitTeamApplication() {
@@ -12958,6 +13634,41 @@ function AndroidAccountSettings() {
       setInviteMessage(text.account.inviteGrowthCopy);
     } catch {
       setInviteMessage(text.account.inviteGrowthUnavailable);
+    }
+  }
+
+  async function shareAppPoster() {
+    if (appShareBusy) return;
+    setAppShareBusy(true);
+    setAppShareMessage("");
+    const appUrl = resolveWebUrl("/download/android", clientConfig);
+    const registerUrl = resolveWebUrl("/register", clientConfig);
+    const poster = buildInvitePosterPayload({
+      registerUrl,
+      appUrl,
+      headline: text.account.appShareTitle,
+      body: text.account.appShareBody,
+      locale: text.dateLocale,
+      theme: invitePosterTheme,
+      mode: "app",
+    });
+    try {
+      const dataUrl = await createInvitePosterDataUrl(poster);
+      await shareImage(
+        dataUrl,
+        `jisudeng-app-${Date.now()}.png`,
+        `${text.account.appShareTitle}\n${appUrl}`,
+      );
+      setAppShareMessage(text.account.appShareReady);
+    } catch {
+      try {
+        await shareText(poster.shareText, text.account.appShare);
+        setAppShareMessage(text.account.appShareReady);
+      } catch {
+        setAppShareMessage(text.account.appShareUnavailable);
+      }
+    } finally {
+      setAppShareBusy(false);
     }
   }
 
@@ -13258,7 +13969,7 @@ function AndroidAccountSettings() {
       applyCheckoutInfo(await loadCheckoutInfo());
     } catch (error) {
       setPaymentError(
-        error instanceof Error ? error.message : text.errors.syncFailed,
+        localizedMobileErrorMessage(error, text.errors.syncFailed),
       );
     } finally {
       setCheckoutLoading(false);
@@ -13278,7 +13989,7 @@ function AndroidAccountSettings() {
       setCouponError("");
     } catch (error) {
       setCouponError(
-        error instanceof Error ? error.message : text.errors.syncFailed,
+        localizedMobileErrorMessage(error, text.errors.syncFailed),
       );
     } finally {
       setCouponLoading(false);
@@ -13319,7 +14030,7 @@ function AndroidAccountSettings() {
     } catch (error) {
       setSelectedCouponID(null);
       setCouponError(
-        error instanceof Error ? error.message : text.errors.syncFailed,
+        localizedMobileErrorMessage(error, text.errors.syncFailed),
       );
     }
   }
@@ -13733,9 +14444,7 @@ function AndroidAccountSettings() {
       throw new Error(firstError || text.account.redeemUnavailable);
     } catch (error) {
       setRedeemError(
-        error instanceof Error && error.message
-          ? error.message
-          : text.account.redeemFailed,
+        localizedMobileErrorMessage(error, text.account.redeemFailed),
       );
     } finally {
       setRedeemBusy(false);
@@ -13794,9 +14503,7 @@ function AndroidAccountSettings() {
       if (payUrl) {
         await openExternalUrl(payUrl).catch((error) => {
           setPaymentError(
-            error instanceof Error && error.message
-              ? localizeManagedMobileError({ message: error.message })
-              : text.errors.paymentFailed,
+            localizedMobileErrorMessage(error, text.errors.paymentFailed),
           );
         });
       }
@@ -13811,7 +14518,7 @@ function AndroidAccountSettings() {
       await refreshAccountData().catch(() => {});
     } catch (error) {
       setPaymentError(
-        error instanceof Error ? error.message : text.errors.paymentFailed,
+        localizedMobileErrorMessage(error, text.errors.paymentFailed),
       );
       window.setTimeout(
         () =>
@@ -13882,9 +14589,7 @@ function AndroidAccountSettings() {
           shouldTryLegacyPaymentVerify = true;
         } else {
           setPaymentError(
-            error instanceof Error
-              ? error.message
-              : text.errors.orderVerifyFailed,
+            localizedMobileErrorMessage(error, text.errors.orderVerifyFailed),
           );
         }
       } finally {
@@ -13915,9 +14620,7 @@ function AndroidAccountSettings() {
         return;
       } catch (error) {
         setPaymentError(
-          error instanceof Error
-            ? error.message
-            : text.errors.orderVerifyFailed,
+          localizedMobileErrorMessage(error, text.errors.orderVerifyFailed),
         );
       } finally {
         setPaymentBusy(false);
@@ -13956,9 +14659,7 @@ function AndroidAccountSettings() {
         await refreshAccountData().catch(() => {});
       } catch (error) {
         setPaymentError(
-          error instanceof Error
-            ? error.message
-            : text.errors.orderVerifyFailed,
+          localizedMobileErrorMessage(error, text.errors.orderVerifyFailed),
         );
       } finally {
         setPaymentBusy(false);
@@ -14002,7 +14703,7 @@ function AndroidAccountSettings() {
       await refreshAccountData().catch(() => {});
     } catch (error) {
       setPaymentError(
-        error instanceof Error ? error.message : text.errors.orderVerifyFailed,
+        localizedMobileErrorMessage(error, text.errors.orderVerifyFailed),
       );
     } finally {
       setPaymentBusy(false);
@@ -14026,7 +14727,7 @@ function AndroidAccountSettings() {
       await refreshCoupons().catch(() => {});
     } catch (error) {
       setPaymentError(
-        error instanceof Error ? error.message : text.errors.requestCancelled,
+        localizedMobileErrorMessage(error, text.errors.requestCancelled),
       );
     } finally {
       setPaymentBusy(false);
@@ -14049,7 +14750,7 @@ function AndroidAccountSettings() {
         ![404, 405, 501].includes(error.status || 0)
       ) {
         setPaymentError(
-          error instanceof Error ? error.message : text.errors.syncFailed,
+          localizedMobileErrorMessage(error, text.errors.syncFailed),
         );
         return;
       }
@@ -14060,9 +14761,7 @@ function AndroidAccountSettings() {
         setOrderDetail(detail);
       } catch (legacyError) {
         setPaymentError(
-          legacyError instanceof Error
-            ? legacyError.message
-            : text.errors.syncFailed,
+          localizedMobileErrorMessage(legacyError, text.errors.syncFailed),
         );
       }
     }
@@ -14086,9 +14785,7 @@ function AndroidAccountSettings() {
       await openExternalUrl(url);
     } catch (error) {
       setPaymentError(
-        error instanceof Error && error.message
-          ? localizeManagedMobileError({ message: error.message })
-          : text.errors.paymentFailed,
+        localizedMobileErrorMessage(error, text.errors.paymentFailed),
       );
     }
   }
@@ -14221,64 +14918,7 @@ function AndroidAccountSettings() {
         text={text}
         onRefresh={() => managed.bootstrap({ silent: true })}
       >
-        <section className={styles["section"]}>
-          <div className={styles["section-head"]}>
-            <h2>{text.account.adminOverview}</h2>
-            <span>
-              {isAdmin ? text.account.synced : text.account.waitingSync}
-            </span>
-          </div>
-          <div className={styles["meta-list"]}>
-            <div className={styles["meta-row"]}>
-              <span>{text.account.adminIdentity}</span>
-              <strong>
-                {workspace?.user?.username || workspace?.user?.email || "-"}
-              </strong>
-            </div>
-            <div className={styles["meta-row"]}>
-              <span>{text.account.currentGroup}</span>
-              <strong>{accountGroupName}</strong>
-            </div>
-            <div className={styles["meta-row"]}>
-              <span>{text.account.balance}</span>
-              <strong>{formatMoney(workspace?.user?.balance)}</strong>
-            </div>
-          </div>
-        </section>
-        <section className={styles["account-menu-group"]}>
-          <div className={styles["section-head"]}>
-            <h2>{text.account.adminAvailable}</h2>
-            <span>{text.account.adminReadonly}</span>
-          </div>
-          <div className={styles["account-menu-list"]}>
-            <AccountMenuItem
-              icon={<HistoryIcon />}
-              title={text.account.orders}
-              detail={text.account.adminCurrentAccountOnly}
-              onClick={() => navigate(Path.AccountOrders)}
-            />
-            <AccountMenuItem
-              icon={<ShareIcon />}
-              title={text.account.support}
-              detail={text.account.adminCurrentAccountOnly}
-              onClick={() => navigate(Path.AccountSupport)}
-            />
-            <AccountMenuItem
-              icon={<CopyIcon />}
-              title={text.account.balanceDetails}
-              detail={text.account.adminCurrentAccountOnly}
-              onClick={() => navigate(Path.AccountWallet)}
-            />
-          </div>
-        </section>
-        <section className={styles["section"]}>
-          <div className={styles["section-head"]}>
-            <h2>{text.account.adminNeedsBackend}</h2>
-          </div>
-          <p className={styles["empty-copy"]}>
-            {text.account.adminBackendHint}
-          </p>
-        </section>
+        <MobileAdminWorkspace client={adminClient} text={text} />
       </AndroidDetailShell>
     );
   }
@@ -15648,6 +16288,13 @@ function AndroidAccountSettings() {
     const latestArenaHistory = arenaOverview?.history?.[0];
     const inviteQualified = inviteCampaign?.qualified_count || 0;
     const inviteRank = inviteCampaign?.ranking?.rank;
+    const checkinStatus = welfareData?.checkinStatus;
+    const blindboxStatus = welfareData?.blindboxStatus;
+    const quizToday = welfareData?.quizToday;
+    const quizAnsweredCount =
+      quizToday?.questions.filter((question) =>
+        Number.isInteger(quizAnswers[question.id]),
+      ).length || 0;
 
     return (
       <AndroidDetailShell
@@ -15668,6 +16315,255 @@ function AndroidAccountSettings() {
           </div>
         ) : (
           <>
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfarePlayTitle}</h2>
+                <span>{text.account.welfarePlayHint}</span>
+              </div>
+              {playActionError && (
+                <div className={styles["form-error"]}>{playActionError}</div>
+              )}
+              {playActionMessage && (
+                <div className={styles["form-success"]}>
+                  {playActionMessage}
+                </div>
+              )}
+              <div className={styles["welfare-play-grid"]}>
+                <article className={styles["welfare-play-card"]}>
+                  <h3>{text.account.welfareCheckinTitle}</h3>
+                  {!checkinStatus ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareCheckinUnavailable}
+                    </p>
+                  ) : !checkinStatus.enabled ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareCheckinUnavailable}
+                    </p>
+                  ) : (
+                    <>
+                      <div className={styles["meta-list"]}>
+                        <div className={styles["meta-row"]}>
+                          <span>{text.account.welfareCheckinStreak}</span>
+                          <strong>{checkinStatus.streak_count || 0}</strong>
+                        </div>
+                        <div className={styles["meta-row"]}>
+                          <span>{text.account.welfareCheckinReward}</span>
+                          <strong>
+                            {formatMoney(checkinStatus.reward_amount)}
+                          </strong>
+                        </div>
+                      </div>
+                      {checkinStatus.checked_in_today ? (
+                        <p className={styles["empty-copy"]}>
+                          {text.account.welfareCheckinChecked}
+                        </p>
+                      ) : !checkinStatus.eligible ? (
+                        <p className={styles["empty-copy"]}>
+                          {text.account.welfareCheckinNotEligible}
+                        </p>
+                      ) : !checkinStatus.coupon_pool_ready ? (
+                        <p className={styles["empty-copy"]}>
+                          {text.account.welfareCheckinPoolUnavailable}
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles["primary-action"]}
+                          onClick={() => submitDailyCheckin()}
+                          disabled={playActionBusy !== null}
+                        >
+                          {playActionBusy === "checkin"
+                            ? text.loading
+                            : text.account.welfareCheckinAction}
+                        </button>
+                      )}
+                      {checkinStatus.can_makeup && checkinStatus.makeup_date ? (
+                        <button
+                          type="button"
+                          className={styles["wide-soft-action"]}
+                          onClick={() => submitDailyCheckin(true)}
+                          disabled={playActionBusy !== null}
+                        >
+                          {playActionBusy === "checkin-makeup"
+                            ? text.loading
+                            : text.account.welfareCheckinMakeup(
+                                checkinStatus.makeup_date,
+                              )}
+                        </button>
+                      ) : null}
+                    </>
+                  )}
+                </article>
+
+                <article className={styles["welfare-play-card"]}>
+                  <h3>{text.account.welfareBlindboxTitle}</h3>
+                  {!blindboxStatus ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareBlindboxUnavailable}
+                    </p>
+                  ) : !blindboxStatus.enabled ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareBlindboxUnavailable}
+                    </p>
+                  ) : (
+                    <>
+                      <div className={styles["meta-list"]}>
+                        <div className={styles["meta-row"]}>
+                          <span>{text.account.welfareBlindboxCost}</span>
+                          <strong>
+                            {formatMoney(blindboxStatus.cost_amount)}
+                          </strong>
+                        </div>
+                        <div className={styles["meta-row"]}>
+                          <span>{text.account.welfareBlindboxExpected}</span>
+                          <strong>
+                            {typeof blindboxStatus.expected_reward === "number"
+                              ? formatMoney(blindboxStatus.expected_reward)
+                              : text.notSynced}
+                          </strong>
+                        </div>
+                        <div className={styles["meta-row"]}>
+                          <span>{text.account.welfareBlindboxCount}</span>
+                          <strong>
+                            {blindboxStatus.opens_today || 0}
+                            {blindboxStatus.effective_limit ||
+                            blindboxStatus.daily_limit
+                              ? ` / ${
+                                  blindboxStatus.effective_limit ||
+                                  blindboxStatus.daily_limit
+                                }`
+                              : ""}
+                          </strong>
+                        </div>
+                      </div>
+                      {!blindboxStatus.coupon_pool_ready ? (
+                        <p className={styles["empty-copy"]}>
+                          {text.account.welfareBlindboxPoolUnavailable}
+                        </p>
+                      ) : !blindboxStatus.can_open ? (
+                        <p className={styles["empty-copy"]}>
+                          {text.account.welfareBlindboxLimit}
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles["primary-action"]}
+                          onClick={openDailyBlindbox}
+                          disabled={playActionBusy !== null}
+                        >
+                          {playActionBusy === "blindbox"
+                            ? text.loading
+                            : text.account.welfareBlindboxAction}
+                        </button>
+                      )}
+                    </>
+                  )}
+                </article>
+
+                <article className={styles["welfare-play-card"]}>
+                  <h3>{text.account.welfareQuizTitle}</h3>
+                  {!quizToday ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareQuizUnavailable}
+                    </p>
+                  ) : !quizToday.enabled ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareQuizUnavailable}
+                    </p>
+                  ) : quizToday.already_submitted ? (
+                    <>
+                      <p className={styles["empty-copy"]}>
+                        {text.account.welfareQuizSubmitted(
+                          quizToday.previous_score || 0,
+                          quizToday.previous_total ||
+                            quizToday.questions.length,
+                        )}
+                      </p>
+                      <small>
+                        {text.account.welfareRewardMessage(
+                          formatMoney(quizToday.previous_reward),
+                        )}
+                      </small>
+                    </>
+                  ) : !quizToday.coupon_pool_ready ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareQuizPoolUnavailable}
+                    </p>
+                  ) : !quizToday.questions.length ? (
+                    <p className={styles["empty-copy"]}>
+                      {text.account.welfareQuizNoQuestions}
+                    </p>
+                  ) : (
+                    <>
+                      <div className={styles["meta-row"]}>
+                        <span>
+                          {text.account.welfareQuizRewardPerCorrect(
+                            formatMoney(quizToday.reward_per_correct),
+                          )}
+                        </span>
+                        <strong>
+                          {text.account.welfareQuizAnswerProgress(
+                            quizAnsweredCount,
+                            quizToday.questions.length,
+                          )}
+                        </strong>
+                      </div>
+                      <div className={styles["welfare-play-quiz"]}>
+                        {quizToday.questions.map((question, questionIndex) => (
+                          <div
+                            key={question.id}
+                            className={styles["welfare-play-question"]}
+                          >
+                            <strong>
+                              {questionIndex + 1}. {question.prompt}
+                            </strong>
+                            <div className={styles["welfare-play-options"]}>
+                              {question.options.map((option, optionIndex) => (
+                                <button
+                                  type="button"
+                                  key={`${question.id}-${optionIndex}`}
+                                  className={clsx(
+                                    styles["welfare-play-option"],
+                                    {
+                                      [styles["active"]]:
+                                        quizAnswers[question.id] ===
+                                        optionIndex,
+                                    },
+                                  )}
+                                  onClick={() =>
+                                    setQuizAnswers((current) => ({
+                                      ...current,
+                                      [question.id]: optionIndex,
+                                    }))
+                                  }
+                                  disabled={playActionBusy !== null}
+                                >
+                                  {option}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className={styles["primary-action"]}
+                        onClick={submitDailyQuiz}
+                        disabled={
+                          playActionBusy !== null ||
+                          quizAnsweredCount !== quizToday.questions.length
+                        }
+                      >
+                        {playActionBusy === "quiz"
+                          ? text.account.welfareQuizSubmitting
+                          : text.account.welfareQuizSubmit}
+                      </button>
+                    </>
+                  )}
+                </article>
+              </div>
+            </section>
+
             <section className={styles["section"]}>
               <div className={styles["section-head"]}>
                 <h2>{text.account.welfareMemberBenefits}</h2>
@@ -16571,6 +17467,15 @@ function AndroidAccountSettings() {
             <strong>{formatMoney(workspace?.user?.frozen_balance)}</strong>
           </div>
         </div>
+        <div className={styles["inline-actions"]}>
+          <button onClick={() => void shareAppPoster()} disabled={appShareBusy}>
+            <ShareIcon />
+            <span>{appShareBusy ? text.loading : text.account.appShare}</span>
+          </button>
+        </div>
+        {appShareMessage && (
+          <div className={styles["sync-notice"]}>{appShareMessage}</div>
+        )}
       </section>
 
       <section className={styles["section"]}>
@@ -16605,97 +17510,132 @@ function AndroidAccountSettings() {
 
       <section className={styles["account-menu-group"]}>
         <div className={styles["section-head"]}>
-          <h2>{text.account.assetsAndRecords}</h2>
-          <span>{text.account.actualUsageHint}</span>
+          <h2>{text.account.accountHubs}</h2>
         </div>
         <div className={styles["account-menu-list"]}>
           <AccountMenuItem
-            icon={<ShareIcon />}
-            title={text.account.inviteGrowth}
-            detail={text.account.inviteGrowthHint}
-            onClick={() => navigate(Path.AccountInvite)}
-          />
-          <AccountMenuItem
             icon={<FavoriteIcon />}
-            title={text.account.welfare}
-            detail={text.account.welfareHint}
+            title={text.account.accountHubPlay}
+            detail={text.account.accountHubPlayHint}
             onClick={() => navigate(Path.AccountWelfare)}
           />
           <AccountMenuItem
-            icon={<HistoryIcon />}
-            title={text.account.orders}
-            detail={text.shortCount(accountData.orders?.length || 0)}
-            onClick={() => navigate(Path.AccountOrders)}
+            icon={<BotIcon />}
+            title={text.account.accountHubBilling}
+            detail={text.account.accountHubBillingHint}
+            onClick={() => navigate(Path.AccountPlans)}
           />
           <AccountMenuItem
-            icon={<CopyIcon />}
-            title={text.account.balanceDetails}
-            detail={formatMoney(workspace?.user?.balance)}
-            onClick={() => navigate(Path.AccountWallet)}
-          />
-          <AccountMenuItem
-            icon={<FavoriteIcon />}
-            title={text.account.coupons}
-            detail={text.account.couponAvailable}
-            onClick={() => {
-              setCouponStatus("available");
-              refreshCoupons("available").catch(() => {});
-              navigate(Path.AccountCoupons);
-            }}
+            icon={<ImageIcon />}
+            title={text.account.accountHubProjects}
+            detail={text.account.accountHubProjectsHint}
+            onClick={() => navigate(Path.ContentKit)}
           />
           <AccountMenuItem
             icon={<SettingsIcon />}
-            title={text.account.subscriptions}
-            detail={accountGroupName}
-            onClick={() => navigate(Path.AccountSubscriptions)}
+            title={text.account.accountHubHelp}
+            detail={text.account.accountHubHelpHint}
+            onClick={() => navigate(Path.AccountPermissions)}
           />
         </div>
       </section>
 
-      <section className={styles["account-menu-group"]}>
-        <div className={styles["section-head"]}>
-          <h2>{text.account.moreServices}</h2>
-          <span>{text.account.platformConnection}</span>
-        </div>
-        <div className={styles["account-menu-list"]}>
-          <AccountMenuItem
-            icon={<UploadIcon />}
-            title={text.account.permissions}
-            detail={text.account.permissionDetail}
-            onClick={() => navigate(Path.AccountPermissions)}
-          />
-          <AccountMenuItem
-            icon={<ReloadIcon />}
-            title={text.account.version}
-            detail={`${text.account.currentVersion} ${currentVersion}`}
-            onClick={() => navigate(Path.AccountUpdate)}
-          />
-          <AccountMenuItem
-            icon={<CopyIcon />}
-            title={text.account.feedback}
-            detail={text.account.feedback}
-            onClick={() => navigate(Path.AccountFeedback)}
-          />
-          <AccountMenuItem
-            icon={<ShareIcon />}
-            title={text.account.support}
-            detail={
-              supportLines.length
-                ? text.account.synced
-                : text.account.waitingSync
-            }
-            onClick={() => navigate(Path.AccountSupport)}
-          />
-          {isAdmin && (
+      <details className={styles["account-more-services"]}>
+        <summary>{text.account.moreServices}</summary>
+        <section className={styles["account-menu-group"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.assetsAndRecords}</h2>
+            <span>{text.account.actualUsageHint}</span>
+          </div>
+          <div className={styles["account-menu-list"]}>
+            <AccountMenuItem
+              icon={<ShareIcon />}
+              title={text.account.inviteGrowth}
+              detail={text.account.inviteGrowthHint}
+              onClick={() => navigate(Path.AccountInvite)}
+            />
+            <AccountMenuItem
+              icon={<FavoriteIcon />}
+              title={text.account.welfare}
+              detail={text.account.welfareHint}
+              onClick={() => navigate(Path.AccountWelfare)}
+            />
+            <AccountMenuItem
+              icon={<HistoryIcon />}
+              title={text.account.orders}
+              detail={text.shortCount(accountData.orders?.length || 0)}
+              onClick={() => navigate(Path.AccountOrders)}
+            />
+            <AccountMenuItem
+              icon={<CopyIcon />}
+              title={text.account.balanceDetails}
+              detail={formatMoney(workspace?.user?.balance)}
+              onClick={() => navigate(Path.AccountWallet)}
+            />
+            <AccountMenuItem
+              icon={<FavoriteIcon />}
+              title={text.account.coupons}
+              detail={text.account.couponAvailable}
+              onClick={() => {
+                setCouponStatus("available");
+                refreshCoupons("available").catch(() => {});
+                navigate(Path.AccountCoupons);
+              }}
+            />
             <AccountMenuItem
               icon={<SettingsIcon />}
-              title={text.account.adminCenter}
-              detail={text.account.adminRecognized}
-              onClick={() => navigate(Path.AccountAdmin)}
+              title={text.account.subscriptions}
+              detail={accountGroupName}
+              onClick={() => navigate(Path.AccountSubscriptions)}
             />
-          )}
-        </div>
-      </section>
+          </div>
+        </section>
+
+        <section className={styles["account-menu-group"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.moreServices}</h2>
+            <span>{text.account.platformConnection}</span>
+          </div>
+          <div className={styles["account-menu-list"]}>
+            <AccountMenuItem
+              icon={<UploadIcon />}
+              title={text.account.permissions}
+              detail={text.account.permissionDetail}
+              onClick={() => navigate(Path.AccountPermissions)}
+            />
+            <AccountMenuItem
+              icon={<ReloadIcon />}
+              title={text.account.version}
+              detail={`${text.account.currentVersion} ${currentVersion}`}
+              onClick={() => navigate(Path.AccountUpdate)}
+            />
+            <AccountMenuItem
+              icon={<CopyIcon />}
+              title={text.account.feedback}
+              detail={text.account.feedback}
+              onClick={() => navigate(Path.AccountFeedback)}
+            />
+            <AccountMenuItem
+              icon={<ShareIcon />}
+              title={text.account.support}
+              detail={
+                supportLines.length
+                  ? text.account.synced
+                  : text.account.waitingSync
+              }
+              onClick={() => navigate(Path.AccountSupport)}
+            />
+            {isAdmin && (
+              <AccountMenuItem
+                icon={<SettingsIcon />}
+                title={text.account.adminCenter}
+                detail={text.account.adminRecognized}
+                onClick={() => navigate(Path.AccountAdmin)}
+              />
+            )}
+          </div>
+        </section>
+      </details>
 
       {accountData.error && !accountData.updatedAt && (
         <div className={styles["form-error"]}>{accountData.error}</div>

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "@jest/globals";
 
 import { localizedMobileDisplay } from "../app/client/mobile-display";
+import { localizeManagedMobileError } from "../app/client/managed-mobile-i18n";
 
 describe("mobile dynamic display localization", () => {
   const record = {
@@ -29,5 +30,20 @@ describe("mobile dynamic display localization", () => {
         { locale: "cn" },
       ),
     ).toBe("gpt-image-private-alias");
+  });
+
+  test("maps coupon and plan error codes before showing an upstream message", () => {
+    expect(
+      localizeManagedMobileError({
+        code: "coupon_not_applicable",
+        message: "coupon cannot be used with this subscription",
+      }),
+    ).toMatch(/coupon|卡券/i);
+    expect(
+      localizeManagedMobileError({
+        code: "subscription_unavailable",
+        message: "subscription plan unavailable",
+      }),
+    ).toMatch(/plan|套餐/i);
   });
 });

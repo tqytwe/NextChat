@@ -166,6 +166,20 @@ export interface MobileProtocolEndpoint {
   remove_after?: string;
 }
 
+/**
+ * Server-authored mobile administration policy. The client must not infer
+ * administration access from an email address or a role string.
+ */
+export interface MobileAdminCapabilities {
+  available?: boolean;
+  api_base_path?: string;
+  step_up_path?: string;
+}
+
+export interface MobileProtocolCapabilities {
+  admin?: MobileAdminCapabilities;
+}
+
 export interface MobileProtocol {
   version: number;
   generated_at: string;
@@ -181,6 +195,7 @@ export interface MobileProtocol {
   task_statuses: MobileTaskStatus[];
   terminal_statuses: MobileTaskStatus[];
   endpoints: MobileProtocolEndpoint[];
+  capabilities?: MobileProtocolCapabilities;
   privacy?: Record<string, unknown>;
 }
 

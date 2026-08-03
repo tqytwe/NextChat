@@ -787,6 +787,7 @@ export async function managedJsonRequest<T>(
         message: payload?.message || bodyText,
         status: res.status,
         path,
+        code: payload?.code,
         category,
         requestId: res.requestId,
       }),

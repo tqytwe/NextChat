@@ -23,8 +23,12 @@ type FixtureOptions = {
   actualVersionCode?: number;
   outputVersion?: string;
   outputVersionCode?: number;
+  signingCertificateSha256?: string;
   publishedManifest?: Record<string, unknown>;
 };
+
+const releaseSigningCertificateSha256 =
+  "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e";
 
 function writeJson(file: string, value: unknown) {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -89,13 +93,25 @@ function createFixture(options: FixtureOptions = {}) {
   );
   chmodSync(aaptPath, 0o755);
 
+  const apksignerPath = path.join(toolsDir, "apksigner");
+  writeFileSync(
+    apksignerPath,
+    [
+      "#!/bin/sh",
+      `printf '%s\\n' "Signer #1 certificate SHA-256 digest: ${
+        options.signingCertificateSha256 ?? releaseSigningCertificateSha256
+      }"`,
+    ].join("\n"),
+  );
+  chmodSync(apksignerPath, 0o755);
+
   git(root, ["init", "--quiet"]);
   git(root, ["config", "user.email", "test@example.com"]);
   git(root, ["config", "user.name", "Release Test"]);
   git(root, ["add", "."]);
   git(root, ["commit", "--quiet", "-m", "release fixture"]);
 
-  return { aaptPath, manifestPath, publishedApk, root };
+  return { apksignerPath, aaptPath, manifestPath, publishedApk, root };
 }
 
 function packageRelease(
@@ -109,7 +125,12 @@ function packageRelease(
   return spawnSync(process.execPath, [packageScript], {
     cwd: fixture.root,
     encoding: "utf-8",
-    env: { ...releaseEnv, AAPT_PATH: fixture.aaptPath, ...env },
+    env: {
+      ...releaseEnv,
+      AAPT_PATH: fixture.aaptPath,
+      APKSIGNER_PATH: fixture.apksignerPath,
+      ...env,
+    },
   });
 }
 
@@ -136,6 +157,7 @@ describe("Android release package version gate", () => {
       latestVersion: "2.0.66",
       versionCode: 266,
       apkUrl: "/downloads/jisudengchat-android.apk?v=2.0.66-266",
+      signingCertificateSha256: releaseSigningCertificateSha256,
     });
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(
       "new release APK bytes",
@@ -244,6 +266,25 @@ describe("Android release package version gate", () => {
     expect(result.stderr).toContain(
       "APK output metadata does not match the release APK",
     );
+    expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
+    expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
+  });
+
+  test("rejects a release APK signed with an unexpected certificate before publishing", () => {
+    const fixture = createFixture({
+      signingCertificateSha256:
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    const originalManifest = readFileSync(fixture.manifestPath, "utf-8");
+    const originalApk = readFileSync(fixture.publishedApk, "utf-8");
+
+    const result = packageRelease(fixture, {
+      ANDROID_VERSION_NAME: "2.0.66",
+      ANDROID_VERSION_CODE: "266",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Release APK signing certificate expected");
     expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
   });
