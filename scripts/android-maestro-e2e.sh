@@ -4,8 +4,10 @@ set -euo pipefail
 SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/dell/Android/Sdk}}"
 ADB="${ADB:-$SDK_ROOT/platform-tools/adb}"
 MAESTRO="${MAESTRO:-/home/codex/.maestro/bin/maestro}"
-# The checked-in public artifact is the only installable release handoff.
-APK_PATH="${ANDROID_E2E_APK_PATH:-public/downloads/jisudengchat-android.apk}"
+# Maestro uses native, debug-only transport fixtures for deterministic 401/502
+# recovery coverage. Release acceptance is covered separately by the signed-APK
+# smoke test; never run these fixtures against the public handoff artifact.
+APK_PATH="${ANDROID_E2E_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
 PACKAGE_NAME="${ANDROID_PACKAGE_NAME:-com.jisudeng.chat}"
 MAIN_ACTIVITY="${ANDROID_MAIN_ACTIVITY:-.MainActivity}"
 REFERENCE_IMAGE="${ANDROID_E2E_REFERENCE_IMAGE:-public/android-chrome-192x192.png}"
@@ -20,7 +22,7 @@ for executable in "$ADB" "$MAESTRO"; do
   fi
 done
 
-if [[ "${ANDROID_E2E_BUILD:-0}" == "1" ]]; then
+if [[ "${ANDROID_E2E_BUILD:-1}" == "1" ]]; then
   : "${NEXT_PUBLIC_SUB2API_BASE_URL:?Set NEXT_PUBLIC_SUB2API_BASE_URL for the Android build.}"
   : "${NEXT_PUBLIC_NEXTCHAT_WEB_URL:?Set NEXT_PUBLIC_NEXTCHAT_WEB_URL for the Android build.}"
   corepack yarn android:sync
@@ -28,11 +30,17 @@ if [[ "${ANDROID_E2E_BUILD:-0}" == "1" ]]; then
 fi
 
 if [[ ! -f "$APK_PATH" ]]; then
-  echo "Debug APK not found: $APK_PATH" >&2
+  echo "E2E debug APK not found: $APK_PATH" >&2
   exit 1
 fi
 
-"$ADB" install -r "$APK_PATH" >/dev/null
+# Debug fixtures cannot replace the production-signed package in place. This
+# script is an isolated test-device workflow and clears app state below anyway,
+# so remove an incompatible signing lineage before installing the debug build.
+if ! "$ADB" install -r "$APK_PATH" >/dev/null 2>&1; then
+  "$ADB" uninstall "$PACKAGE_NAME" >/dev/null 2>&1 || true
+  "$ADB" install "$APK_PATH" >/dev/null
+fi
 "$ADB" push "$REFERENCE_IMAGE" /sdcard/Pictures/jisudeng-e2e-reference.png >/dev/null
 "$ADB" shell am broadcast \
   -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
