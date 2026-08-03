@@ -392,19 +392,10 @@ function assertEmbeddedAndroidBuildMatchesApk(apkRelease) {
     "Embedded Android web build config",
   );
 
-  const expectedCacheKey = `${apkRelease.version}-${apkRelease.versionCode}`;
-  let embeddedUrl;
-  try {
-    embeddedUrl = new URL(String(config.androidApkUrl || ""), "https://local");
-  } catch {
-    throw new Error("Embedded Android build config has an invalid APK URL");
-  }
-  if (
-    embeddedUrl.pathname !== "/downloads/jisudengchat-android.apk" ||
-    embeddedUrl.searchParams.get("v") !== expectedCacheKey
-  ) {
+  const expectedCanonicalUrl = `/downloads/jisudengchat-android.apk?v=${apkRelease.version}-${apkRelease.versionCode}`;
+  if (String(config.androidApkUrl || "") !== expectedCanonicalUrl) {
     throw new Error(
-      `Embedded Android APK URL must use canonical cache key ${expectedCacheKey}`,
+      `Embedded Android APK URL must be the relative canonical URL ${expectedCanonicalUrl}`,
     );
   }
 }

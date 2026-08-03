@@ -262,6 +262,23 @@ describe("Android release package version gate", () => {
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
   });
 
+  test("rejects an embedded APK URL on a different host", () => {
+    const fixture = createFixture({
+      embeddedApkUrl:
+        "https://wrong.example/downloads/jisudengchat-android.apk?v=2.0.66-266",
+    });
+
+    const result = packageRelease(fixture, {
+      ANDROID_VERSION_NAME: "2.0.66",
+      ANDROID_VERSION_CODE: "266",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Embedded Android APK URL must be the relative canonical URL",
+    );
+  });
+
   test("requires both release environment values during packaging", () => {
     const fixture = createFixture();
 

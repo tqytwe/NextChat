@@ -14,7 +14,7 @@ It must never be sent to testers or referenced by deployment instructions.
 Create a release with one command after setting the version environment values:
 
 ```bash
-ANDROID_VERSION_NAME=2.0.73 ANDROID_VERSION_CODE=273 yarn android:release
+ANDROID_VERSION_NAME=2.0.74 ANDROID_VERSION_CODE=274 yarn android:release
 ```
 
 The release packager verifies the APK package ID, version, signing certificate and
@@ -44,6 +44,10 @@ the following agree on both version name and version code:
 It also requires the embedded APK URL to use the canonical cache key
 `?v=<versionName>-<versionCode>`. This makes a stale web-resource version a
 release-time error rather than a user-visible version mismatch.
+
+The public Android download page refreshes its APK link and QR code from the
+same release manifest. It accepts only the relative canonical APK path, so a
+stale build variable or an unexpected download host cannot redirect users.
 
 For a mandatory update, publish `minSupportedVersionCode` in
 `public/downloads/android-version.json`. Do not use a semantic string version

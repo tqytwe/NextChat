@@ -8,6 +8,7 @@ import {
   formatAndroidReleaseVersion,
   normalizeAndroidReleaseVersion,
 } from "../app/client/android-release-version";
+import { androidReleaseMetadataFromEnv } from "../app/config/build";
 
 describe("Android release version contract", () => {
   const installed = normalizeAndroidReleaseVersion({
@@ -126,5 +127,16 @@ describe("Android release version contract", () => {
     expect(buildConfig).not.toContain(
       "const androidVersion = process.env.NEXT_PUBLIC_ANDROID_VERSION ?? version",
     );
+  });
+
+  test("gives ANDROID release metadata precedence over stale public build values", () => {
+    expect(
+      androidReleaseMetadataFromEnv({
+        ANDROID_VERSION_NAME: "2.0.74",
+        ANDROID_VERSION_CODE: "274",
+        NEXT_PUBLIC_ANDROID_VERSION: "2.16.1",
+        NEXT_PUBLIC_ANDROID_VERSION_CODE: "21601",
+      }),
+    ).toEqual({ androidVersion: "2.0.74", androidVersionCode: 274 });
   });
 });

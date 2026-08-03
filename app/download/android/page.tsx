@@ -2,9 +2,8 @@ import type { Metadata } from "next";
 import QRCode from "qrcode";
 
 import { getBuildConfig } from "@/app/config/build";
-import BotIcon from "@/app/icons/bot.svg";
-import DownloadIcon from "@/app/icons/download.svg";
 
+import { AndroidDownloadActions } from "./android-download-actions";
 import { AndroidManifestDetails } from "./android-manifest-details";
 import styles from "./android-download.module.scss";
 
@@ -54,33 +53,11 @@ export default async function AndroidDownloadPage() {
 
   return (
     <main className={styles["page"]}>
-      <section className={styles["hero"]}>
-        <div className={styles["hero-copy"]}>
-          <div className={styles["brand-row"]}>
-            <span className={styles["app-icon"]}>
-              <BotIcon />
-            </span>
-            <span>JisudengChat Android</span>
-          </div>
-          <h1>Android 版下载</h1>
-          <p>使用平台账号登录，自动同步余额、分组、API Key 和可用模型。</p>
-          <div className={styles["actions"]}>
-            <a className={styles["primary-action"]} href={apkUrl}>
-              <DownloadIcon />
-              <span>下载 APK</span>
-            </a>
-            <a className={styles["secondary-action"]} href="/">
-              打开网页版
-            </a>
-          </div>
-        </div>
-
-        <div className={styles["qr-card"]}>
-          <img src={qrImage} alt="JisudengChat Android APK 下载二维码" />
-          <strong>手机扫码下载</strong>
-          <span>版本信息以更新清单为准</span>
-        </div>
-      </section>
+      <AndroidDownloadActions
+        manifestFetchUrl={rawManifestUrl}
+        fallbackApkUrl={apkUrl}
+        fallbackQrImage={qrImage}
+      />
 
       <AndroidManifestDetails
         manifestFetchUrl={rawManifestUrl}

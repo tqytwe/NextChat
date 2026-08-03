@@ -1,6 +1,27 @@
 import tauriConfig from "../../src-tauri/tauri.conf.json";
 import { DEFAULT_INPUT_TEMPLATE } from "../constant";
 
+export function androidReleaseMetadataFromEnv(
+  environment: Record<string, string | undefined> = process.env,
+) {
+  // Gradle and the release packager use ANDROID_* as their source of truth.
+  // Keep the embedded web bundle on exactly the same authority.
+  const configuredAndroidVersion =
+    environment.ANDROID_VERSION_NAME ??
+    environment.NEXT_PUBLIC_ANDROID_VERSION ??
+    "";
+  const androidVersion = configuredAndroidVersion.replace(/^v/i, "");
+  const configuredAndroidVersionCode =
+    environment.ANDROID_VERSION_CODE ??
+    environment.NEXT_PUBLIC_ANDROID_VERSION_CODE ??
+    "";
+  const androidVersionCode = /^\d+$/.test(configuredAndroidVersionCode)
+    ? Number(configuredAndroidVersionCode)
+    : undefined;
+
+  return { androidVersion, androidVersionCode };
+}
+
 export const getBuildConfig = () => {
   if (typeof process === "undefined") {
     throw Error(
@@ -22,20 +43,8 @@ export const getBuildConfig = () => {
       ? ""
       : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
   const version = "v" + tauriConfig.package.version;
-  // Android release metadata is independent from the embedded web bundle.
-  // Release builds receive these values from Gradle's release environment.
-  const configuredAndroidVersion =
-    process.env.NEXT_PUBLIC_ANDROID_VERSION ??
-    process.env.ANDROID_VERSION_NAME ??
-    "";
-  const androidVersion = configuredAndroidVersion.replace(/^v/i, "");
-  const configuredAndroidVersionCode =
-    process.env.NEXT_PUBLIC_ANDROID_VERSION_CODE ??
-    process.env.ANDROID_VERSION_CODE ??
-    "";
-  const androidVersionCode = /^\d+$/.test(configuredAndroidVersionCode)
-    ? Number(configuredAndroidVersionCode)
-    : undefined;
+  const { androidVersion, androidVersionCode } =
+    androidReleaseMetadataFromEnv();
   const androidReleaseCacheKey =
     androidVersionCode && androidVersion
       ? `${androidVersion}-${androidVersionCode}`
@@ -78,11 +87,13 @@ export const getBuildConfig = () => {
       process.env.NEXT_PUBLIC_SUB2API_BASE_URL ?? "https://api.jisudeng.com",
     nextchatWebUrl:
       process.env.NEXT_PUBLIC_NEXTCHAT_WEB_URL ?? "https://www.jisudeng.com",
-    androidApkUrl:
-      process.env.NEXT_PUBLIC_ANDROID_APK_URL ?? defaultAndroidApkUrl,
-    androidManifestUrl:
-      process.env.NEXT_PUBLIC_ANDROID_MANIFEST_URL ??
-      "/downloads/android-version.json",
+    androidApkUrl: isAndroidApp
+      ? defaultAndroidApkUrl
+      : process.env.NEXT_PUBLIC_ANDROID_APK_URL ?? defaultAndroidApkUrl,
+    androidManifestUrl: isAndroidApp
+      ? "/downloads/android-version.json"
+      : process.env.NEXT_PUBLIC_ANDROID_MANIFEST_URL ??
+        "/downloads/android-version.json",
     androidVersion,
     androidVersionCode,
     androidApkSha256: process.env.NEXT_PUBLIC_ANDROID_APK_SHA256 ?? "",
