@@ -6,17 +6,20 @@ export function androidReleaseMetadataFromEnv(
 ) {
   // Gradle and the release packager use ANDROID_* as their source of truth.
   // Keep the embedded web bundle on exactly the same authority.
-  const configuredAndroidVersion =
-    environment.ANDROID_VERSION_NAME ??
-    environment.NEXT_PUBLIC_ANDROID_VERSION ??
-    "";
-  const androidVersion = configuredAndroidVersion.replace(/^v/i, "");
-  const configuredAndroidVersionCode =
-    environment.ANDROID_VERSION_CODE ??
-    environment.NEXT_PUBLIC_ANDROID_VERSION_CODE ??
-    "";
-  const androidVersionCode = /^\d+$/.test(configuredAndroidVersionCode)
-    ? Number(configuredAndroidVersionCode)
+  const configuredAndroidVersion = [
+    environment.ANDROID_VERSION_NAME,
+    environment.NEXT_PUBLIC_ANDROID_VERSION,
+  ].find((value) => String(value || "").trim()) || "";
+  const androidVersion = String(configuredAndroidVersion)
+    .trim()
+    .replace(/^v/i, "");
+  const configuredAndroidVersionCode = [
+    environment.ANDROID_VERSION_CODE,
+    environment.NEXT_PUBLIC_ANDROID_VERSION_CODE,
+  ].find((value) => String(value || "").trim()) || "";
+  const normalizedVersionCode = String(configuredAndroidVersionCode).trim();
+  const androidVersionCode = /^\d+$/.test(normalizedVersionCode)
+    ? Number(normalizedVersionCode)
     : undefined;
 
   return { androidVersion, androidVersionCode };
@@ -42,7 +45,11 @@ export const getBuildConfig = () => {
     rawBasePath.trim() === "" || rawBasePath.trim() === "/"
       ? ""
       : "/" + rawBasePath.trim().replace(/^\/+|\/+$/g, "");
-  const version = "v" + tauriConfig.package.version;
+  // `webVersion` belongs to the embedded NextChat bundle. Keep `version` as a
+  // compatibility alias for desktop/Tauri callers, but never use it as the
+  // installed Android version. Android release metadata has its own explicit
+  // names so a new mobile screen cannot accidentally pick the web value.
+  const webVersion = "v" + tauriConfig.package.version;
   const { androidVersion, androidVersionCode } =
     androidReleaseMetadataFromEnv();
   const androidReleaseCacheKey =
@@ -78,7 +85,8 @@ export const getBuildConfig = () => {
   })();
 
   return {
-    version,
+    version: webVersion,
+    webVersion,
     ...commitInfo,
     buildMode,
     isApp,
@@ -94,6 +102,9 @@ export const getBuildConfig = () => {
       ? "/downloads/android-version.json"
       : process.env.NEXT_PUBLIC_ANDROID_MANIFEST_URL ??
         "/downloads/android-version.json",
+    androidReleaseVersion: androidVersion,
+    // Deprecated compatibility alias. New Android code must use
+    // androidReleaseVersion or native package metadata.
     androidVersion,
     androidVersionCode,
     androidApkSha256: process.env.NEXT_PUBLIC_ANDROID_APK_SHA256 ?? "",

@@ -62,7 +62,7 @@ export default async function AndroidDownloadPage() {
       <AndroidManifestDetails
         manifestFetchUrl={rawManifestUrl}
         manifestHref={manifestUrl}
-        fallbackVersion={config.androidVersion}
+        fallbackVersion={config.androidReleaseVersion}
         fallbackSize={config.androidApkSize}
         fallbackSha256={config.androidApkSha256}
         fallbackNotes={notes}

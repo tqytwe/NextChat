@@ -127,6 +127,25 @@ describe("Android release version contract", () => {
     expect(buildConfig).not.toContain(
       "const androidVersion = process.env.NEXT_PUBLIC_ANDROID_VERSION ?? version",
     );
+    expect(buildConfig).toContain("webVersion");
+    expect(buildConfig).toContain("androidReleaseVersion");
+  });
+
+  test("keeps the mobile UI away from the generic embedded web version", () => {
+    const mobileApp = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.tsx"),
+      "utf8",
+    );
+
+    expect(mobileApp).not.toContain("clientConfig?.version");
+    expect(mobileApp).not.toContain("getClientConfig()?.version");
+
+    const mobileText = readFileSync(
+      resolve(process.cwd(), "app/client/managed-mobile-i18n.ts"),
+      "utf8",
+    );
+    expect(mobileText).toContain('version: "APK 版本"');
+    expect(mobileText).toContain('version: "APK version"');
   });
 
   test("gives ANDROID release metadata precedence over stale public build values", () => {
@@ -136,6 +155,17 @@ describe("Android release version contract", () => {
         ANDROID_VERSION_CODE: "274",
         NEXT_PUBLIC_ANDROID_VERSION: "2.16.1",
         NEXT_PUBLIC_ANDROID_VERSION_CODE: "21601",
+      }),
+    ).toEqual({ androidVersion: "2.0.74", androidVersionCode: 274 });
+  });
+
+  test("falls through an empty Android override instead of publishing blank metadata", () => {
+    expect(
+      androidReleaseMetadataFromEnv({
+        ANDROID_VERSION_NAME: "  ",
+        ANDROID_VERSION_CODE: "",
+        NEXT_PUBLIC_ANDROID_VERSION: " v2.0.74 ",
+        NEXT_PUBLIC_ANDROID_VERSION_CODE: " 274 ",
       }),
     ).toEqual({ androidVersion: "2.0.74", androidVersionCode: 274 });
   });

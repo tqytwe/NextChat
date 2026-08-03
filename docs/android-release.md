@@ -30,8 +30,10 @@ compared only by `versionCode`; an APK with the same code is never treated as an
 update.
 
 The NextChat/Tauri version embedded in the web resources is a separate web
-bundle version. It must never be shown as the installed APK version or used for
-APK update comparisons.
+bundle version (`webVersion`, retained as the legacy `version` field for
+desktop callers). The Android build config uses the explicit
+`androidReleaseVersion`/`androidVersionCode` fields. The web value must never be
+shown as the installed APK version or used for APK update comparisons.
 
 Before replacing the canonical APK, the packager rejects a build unless all of
 the following agree on both version name and version code:
@@ -39,11 +41,16 @@ the following agree on both version name and version code:
 - the Gradle output metadata;
 - the actual signed APK manifest;
 - `ANDROID_VERSION_NAME` and `ANDROID_VERSION_CODE`;
-- the Android metadata embedded in `assets/public/index.html`.
+- the Android metadata embedded in `assets/public/index.html`
+  (`androidReleaseVersion` and `androidVersionCode`).
 
 It also requires the embedded APK URL to use the canonical cache key
-`?v=<versionName>-<versionCode>`. This makes a stale web-resource version a
-release-time error rather than a user-visible version mismatch.
+`?v=<versionName>-<versionCode>`. This makes a stale web-resource Android
+version a release-time error rather than a user-visible version mismatch.
+
+The generated manifest records `builtFromCommit` (also retained as the legacy
+`sourceCommit` field) so the source revision used for the APK cannot be confused
+with the later Git commit that records the release artifact.
 
 The public Android download page refreshes its APK link and QR code from the
 same release manifest. It accepts only the relative canonical APK path, so a

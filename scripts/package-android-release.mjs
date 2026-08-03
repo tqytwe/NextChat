@@ -378,8 +378,8 @@ function assertEmbeddedAndroidBuildMatchesApk(apkRelease) {
 
   const embeddedRelease = {
     version: normalizeVersionName(
-      config.androidVersion,
-      "Embedded Android build config",
+      config.androidReleaseVersion,
+      "Embedded Android build config androidReleaseVersion",
     ).replace(/^v/i, ""),
     versionCode: normalizeVersionCode(
       config.androidVersionCode,
@@ -507,7 +507,11 @@ const manifest = {
   version: apkRelease.version,
   latestVersion: apkRelease.version,
   versionCode: apkRelease.versionCode,
+  // This is the source commit used to build the APK. The release commit that
+  // later records the APK/manifest is intentionally different and must not be
+  // mistaken for the build input.
   sourceCommit,
+  builtFromCommit: sourceCommit,
   packageName: androidPackageName,
   signingCertificateSha256,
   apkUrl: canonicalApkUrl,

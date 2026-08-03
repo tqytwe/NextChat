@@ -26,6 +26,7 @@ type FixtureOptions = {
   embeddedVersion?: string;
   embeddedVersionCode?: number;
   embeddedApkUrl?: string;
+  includeAndroidReleaseVersion?: boolean;
   signingCertificateSha256?: string;
   publishedManifest?: Record<string, unknown>;
 };
@@ -95,9 +96,13 @@ function createFixture(options: FixtureOptions = {}) {
     `/downloads/jisudengchat-android.apk?v=${embeddedVersion}-${embeddedVersionCode}`;
   const embeddedConfig = JSON.stringify({
     // The web bundle version is intentionally independent from Android release
-    // metadata. The release gate validates only androidVersion/versionCode.
+    // metadata. The release gate validates only Android release fields.
     version: "v2.16.1",
+    webVersion: "v2.16.1",
     isAndroidApp: true,
+    ...(options.includeAndroidReleaseVersion === false
+      ? {}
+      : { androidReleaseVersion: embeddedVersion }),
     androidVersion: embeddedVersion,
     androidVersionCode: embeddedVersionCode,
     androidApkUrl: embeddedApkUrl,
@@ -183,6 +188,7 @@ describe("Android release package version gate", () => {
       latestVersion: "2.0.66",
       versionCode: 266,
       apkUrl: "/downloads/jisudengchat-android.apk?v=2.0.66-266",
+      builtFromCommit: expect.any(String),
       signingCertificateSha256: releaseSigningCertificateSha256,
     });
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(
@@ -277,6 +283,22 @@ describe("Android release package version gate", () => {
     expect(result.stderr).toContain(
       "Embedded Android APK URL must be the relative canonical URL",
     );
+  });
+
+  test("rejects an embedded web build without explicit Android release metadata", () => {
+    const fixture = createFixture({ includeAndroidReleaseVersion: false });
+    const originalManifest = readFileSync(fixture.manifestPath, "utf-8");
+    const originalApk = readFileSync(fixture.publishedApk, "utf-8");
+
+    const result = packageRelease(fixture, {
+      ANDROID_VERSION_NAME: "2.0.66",
+      ANDROID_VERSION_CODE: "266",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("androidReleaseVersion is missing versionName");
+    expect(readFileSync(fixture.manifestPath, "utf-8")).toBe(originalManifest);
+    expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(originalApk);
   });
 
   test("requires both release environment values during packaging", () => {
