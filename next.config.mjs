@@ -4,11 +4,14 @@ import path from "path";
 const mode = process.env.BUILD_MODE ?? "standalone";
 console.log("[Next] build mode", mode);
 
-const disableChunk = !!process.env.DISABLE_CHUNK || mode === "export";
-console.log("[Next] build with chunk: ", !disableChunk);
-
 const isAndroidBuild =
   process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
+// Next 14 emits an invalid `<script src="*.css">` when LimitChunkCountPlugin
+// collapses an export build. Android can load the normal static asset graph,
+// so only retain the legacy single-chunk behavior outside the Android build.
+const disableChunk =
+  !!process.env.DISABLE_CHUNK || (mode === "export" && !isAndroidBuild);
+console.log("[Next] build with chunk: ", !disableChunk);
 const sub2apiManagedMode = ["1", "true", "yes", "on"].includes(
   (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
 );

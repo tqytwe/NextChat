@@ -568,6 +568,27 @@ describe("managed NextChat API requests", () => {
     expect(window.fetch).not.toHaveBeenCalled();
   });
 
+  test("does not replay Live call creation even when it carries an idempotency key", async () => {
+    jest.mocked(Capacitor.getPlatform).mockReturnValue("android");
+    jest.mocked(CapacitorHttp.request).mockRejectedValueOnce(new Error("timeout"));
+
+    await expect(
+      managedRequestText(
+        "https://api.jisudeng.com",
+        "/v1/live",
+        { method: "POST", body: "{}" },
+        new Headers({
+          Authorization: "Bearer managed-key",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "live-call-1",
+        }),
+      ),
+    ).rejects.toThrow("请求超时");
+
+    expect(CapacitorHttp.request).toHaveBeenCalledTimes(1);
+    expect(window.fetch).not.toHaveBeenCalled();
+  });
+
   test("uses a bounded server retry hint for an idempotent native replay", () => {
     expect(
       managedRetryAfterMilliseconds(

@@ -213,10 +213,12 @@ export interface MobileProtocolSearchCapability {
   provider?: string;
   execution_state?: "canonical" | "legacy" | "observe" | "disabled" | string;
   default_enabled?: boolean;
-  user_opt_in_required?: boolean;
+  model_tool_call_required?: boolean;
   result_fields?: string[];
   client_request_id_header?: string;
   response_request_id_field?: string;
+  tool_call_id_field?: string;
+  response_tool_call_id_field?: string;
   max_query_runes?: number;
   max_results?: number;
   timeout_ms?: number;

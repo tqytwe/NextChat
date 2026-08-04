@@ -3,7 +3,6 @@ import {
   ManagedApiError,
   ManagedTransportError,
 } from "./managed-nextchat";
-import type { MobileProtocol } from "./mobile-platform";
 
 export interface MobileWebSearchSource {
   title: string;
@@ -17,6 +16,7 @@ export interface MobileWebSearchResponse {
   query: string;
   provider: string;
   request_id: string;
+  tool_call_id: string;
   results: MobileWebSearchSource[];
 }
 
@@ -24,26 +24,6 @@ export type MobileWebSearchError =
   | ManagedApiError
   | ManagedTransportError
   | Error;
-
-export function mobileWebSearchCapability(
-  protocol: Pick<MobileProtocol, "capabilities"> | null | undefined,
-) {
-  const capability = protocol?.capabilities?.search;
-  const grant = protocol?.capabilities?.operation_grants?.find(
-    (item) => item.id === "mobile.search.web",
-  );
-  return {
-    configured: Boolean(capability?.configured),
-    enabled: Boolean(
-      capability?.configured &&
-        capability.execution_state === "canonical" &&
-        grant?.granted &&
-        grant.lifecycle === "canonical",
-    ),
-    provider: String(capability?.provider || ""),
-    optInRequired: capability?.user_opt_in_required !== false,
-  };
-}
 
 function normalizeSource(value: unknown): MobileWebSearchSource | null {
   if (!value || typeof value !== "object") return null;
@@ -82,6 +62,7 @@ export function normalizeMobileWebSearchResponse(
     query: String(body.query || "").trim(),
     provider: String(body.provider || "").trim(),
     request_id: String(body.request_id || body.requestId || "").trim(),
+    tool_call_id: String(body.tool_call_id || body.toolCallId || "").trim(),
     results,
   };
 }
@@ -92,6 +73,7 @@ export async function searchMobileWeb(
   query: string,
   options: {
     requestId: string;
+    toolCallId?: string;
     locale?: string;
     signal?: AbortSignal;
   },
@@ -118,14 +100,19 @@ export async function searchMobileWeb(
       },
       body: JSON.stringify({
         query: cleanQuery,
-        opt_in: true,
+        tool_call_id: options.toolCallId?.trim().slice(0, 256) || undefined,
         client_request_id: requestId,
       }),
       signal: options.signal,
     },
     accessToken,
   );
-  return normalizeMobileWebSearchResponse(response);
+  const normalized = normalizeMobileWebSearchResponse(response);
+  const toolCallID = options.toolCallId?.trim();
+  if (toolCallID && normalized.tool_call_id !== toolCallID) {
+    throw new Error("Web search response did not match the model tool call.");
+  }
+  return normalized;
 }
 
 export function formatMobileWebSearchContext(

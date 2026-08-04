@@ -10,7 +10,6 @@ jest.unstable_mockModule("@/app/client/managed-nextchat", () => ({
 
 const {
   formatMobileWebSearchContext,
-  mobileWebSearchCapability,
   normalizeMobileWebSearchResponse,
   searchMobileWeb,
 } = await import("../app/client/mobile-web-search");
@@ -22,44 +21,9 @@ describe("mobile web search", () => {
       query: "latest models",
       provider: "exa",
       request_id: "search-request-1",
+      tool_call_id: "tool-call-1",
       results: [],
     });
-  });
-
-  test("requires a server-declared canonical capability", () => {
-    expect(
-      mobileWebSearchCapability({
-        capabilities: {
-          search: {
-            configured: true,
-            execution_state: "observe",
-          },
-          operation_grants: [
-            { id: "mobile.search.web", granted: false, lifecycle: "observe" },
-          ],
-        },
-      }),
-    ).toMatchObject({ configured: true, enabled: false });
-
-    expect(
-      mobileWebSearchCapability({
-        capabilities: {
-          search: {
-            configured: true,
-            provider: "exa",
-            execution_state: "canonical",
-            user_opt_in_required: true,
-          },
-          operation_grants: [
-            {
-              id: "mobile.search.web",
-              granted: true,
-              lifecycle: "canonical",
-            },
-          ],
-        },
-      }),
-    ).toMatchObject({ configured: true, enabled: true, provider: "exa" });
   });
 
   test("normalizes and formats cited sources without exposing secret fields", () => {
@@ -67,6 +31,7 @@ describe("mobile web search", () => {
       query: "最新模型",
       provider: "exa",
       request_id: "req-42",
+      tool_call_id: "tool-42",
       results: [
         {
           title: "Model documentation",
@@ -110,13 +75,17 @@ describe("mobile web search", () => {
     expect(context.length).toBeLessThanOrEqual(6000);
   });
 
-  test("sends one stable idempotency key with the search request", async () => {
+  test("sends one stable idempotency key only when a model tool call executes", async () => {
     await expect(
       searchMobileWeb(
         "https://api.jisudeng.com",
         "mobile-access-token",
         "latest models",
-        { requestId: "search-request-1", locale: "zh-CN" },
+        {
+          requestId: "search-request-1",
+          toolCallId: "tool-call-1",
+          locale: "zh-CN",
+        },
       ),
     ).resolves.toMatchObject({ request_id: "search-request-1" });
 
@@ -133,8 +102,27 @@ describe("mobile web search", () => {
     expect(headers.get("Idempotency-Key")).toBe("search-request-1");
     expect(JSON.parse(String(request.body))).toMatchObject({
       query: "latest models",
-      opt_in: true,
+      tool_call_id: "tool-call-1",
       client_request_id: "search-request-1",
     });
+  });
+
+  test("rejects a response for a different model tool call", async () => {
+    managedJsonRequest.mockResolvedValueOnce({
+      query: "latest models",
+      provider: "duckduckgo",
+      request_id: "search-request-1",
+      tool_call_id: "other-call",
+      results: [],
+    });
+
+    await expect(
+      searchMobileWeb(
+        "https://api.jisudeng.com",
+        "mobile-access-token",
+        "latest models",
+        { requestId: "search-request-1", toolCallId: "tool-call-1" },
+      ),
+    ).rejects.toThrow("did not match the model tool call");
   });
 });

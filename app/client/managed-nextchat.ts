@@ -139,6 +139,12 @@ export interface ManagedWorkspaceModel {
   sort_order?: number;
   effective_input_price?: number;
   effective_output_price?: number;
+  tool_capabilities?: {
+    function_calling?: boolean;
+    tool_choice?: boolean;
+    web_search?: boolean;
+    live?: boolean;
+  };
   image_capabilities?: {
     operations?: string[];
     supported_sizes?: string[];
@@ -157,6 +163,8 @@ export interface ManagedWorkspaceGroup {
   rate_multiplier?: number;
   sort_order?: number;
   is_current?: boolean;
+  /** Server-declared group authorization for the managed /v1/live gateway. */
+  live_available?: boolean;
   models?: ManagedWorkspaceModel[];
 }
 
@@ -637,8 +645,15 @@ export async function managedRequestText(
   const method = (init.method || "GET").toUpperCase();
   const signal = init.signal;
   const diagnosticPath = sanitizedDiagnosticPath(path);
+  // Live creates carry an idempotency key for server-side audit and future
+  // replay support, but the current upstream call allocation is not a
+  // replayable operation. Retrying it here could create a second live call
+  // after the first response was lost in transit.
+  const nonReplayableCreate =
+    method === "POST" && /(?:^|\/)v1\/live(?:\/|$)/.test(path);
   const idempotent =
-    method === "GET" || method === "HEAD" || headers.has("Idempotency-Key");
+    !nonReplayableCreate &&
+    (method === "GET" || method === "HEAD" || headers.has("Idempotency-Key"));
   const native = isAndroidNativeHttpAvailable();
   const nativeAttempts = native
     ? idempotent

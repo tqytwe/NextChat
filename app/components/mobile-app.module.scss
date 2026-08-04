@@ -1498,6 +1498,36 @@
   opacity: 0.52;
 }
 
+.voice-live-action {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--ios-blue);
+  color: white;
+  font-size: 14px;
+  font-weight: 850;
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.voice-live-unavailable {
+  color: var(--ios-gray);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .voice-settings-state {
   justify-content: space-between;
 

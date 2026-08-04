@@ -73,6 +73,22 @@ describe("mobile app backend alignment", () => {
     expect(chat).toContain("asset_ids: readyAssetIds");
   });
 
+  test("delegates web-search decisions to a capable model without keyword preflight", () => {
+    const chat = source.slice(
+      source.indexOf("function AndroidChat()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    expect(chat).toContain("modelSupportsWebSearch");
+    expect(chat).toContain("runMobileWebSearchToolLoop");
+    expect(chat).toContain("MOBILE_WEB_SEARCH_TOOL");
+    expect(chat).toContain("searchMobileWeb(");
+    expect(chat).not.toContain("webSearchEnabled");
+    expect(chat).not.toContain("fetchWebSearchContext");
+    expect(chat).not.toContain('aria-pressed={webSearchEnabled}');
+    expect(chat).not.toContain("isExplicitMobileWebSearchRequest");
+    expect(chat).not.toContain("webSearchUnsupportedModel");
+  });
+
   test("keeps chat images and plain-text files on-device when cloud materials fail", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
@@ -297,6 +313,18 @@ describe("mobile app backend alignment", () => {
     expect(accountAdminRoute).toContain("{isAdmin ? (");
     expect(accountAdminRoute).toContain("<MobileAdminWorkspace");
     expect(accountAdminRoute).toContain("text.account.adminUnavailable");
+  });
+
+  test("injects web search only when both the model and server contract allow it", () => {
+    const chat = source.slice(
+      source.indexOf("function AndroidChat()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+
+    expect(chat).toContain("isMobileWebSearchAvailable(");
+    expect(chat).toContain("managed.mobileProtocol");
+    expect(chat).toContain("modelSupportsWebSearch && webSearchServiceAvailable");
+    expect(chat).toContain("text.chat.webSearchUnavailable");
   });
 
   test("checks and acknowledges admin compliance before rendering protected data", () => {

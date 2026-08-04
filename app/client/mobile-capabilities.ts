@@ -81,3 +81,20 @@ export function isMobileAdminComplianceAvailable(
     capability.compliancePath === CANONICAL_MOBILE_ADMIN_COMPLIANCE_PATH
   );
 }
+
+/**
+ * Web search is a server-owned model tool. The client only exposes it when
+ * the protocol declares a canonical, enabled service; model-specific support
+ * is checked separately from the workspace catalog at send time.
+ */
+export function isMobileWebSearchAvailable(
+  protocol?: Pick<MobileProtocol, "capabilities"> | null,
+) {
+  const search = protocol?.capabilities?.search;
+  return Boolean(
+    search?.configured === true &&
+      search.execution_state === "canonical" &&
+      search.default_enabled === true &&
+      search.model_tool_call_required === true,
+  );
+}

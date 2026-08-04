@@ -110,7 +110,10 @@ import {
   resolveMobileChatPreference,
   updateMobileChatPreference,
 } from "../client/mobile-chat-preference";
-import { isMobileAdminAvailable } from "../client/mobile-capabilities";
+import {
+  isMobileAdminAvailable,
+  isMobileWebSearchAvailable,
+} from "../client/mobile-capabilities";
 import {
   formatUsageUSD,
   mergeSubscriptionProgress,
@@ -180,11 +183,18 @@ import {
   createMobilePlatformClient,
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
+import { searchMobileWeb } from "../client/mobile-web-search";
 import {
-  formatMobileWebSearchContext,
-  mobileWebSearchCapability,
-  searchMobileWeb,
-} from "../client/mobile-web-search";
+  createMobileCompletionStreamAccumulator,
+  formatMobileWebSearchSources,
+  MOBILE_WEB_SEARCH_TOOL,
+  runMobileWebSearchToolLoop,
+} from "../client/mobile-chat-tools";
+import {
+  isMobileLiveWebRTCAvailable,
+  startMobileLiveSession,
+} from "../client/mobile-live";
+import type { MobileLiveSession, MobileLiveState } from "../client/mobile-live";
 import {
   inferLocalChatAttachmentMimeType,
   isLocalChatImage,
@@ -1135,6 +1145,14 @@ type MobileVoiceConversationPreferences = {
   wakeWordEnabled: boolean;
   wakeWordPhrase: string;
   ttsRate: number;
+};
+
+type ActiveMobileLiveConversation = {
+  sessionId: string;
+  assistantMessageId: string;
+  model: string;
+  groupId: number;
+  lastUserTranscript: string;
 };
 
 const DEFAULT_VOICE_CONVERSATION_PREFERENCES: MobileVoiceConversationPreferences =
@@ -5060,9 +5078,13 @@ function VoiceConversationSheet(props: {
   preferences: MobileVoiceConversationPreferences;
   listening: boolean;
   speaking: boolean;
+  liveState: MobileLiveState;
+  liveAvailable: boolean;
   onClose: () => void;
   onChange: (next: MobileVoiceConversationPreferences) => void;
   onStopSpeaking: () => void;
+  onStartLive: () => void;
+  onStopLive: () => void;
 }) {
   if (!props.open) return null;
   const update = (patch: Partial<MobileVoiceConversationPreferences>) => {
@@ -5108,6 +5130,37 @@ function VoiceConversationSheet(props: {
               }
             />
           </label>
+
+          {props.preferences.enabled && (
+            <button
+              type="button"
+              className={styles["voice-live-action"]}
+              disabled={
+                !props.liveAvailable || props.liveState === "connecting"
+              }
+              onClick={() => {
+                if (props.liveState === "connected") {
+                  props.onStopLive();
+                } else {
+                  props.onStartLive();
+                }
+              }}
+            >
+              <VoiceIcon />
+              <span>
+                {props.liveState === "connected"
+                  ? props.text.chat.liveVoiceStop
+                  : props.liveState === "connecting"
+                  ? props.text.chat.liveVoiceConnecting
+                  : props.text.chat.liveVoiceStart}
+              </span>
+            </button>
+          )}
+          {props.preferences.enabled && !props.liveAvailable && (
+            <small className={styles["voice-live-unavailable"]}>
+              {props.text.chat.liveVoiceUnavailable}
+            </small>
+          )}
 
           <label
             className={clsx(styles["voice-settings-toggle"], {
@@ -6390,6 +6443,19 @@ function AndroidChat() {
   const selectedModelIsAvailable =
     Boolean(selectedModel) &&
     models.some((model) => modelValue(model) === selectedModel);
+  const selectedManagedModel = models.find(
+    (model) => modelValue(model) === selectedModel,
+  );
+  const liveVoiceAvailable = Boolean(
+    effectiveChatGroupId &&
+      groups.find((group) => group.id === effectiveChatGroupId)
+        ?.live_available &&
+      selectedManagedModel?.tool_capabilities?.live &&
+      isMobileLiveWebRTCAvailable(),
+  );
+  const webSearchServiceAvailable = isMobileWebSearchAvailable(
+    managed.mobileProtocol,
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
@@ -6397,12 +6463,6 @@ function AndroidChat() {
   const [skillSheetOpen, setSkillSheetOpen] = useState(false);
   const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
-  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
-  const [webSearchBusy, setWebSearchBusy] = useState(false);
-  const webSearch = useMemo(
-    () => mobileWebSearchCapability(managed.mobileProtocol),
-    [managed.mobileProtocol],
-  );
   const activeAgent =
     CHAT_AGENT_TEMPLATES.find(
       (item) => item.id === (currentSession?.agentId || draftAgentId),
@@ -6422,6 +6482,8 @@ function AndroidChat() {
   const [wakeWordListening, setWakeWordListening] = useState(false);
   const [wakeWordStatus, setWakeWordStatus] = useState("");
   const [voiceSpeaking, setVoiceSpeaking] = useState(false);
+  const [liveVoiceState, setLiveVoiceState] =
+    useState<MobileLiveState>("disconnected");
   const [groupSwitching, setGroupSwitching] = useState(false);
   const [chatError, setChatError] = useState("");
   const [quotedMessage, setQuotedMessage] = useState<QuotedChatMessage | null>(
@@ -6444,6 +6506,11 @@ function AndroidChat() {
   const voicePttSessionIdRef = useRef("");
   const voiceAutoSendRef = useRef(false);
   const wakeWordSessionRef = useRef<NativeWakeWordSession | null>(null);
+  const liveVoiceSessionRef = useRef<MobileLiveSession | null>(null);
+  const liveVoiceAbortRef = useRef<AbortController | null>(null);
+  const activeLiveConversationRef = useRef<ActiveMobileLiveConversation | null>(
+    null,
+  );
   const voicePreferencesRef = useRef(voicePreferences);
   const listRef = useRef<HTMLDivElement | null>(null);
   const autoFollowRef = useRef(true);
@@ -7051,6 +7118,157 @@ function AndroidChat() {
     }
   }
 
+  async function stopLiveVoiceConversation(reason = "user_ended") {
+    const controller = liveVoiceAbortRef.current;
+    liveVoiceAbortRef.current = null;
+    controller?.abort();
+    const live = liveVoiceSessionRef.current;
+    liveVoiceSessionRef.current = null;
+    activeLiveConversationRef.current = null;
+    try {
+      await live?.close(reason);
+    } finally {
+      setLiveVoiceState("disconnected");
+    }
+  }
+
+  async function startLiveVoiceConversation() {
+    if (liveVoiceState === "connecting" || liveVoiceState === "connected") {
+      return;
+    }
+    if (!liveVoiceAvailable) {
+      setChatError(text.chat.liveVoiceUnavailable);
+      return;
+    }
+    const groupId = effectiveChatGroupId || 0;
+    const model = selectedModel || fallbackModel;
+    if (!groupId || !model || !selectedModelIsAvailable || !managed.session) {
+      setChatError(text.errors.noModel);
+      return;
+    }
+
+    const controller = new AbortController();
+    liveVoiceAbortRef.current = controller;
+    setChatError("");
+    setLiveVoiceState("connecting");
+    try {
+      await stopVoiceSpeaking();
+      await cancelForegroundPttSession(
+        voicePttSessionIdRef.current,
+        "live_started",
+      ).catch(() => undefined);
+      await cancelAllForegroundWakeWordSessions("live_started");
+      wakeWordSessionRef.current?.unsubscribe();
+      wakeWordSessionRef.current = null;
+      setWakeWordListening(false);
+      setListening(false);
+
+      let activeManaged = useManagedNextChatStore.getState();
+      if (shouldRefreshManagedSession(activeManaged.session)) {
+        await managed.bootstrap({ silent: true });
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (currentGroupID(activeManaged.workspace) !== groupId) {
+        await managed.switchGroup(groupId);
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (!activeManaged.session?.api_key) {
+        throw new Error(text.errors.loginRequired);
+      }
+      if (controller.signal.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+
+      activeLiveConversationRef.current = {
+        sessionId: currentSession?.id || "",
+        assistantMessageId: "",
+        model,
+        groupId,
+        lastUserTranscript: "",
+      };
+      const live = await startMobileLiveSession({
+        baseUrl: activeManaged.backendBaseUrl,
+        apiKey: activeManaged.session.api_key,
+        model,
+        locale: text.dateLocale,
+        requestId: clientRequestID("live-call"),
+        instructions: text.dateLocale.toLowerCase().startsWith("zh")
+          ? "使用自然、简洁的中文对话。"
+          : "Use natural, concise conversation.",
+        signal: controller.signal,
+        onState: (state, detail) => {
+          if (controller.signal.aborted) return;
+          setLiveVoiceState(state);
+          if (state === "failed" && detail) setChatError(detail);
+        },
+        onTranscript: (event) => {
+          const active = activeLiveConversationRef.current;
+          if (!active || controller.signal.aborted) return;
+          if (event.role === "user") {
+            if (
+              !event.done ||
+              !event.text ||
+              event.text === active.lastUserTranscript
+            ) {
+              return;
+            }
+            active.lastUserTranscript = event.text;
+            const sessionId =
+              active.sessionId ||
+              mobileStore.ensureChatSession(active.model, active.groupId);
+            active.sessionId = sessionId;
+            mobileStore.addChatMessage(sessionId, {
+              role: "user",
+              content: event.text,
+              status: "done",
+            });
+            return;
+          }
+          if (!active.sessionId || !event.text) return;
+          if (!active.assistantMessageId) {
+            active.assistantMessageId = mobileStore.addChatMessage(
+              active.sessionId,
+              {
+                role: "assistant",
+                content: event.text,
+                status: event.done ? "done" : "streaming",
+              },
+            );
+          } else {
+            mobileStore.updateChatMessage(
+              active.sessionId,
+              active.assistantMessageId,
+              {
+                content: event.text,
+                status: event.done ? "done" : "streaming",
+              },
+            );
+          }
+          if (event.done) active.assistantMessageId = "";
+        },
+      });
+      if (controller.signal.aborted) {
+        await live.close("cancelled_during_connect");
+        return;
+      }
+      liveVoiceSessionRef.current = live;
+      setLiveVoiceState("connected");
+    } catch (error) {
+      activeLiveConversationRef.current = null;
+      if (controller.signal.aborted) return;
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : text.chat.liveVoiceUnavailable;
+      setChatError(message);
+      setLiveVoiceState("failed");
+    } finally {
+      if (liveVoiceAbortRef.current === controller) {
+        liveVoiceAbortRef.current = null;
+      }
+    }
+  }
+
   async function speakAssistantReply(content: string) {
     if (!voicePreferencesRef.current.enabled) return;
     const speech = plainVoiceText(content);
@@ -7207,7 +7425,7 @@ function AndroidChat() {
   }
 
   function startVoiceConversationTurn() {
-    if (listening || running) return;
+    if (listening || running || liveVoiceState === "connected") return;
     setWakeWordStatus(text.chat.wakeWordMatched);
     setVoiceBarOpen(true);
     void startVoiceTurn({ autoSend: true });
@@ -7238,7 +7456,13 @@ function AndroidChat() {
     }
 
     async function syncWakeWord() {
-      if (!enabled || !phrase || running || listening) {
+      if (
+        !enabled ||
+        !phrase ||
+        running ||
+        listening ||
+        liveVoiceState === "connected"
+      ) {
         await stopWakeWord("voice_turn_active");
         if (!enabled || !phrase) setWakeWordStatus("");
         return;
@@ -7304,6 +7528,7 @@ function AndroidChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     listening,
+    liveVoiceState,
     running,
     text.dateLocale,
     voicePreferences.enabled,
@@ -7335,6 +7560,7 @@ function AndroidChat() {
     return () => {
       notifyForegroundPttRouteChange();
       void stopVoiceSpeaking();
+      void stopLiveVoiceConversation("route_changed");
       wakeWordSessionRef.current?.unsubscribe();
       wakeWordSessionRef.current = null;
       setWakeWordListening(false);
@@ -7457,36 +7683,6 @@ function AndroidChat() {
     }
   }
 
-  async function fetchWebSearchContext(query: string) {
-    if (!webSearchEnabled) return "";
-    if (!webSearch.enabled) {
-      throw new Error(text.chat.webSearchUnavailable);
-    }
-    if (!managed.accessToken) {
-      throw new Error(text.errors.loginRequired);
-    }
-    setWebSearchBusy(true);
-    try {
-      const requestId = clientRequestID("mobile-web-search");
-      const result = await searchMobileWeb(
-        managed.backendBaseUrl,
-        managed.accessToken,
-        query,
-        {
-          requestId,
-          locale: text.dateLocale,
-        },
-      );
-      return formatMobileWebSearchContext(result, text.dateLocale);
-    } catch (error) {
-      throw new Error(
-        localizedMobileErrorMessage(error, text.chat.webSearchUnavailable),
-      );
-    } finally {
-      setWebSearchBusy(false);
-    }
-  }
-
   async function sendChat(
     content = input,
     imageUrls = attachments,
@@ -7538,23 +7734,16 @@ function AndroidChat() {
       setChatError(text.errors.noModel);
       return;
     }
-    let webSearchContext = "";
-    if (webSearchEnabled && !retryRequestId) {
-      if (!rawPrompt) {
-        setChatError(text.chat.webSearchQueryRequired);
-        return;
-      }
-      try {
-        webSearchContext = await fetchWebSearchContext(rawPrompt);
-      } catch (error) {
-        setChatError(
-          error instanceof Error && error.message
-            ? error.message
-            : text.chat.webSearchUnavailable,
-        );
-        return;
-      }
-    }
+    const requestedModel = chatModelsForGroup(workspace, requestGroupId).find(
+      (item) => modelValue(item) === model,
+    );
+    const modelSupportsWebSearch = Boolean(
+      requestedModel?.tool_capabilities?.function_calling &&
+        requestedModel.tool_capabilities?.web_search,
+    );
+    const modelSupportsToolChoice = Boolean(
+      requestedModel?.tool_capabilities?.tool_choice,
+    );
     if (requestGroupId) {
       persistChatPreference(requestGroupId, model);
     }
@@ -7589,7 +7778,6 @@ function AndroidChat() {
       [
         prompt || (materialSummary ? `附件：${materialSummary}` : ""),
         localTextContent,
-        webSearchContext,
       ]
         .filter(Boolean)
         .join("\n\n") || text.chat.imageMessage;
@@ -7712,10 +7900,15 @@ function AndroidChat() {
       if (controller.signal.aborted) {
         throw new DOMException("Aborted", "AbortError");
       }
+      const gatewayMessages = makeGatewayMessages(
+        sessionId,
+        assistantId,
+        skillForRequest,
+      );
       const payload = JSON.stringify({
         model,
         stream: true,
-        messages: makeGatewayMessages(sessionId, assistantId, skillForRequest),
+        messages: gatewayMessages,
       });
       const runNonStreamingChatFallback = async (reason: unknown) => {
         const fallbackTransport = isDirectNativeStreamAvailable()
@@ -7774,7 +7967,227 @@ function AndroidChat() {
           persistStreamCheckpoint();
         });
       };
-      if (isDirectNativeStreamAvailable()) {
+      if (modelSupportsWebSearch && webSearchServiceAvailable) {
+        let toolRequestCount = 0;
+        const requestToolCompletion = async (
+          messages: Array<Record<string, unknown>>,
+          options: { stream?: boolean; onDelta?: (delta: string) => void } = {},
+        ) => {
+          toolRequestCount += 1;
+          const toolRequestId = `${gatewayRequestId}-tool-${toolRequestCount}`;
+          const requestBody: Record<string, unknown> = {
+            model,
+            stream: options.stream === true,
+            messages,
+            tools: [MOBILE_WEB_SEARCH_TOOL],
+          };
+          if (modelSupportsToolChoice) requestBody.tool_choice = "auto";
+          const requestHeaders = {
+            "Content-Type": "application/json",
+            Accept:
+              options.stream === true
+                ? "text/event-stream, application/json"
+                : "application/json",
+            Authorization: `Bearer ${activeManaged.session?.api_key || ""}`,
+            "Idempotency-Key": toolRequestId,
+            "X-Request-ID": toolRequestId,
+          };
+          if (options.stream === true) {
+            const accumulator = createMobileCompletionStreamAccumulator(
+              options.onDelta,
+            );
+            const consumeEvent = (event: string) => {
+              const data = event
+                .split("\n")
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.replace(/^data:\s*/, ""))
+                .join("\n")
+                .trim();
+              if (!data || data === "[DONE]") return;
+              try {
+                accumulator.ingest(JSON.parse(data));
+              } catch {
+                // Keepalive and provider extension frames are ignored.
+              }
+            };
+            if (isDirectNativeStreamAvailable()) {
+              let eventBuffer = "";
+              const nativeStream = await startDirectNativeStreamRequest(
+                {
+                  url: `${managedGatewayBaseUrl(
+                    activeManaged.backendBaseUrl,
+                  )}/chat/completions`,
+                  method: "POST",
+                  headers: requestHeaders,
+                  body: JSON.stringify(requestBody),
+                  connectTimeout: 15000,
+                  readTimeout: 120000,
+                },
+                {
+                  onLine: (line) => {
+                    eventBuffer += `${line}\n`;
+                    if (line.trim() === "") {
+                      consumeEvent(eventBuffer);
+                      eventBuffer = "";
+                    }
+                  },
+                },
+              );
+              const cancelNativeStream = () => {
+                nativeStream.cancel().catch(() => undefined);
+              };
+              controller.signal.addEventListener("abort", cancelNativeStream, {
+                once: true,
+              });
+              try {
+                await nativeStream.done;
+              } finally {
+                controller.signal.removeEventListener(
+                  "abort",
+                  cancelNativeStream,
+                );
+              }
+              if (eventBuffer.trim()) consumeEvent(eventBuffer);
+            } else {
+              const response = await fetch(
+                `${managedGatewayBaseUrl(
+                  activeManaged.backendBaseUrl,
+                )}/chat/completions`,
+                {
+                  method: "POST",
+                  headers: requestHeaders,
+                  body: JSON.stringify(requestBody),
+                  signal: controller.signal,
+                },
+              );
+              if (!response.ok) {
+                throw new Error(
+                  parseOpenAIError(
+                    await response.text().catch(() => ""),
+                    response.status,
+                    path,
+                    toolRequestId,
+                  ),
+                );
+              }
+              const reader = response.body?.getReader();
+              if (!reader) {
+                const json = await response.json();
+                accumulator.ingest(json);
+              } else {
+                const decoder = new TextDecoder();
+                let eventBuffer = "";
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  eventBuffer += decoder.decode(value, { stream: true });
+                  const events = eventBuffer.split(/\n\n+/);
+                  eventBuffer = events.pop() || "";
+                  events.forEach(consumeEvent);
+                }
+                if (eventBuffer.trim()) consumeEvent(eventBuffer);
+              }
+            }
+            recordGatewayDiagnostic("/v1/chat/completions", {
+              method: "POST",
+              transport: isDirectNativeStreamAvailable() ? "native" : "web",
+              status: 200,
+              recovered: true,
+            });
+            return accumulator.payload();
+          }
+          const response = await managedGatewayRequestText(
+            activeManaged.backendBaseUrl,
+            "/v1/chat/completions",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": requestHeaders["Content-Type"],
+                Accept: requestHeaders.Accept,
+                "Idempotency-Key": requestHeaders["Idempotency-Key"],
+                "X-Request-ID": requestHeaders["X-Request-ID"],
+              },
+              body: JSON.stringify(requestBody),
+              signal: controller.signal,
+            },
+            activeManaged.session?.api_key || "",
+            text,
+          );
+          recordGatewayDiagnostic("/v1/chat/completions", {
+            method: "POST",
+            transport: isDirectNativeStreamAvailable() ? "native" : "web",
+            status: response.status,
+            recovered: response.ok,
+          });
+          if (!response.ok) {
+            throw new Error(
+              parseOpenAIError(
+                response.text,
+                response.status,
+                path,
+                response.requestId || toolRequestId,
+              ),
+            );
+          }
+          try {
+            return JSON.parse(response.text);
+          } catch {
+            throw new Error(
+              parseOpenAIError(
+                response.text,
+                response.status,
+                path,
+                response.requestId || toolRequestId,
+              ),
+            );
+          }
+        };
+        const toolLoop = await runMobileWebSearchToolLoop({
+          messages: gatewayMessages,
+          locale: text.dateLocale,
+          requestCompletion: requestToolCompletion,
+          onDelta: (delta) => {
+            contentBuffer += delta;
+            persistStreamCheckpoint();
+          },
+          search: async (query, toolCallId) => {
+            if (!activeManaged.accessToken) {
+              throw new Error(text.errors.loginRequired);
+            }
+            const requestId = `${gatewayRequestId}-search-${toolCallId}`.slice(
+              0,
+              256,
+            );
+            try {
+              return await searchMobileWeb(
+                activeManaged.backendBaseUrl,
+                activeManaged.accessToken,
+                query,
+                {
+                  requestId,
+                  toolCallId,
+                  locale: text.dateLocale,
+                  signal: controller.signal,
+                },
+              );
+            } catch (error) {
+              throw new Error(
+                localizedMobileErrorMessage(
+                  error,
+                  text.chat.webSearchUnavailable,
+                ),
+              );
+            }
+          },
+        });
+        contentBuffer = [
+          toolLoop.content,
+          formatMobileWebSearchSources(toolLoop.sources, text.dateLocale),
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+        persistStreamCheckpoint();
+      } else if (isDirectNativeStreamAvailable()) {
         let status = 0;
         let eventBuffer = "";
         let recoveredWithFallback = false;
@@ -8690,27 +9103,6 @@ function AndroidChat() {
               </button>
               <button
                 type="button"
-                aria-pressed={webSearchEnabled}
-                disabled={webSearchBusy || !webSearch.enabled}
-                className={clsx({ [styles["active"]]: webSearchEnabled })}
-                onClick={() => setWebSearchEnabled((value) => !value)}
-                title={
-                  webSearch.enabled
-                    ? text.chat.webSearch
-                    : text.chat.webSearchUnavailable
-                }
-              >
-                <PromptIcon />
-                <span>
-                  {webSearchBusy
-                    ? text.chat.webSearchSearching
-                    : webSearchEnabled
-                    ? text.chat.webSearchEnabled
-                    : text.chat.webSearch}
-                </span>
-              </button>
-              <button
-                type="button"
                 aria-pressed={voicePreferences.enabled}
                 className={clsx({
                   [styles["active"]]: voicePreferences.enabled,
@@ -8802,14 +9194,13 @@ function AndroidChat() {
                 label="chat-send"
                 type="submit"
                 disabled={
-                  webSearchBusy ||
-                  (!input.trim() &&
-                    attachments.length === 0 &&
-                    !sharedMaterials.some(
-                      (item) =>
-                        item.state === "ready" ||
-                        (item.state === "local" && item.localText?.trim()),
-                    ))
+                  !input.trim() &&
+                  attachments.length === 0 &&
+                  !sharedMaterials.some(
+                    (item) =>
+                      item.state === "ready" ||
+                      (item.state === "local" && item.localText?.trim()),
+                  )
                 }
                 active
               >
@@ -8885,9 +9276,13 @@ function AndroidChat() {
           preferences={voicePreferences}
           listening={wakeWordListening}
           speaking={voiceSpeaking}
+          liveState={liveVoiceState}
+          liveAvailable={liveVoiceAvailable}
           onClose={() => setVoiceSettingsOpen(false)}
           onChange={(next) => updateVoicePreferences(() => next)}
           onStopSpeaking={() => void stopVoiceSpeaking()}
+          onStartLive={() => void startLiveVoiceConversation()}
+          onStopLive={() => void stopLiveVoiceConversation()}
         />
         <ChatAgentLibrarySheet
           open={agentSheetOpen}

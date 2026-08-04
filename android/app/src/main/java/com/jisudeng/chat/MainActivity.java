@@ -43,6 +43,7 @@ import android.security.keystore.KeyProperties;
 import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
+import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -112,6 +113,8 @@ public class MainActivity extends Activity {
     private WebView webView;
     private int nextPermissionRequestCode = PERMISSION_REQUEST_BASE;
     private final Map<Integer, PendingPermission> pendingPermissions = new HashMap<>();
+    private PermissionRequest pendingWebMicrophoneRequest;
+    private int pendingWebMicrophoneRequestCode = -1;
     private String pendingCameraRequestId;
     private Uri pendingCameraUri;
     private ContentValues pendingCameraValues;
@@ -668,6 +671,21 @@ public class MainActivity extends Activity {
         int[] grantResults
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == pendingWebMicrophoneRequestCode) {
+            PermissionRequest pendingWebRequest = pendingWebMicrophoneRequest;
+            pendingWebMicrophoneRequest = null;
+            pendingWebMicrophoneRequestCode = -1;
+            boolean granted = grantResults.length > 0 &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (pendingWebRequest != null) {
+                if (granted) {
+                    pendingWebRequest.grant(new String[] { PermissionRequest.RESOURCE_AUDIO_CAPTURE });
+                } else {
+                    pendingWebRequest.deny();
+                }
+            }
+            return;
+        }
         PendingPermission pending = pendingPermissions.remove(requestCode);
         if (pending == null) {
             return;
@@ -3444,6 +3462,37 @@ public class MainActivity extends Activity {
 
     private class AppWebChromeClient extends WebChromeClient {
         @Override
+        public void onPermissionRequest(PermissionRequest request) {
+            if (request == null || !isTrustedLocalMediaRequest(request)) {
+                if (request != null) request.deny();
+                return;
+            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                request.grant(new String[] { PermissionRequest.RESOURCE_AUDIO_CAPTURE });
+                return;
+            }
+            if (pendingWebMicrophoneRequest != null) {
+                pendingWebMicrophoneRequest.deny();
+            }
+            pendingWebMicrophoneRequest = request;
+            pendingWebMicrophoneRequestCode = nextPermissionRequestCode++;
+            requestPermissions(
+                new String[] { Manifest.permission.RECORD_AUDIO },
+                pendingWebMicrophoneRequestCode
+            );
+        }
+
+        @Override
+        public void onPermissionRequestCanceled(PermissionRequest request) {
+            if (request != null && request == pendingWebMicrophoneRequest) {
+                pendingWebMicrophoneRequest = null;
+                pendingWebMicrophoneRequestCode = -1;
+            }
+            super.onPermissionRequestCanceled(request);
+        }
+
+        @Override
         public boolean onShowFileChooser(
             WebView webView,
             ValueCallback<Uri[]> filePathCallback,
@@ -3470,6 +3519,19 @@ public class MainActivity extends Activity {
         public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
             return super.onConsoleMessage(consoleMessage);
         }
+    }
+
+    private boolean isTrustedLocalMediaRequest(PermissionRequest request) {
+        Uri origin = request.getOrigin();
+        if (origin == null || !"https".equalsIgnoreCase(origin.getScheme()) ||
+            !"localhost".equalsIgnoreCase(origin.getHost())) {
+            return false;
+        }
+        int port = origin.getPort();
+        if (port != -1 && port != 443) return false;
+        String[] resources = request.getResources();
+        return resources != null && resources.length == 1 &&
+            PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resources[0]);
     }
 
     private class LocalAssetWebViewClient extends WebViewClient {

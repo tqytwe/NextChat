@@ -135,7 +135,24 @@ if [[ "$NETWORK_CYCLE" == "1" ]]; then
 fi
 
 "$ADB" logcat -d -v threadtime >"$ARTIFACT_DIR/logcat.txt"
-if rg -q "FATAL EXCEPTION:.*|ANR in $PACKAGE_NAME" "$ARTIFACT_DIR/logcat.txt"; then
+app_pids="$(tr ' ' '\n' <"$ARTIFACT_DIR/app-pid.txt" | tr -d '\r' | rg '^[0-9]+$' | paste -sd, -)"
+if [[ -z "$app_pids" ]]; then
+  echo "Could not determine the running app PID." >&2
+  exit 1
+fi
+
+# `uiautomator dump` starts short-lived system processes that can log their own
+# FATAL EXCEPTION. Only a fatal from this app's PID, or an explicit ANR for this
+# package, makes the APP smoke test fail.
+if awk -v app_pids="$app_pids" -v package_name="$PACKAGE_NAME" '
+  BEGIN {
+    split(app_pids, values, ",");
+    for (pid_index in values) target_pid[values[pid_index]] = 1;
+  }
+  $0 ~ "ANR in " package_name { failed = 1; }
+  target_pid[$3] && $0 ~ /FATAL EXCEPTION/ { failed = 1; }
+  END { exit failed ? 0 : 1; }
+' "$ARTIFACT_DIR/logcat.txt"; then
   echo "Crash or ANR detected. See $ARTIFACT_DIR/logcat.txt" >&2
   exit 1
 fi

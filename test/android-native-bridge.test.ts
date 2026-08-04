@@ -105,6 +105,21 @@ describe("direct Android bridge authentication", () => {
   });
 });
 
+test("native shell grants WebRTC microphone capture only to the local app origin", () => {
+  const source = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  expect(source).toContain("void onPermissionRequest(PermissionRequest request)");
+  expect(source).toContain("isTrustedLocalMediaRequest(request)");
+  expect(source).toContain("PermissionRequest.RESOURCE_AUDIO_CAPTURE");
+  expect(source).toContain('"localhost".equalsIgnoreCase(origin.getHost())');
+  expect(source).toContain("request.getResources()");
+});
+
 test("native bridge supports sharing multiple selected images in one chooser", () => {
   const source = readFileSync(
     resolve(

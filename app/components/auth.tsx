@@ -174,7 +174,7 @@ function TopBanner() {
           {Locale.Auth.TopTips}
           <a
             href={SAAS_CHAT_URL}
-            rel="stylesheet"
+            rel="noopener noreferrer"
             onClick={() => {
               trackSettingsPageGuideToCPaymentClick();
             }}
