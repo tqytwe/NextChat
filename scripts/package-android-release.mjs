@@ -572,7 +572,7 @@ const manifest = {
   size: formatBytes(apk.length),
   bytes: apk.length,
   sha256,
-  minAndroidVersion: existingManifest.minAndroidVersion || "8.0",
+  minAndroidVersion: existingManifest.minAndroidVersion || "6.0",
   releaseDate: new Date().toISOString().slice(0, 10),
   notes: envNotes.length
     ? envNotes

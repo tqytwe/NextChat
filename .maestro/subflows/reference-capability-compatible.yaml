@@ -1,0 +1,15 @@
+appId: com.jisudeng.chat
+---
+- tapOn: ".*(Gemini|GPT Image|gemini|gpt-image).*"
+- tapOn: "image-prompt"
+- inputText: "maestro local reference image"
+- hideKeyboard
+- scroll
+- tapOn: "image-generate"
+- extendedWaitUntil:
+    visible: ".*(已完成|Completed).*"
+    timeout: 60000
+- tapOn: "app-tab-gallery"
+- extendedWaitUntil:
+    visible: "local-gallery-item-1"
+    timeout: 20000

@@ -10,12 +10,25 @@ describe("managed store persistence", () => {
         workspace: { models: { groups: [] } },
         loading: true,
       }),
-    ).toEqual({ backendBaseUrl: "https://api.jisudeng.com" });
+    ).toEqual({
+      backendBaseUrl: "https://api.jisudeng.com",
+      _hasHydrated: false,
+      _persistenceBlocked: false,
+    });
   });
 
-  test("uses the compiled default for malformed persisted state", () => {
-    expect(managedPersistedState({ backendBaseUrl: null })).toEqual({
+  test("keeps the hydration sentinels so a v3 to v4 migration can commit once", () => {
+    expect(
+      managedPersistedState({
+        backendBaseUrl: null,
+        _hasHydrated: true,
+        _persistenceBlocked: false,
+        accessToken: "must-not-persist",
+      }),
+    ).toEqual({
       backendBaseUrl: "",
+      _hasHydrated: true,
+      _persistenceBlocked: false,
     });
   });
 });

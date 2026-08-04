@@ -25,6 +25,18 @@ done
 if [[ "${ANDROID_E2E_BUILD:-1}" == "1" ]]; then
   : "${NEXT_PUBLIC_SUB2API_BASE_URL:?Set NEXT_PUBLIC_SUB2API_BASE_URL for the Android build.}"
   : "${NEXT_PUBLIC_NEXTCHAT_WEB_URL:?Set NEXT_PUBLIC_NEXTCHAT_WEB_URL for the Android build.}"
+  # The debug APK must report the same release version as the canonical
+  # artifact. Otherwise the background update prompt correctly treats
+  # 0.0.0-dev as obsolete and blocks every fixture flow with its dialog.
+  if [[ -z "${ANDROID_VERSION_NAME:-}" || -z "${ANDROID_VERSION_CODE:-}" ]]; then
+    readarray -t E2E_RELEASE_VERSION < <(
+      node -e 'const release = require("./public/downloads/android-version.json"); console.log(release.version); console.log(release.versionCode);'
+    )
+    export ANDROID_VERSION_NAME="${ANDROID_VERSION_NAME:-${E2E_RELEASE_VERSION[0]}}"
+    export ANDROID_VERSION_CODE="${ANDROID_VERSION_CODE:-${E2E_RELEASE_VERSION[1]}}"
+  fi
+  export NEXT_PUBLIC_ANDROID_VERSION="${NEXT_PUBLIC_ANDROID_VERSION:-$ANDROID_VERSION_NAME}"
+  export NEXT_PUBLIC_ANDROID_VERSION_CODE="${NEXT_PUBLIC_ANDROID_VERSION_CODE:-$ANDROID_VERSION_CODE}"
   corepack yarn android:sync
   (cd android && ./gradlew assembleDebug)
 fi
@@ -49,10 +61,30 @@ fi
 "$ADB" shell pm grant "$PACKAGE_NAME" android.permission.POST_NOTIFICATIONS || true
 
 run_flow() {
-  "$MAESTRO" test \
-    -e E2E_EMAIL="$E2E_EMAIL" \
-    -e E2E_PASSWORD="$E2E_PASSWORD" \
-    "$1"
+  local status
+  if "$MAESTRO" test \
+      -e E2E_EMAIL="$E2E_EMAIL" \
+      -e E2E_PASSWORD="$E2E_PASSWORD" \
+      "$1"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  # Maestro records -e values in its debug JSON/log files. Scrub only the
+  # exact test values after each flow so credentials never remain on disk.
+  local debug_root="${MAESTRO_DEBUG_ROOT:-/home/codex/.maestro/tests}"
+  if [[ -d "$debug_root" ]] && command -v perl >/dev/null 2>&1; then
+    while IFS= read -r -d '' debug_file; do
+      E2E_EMAIL="$E2E_EMAIL" E2E_PASSWORD="$E2E_PASSWORD" perl -pi -e '
+        my $email = $ENV{E2E_EMAIL} // "";
+        my $password = $ENV{E2E_PASSWORD} // "";
+        s/\Q$email\E/[redacted-email]/g if length $email;
+        s/\Q$password\E/[redacted-password]/g if length $password;
+      ' "$debug_file"
+    done < <(find "$debug_root" -type f -print0)
+  fi
+  return "$status"
 }
 
 ensure_logged_in() {

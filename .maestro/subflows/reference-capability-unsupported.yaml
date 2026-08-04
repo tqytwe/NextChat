@@ -1,0 +1,4 @@
+appId: com.jisudeng.chat
+---
+- assertVisible: ".*(does not support|不支持).*"
+- assertVisible: ".*(Choose Gemini or GPT Image|Gemini 或 GPT Image|Gemini|GPT Image).*"

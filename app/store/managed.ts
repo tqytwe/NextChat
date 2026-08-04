@@ -63,6 +63,8 @@ const DEFAULT_MANAGED_STATE = {
  */
 export function managedPersistedState(input: {
   backendBaseUrl?: unknown;
+  _hasHydrated?: unknown;
+  _persistenceBlocked?: unknown;
   [key: string]: unknown;
 }) {
   return {
@@ -71,6 +73,10 @@ export function managedPersistedState(input: {
         ? input.backendBaseUrl
         : DEFAULT_MANAGED_BACKEND_BASE_URL,
     ),
+    // indexedDBStorage only writes a hydrated, unblocked snapshot. Keep the
+    // two persistence sentinels while omitting all account/session payload.
+    _hasHydrated: input._hasHydrated === true,
+    _persistenceBlocked: input._persistenceBlocked === true,
   };
 }
 
@@ -585,6 +591,12 @@ export const useManagedNextChatStore = createPersistStore<
     name: StoreKey.ManagedNextChat,
     version: 4,
     partialize: ((state: any) => managedPersistedState(state)) as any,
+    migrationBackup: (persistedState: unknown) =>
+      managedPersistedState(
+        persistedState && typeof persistedState === "object"
+          ? (persistedState as Record<string, unknown>)
+          : {},
+      ),
     migrate: ((persistedState: any, _persistedVersion: number) => ({
       ...DEFAULT_MANAGED_STATE,
       ...managedPersistedState(persistedState || {}),
