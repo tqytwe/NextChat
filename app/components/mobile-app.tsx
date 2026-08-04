@@ -3957,8 +3957,15 @@ function AndroidLogin() {
       }
     } catch (err) {
       const rawMessage =
-        err instanceof Error
-          ? err.message
+        err instanceof ManagedApiError || err instanceof ManagedTransportError
+          ? localizedMobileErrorMessage(
+              err,
+              mode === "login"
+                ? text.errors.loginFailed
+                : text.errors.networkFailed,
+            )
+          : err instanceof Error
+          ? localizeManagedMobileError({ message: err.message })
           : mode === "login"
           ? text.errors.loginFailed
           : text.errors.networkFailed;
