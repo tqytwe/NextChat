@@ -1,20 +1,20 @@
 {
   "platform": "android",
-  "version": "2.0.87",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.87-287-86bd20988ed232c3b7b87a3c0a360eb8a5928518494c322173058acc21e94392",
-  "size": "7.2 MB",
-  "sha256": "86bd20988ed232c3b7b87a3c0a360eb8a5928518494c322173058acc21e94392",
+  "version": "2.0.88",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.88-288-63f02bdbbb65038effc431a0a69a65eef7aa6e7787ab03d19a2944199ba8b749",
+  "size": "7.3 MB",
+  "sha256": "63f02bdbbb65038effc431a0a69a65eef7aa6e7787ab03d19a2944199ba8b749",
   "minAndroidVersion": "6.0",
   "releaseDate": "2026-08-04",
   "notes": [
     "修复聊天附件、联网搜索重试、管理员详情与 Android 原生长按选择",
     "保留本机数据、项目和模型偏好"
   ],
-  "versionCode": 287,
-  "bytes": 7533669,
+  "versionCode": 288,
+  "bytes": 7637458,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "2.0.87",
-  "sourceCommit": "1daf57d9305d9ec79e7892e4712204edd0f29705",
-  "builtFromCommit": "1daf57d9305d9ec79e7892e4712204edd0f29705"
+  "latestVersion": "2.0.88",
+  "sourceCommit": "733418084b3de17762592acb676540c40bbb9eaa",
+  "builtFromCommit": "733418084b3de17762592acb676540c40bbb9eaa"
 }
