@@ -21,6 +21,7 @@ const manifestPath = resolveArtifactPath(
 const apk = readFileSync(apkPath);
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const sha256 = createHash("sha256").update(apk).digest("hex");
+const canonicalApkPath = "/downloads/jisudengchat-android.apk";
 
 function normalizeVersionName(value) {
   return String(value || "")
@@ -33,6 +34,39 @@ function versionCode(value) {
   if (!/^[1-9]\d*$/.test(raw)) return undefined;
   const parsed = Number(raw);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function isReleaseCacheKey(value, version, code, { requireHash = false } = {}) {
+  const raw = String(value || "").trim();
+  const prefix = `${version}-${code}`;
+  if (raw === prefix) return !requireHash;
+  return (
+    raw.startsWith(`${prefix}-`) &&
+    /^[0-9a-f]{64}$/i.test(raw.slice(prefix.length + 1))
+  );
+}
+
+function canonicalManifestApkUrl(value, version, code, options = {}) {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith("/") ||
+    value.startsWith("//")
+  ) {
+    return false;
+  }
+  try {
+    const url = new URL(value, "https://android-release.invalid");
+    const cacheKey = url.searchParams.get("v") || "";
+    return (
+      url.origin === "https://android-release.invalid" &&
+      url.pathname === canonicalApkPath &&
+      [...url.searchParams.keys()].length === 1 &&
+      isReleaseCacheKey(cacheKey, version, code, options) &&
+      !url.hash
+    );
+  } catch {
+    return false;
+  }
 }
 
 function aaptCandidates() {
@@ -163,9 +197,6 @@ function assertNoEmbeddedAndroidManifest() {
 
 const manifestVersion = normalizeVersionName(manifest.version);
 const manifestVersionCode = versionCode(manifest.versionCode);
-const expectedUrl = `/downloads/jisudengchat-android.apk?v=${encodeURIComponent(
-  `${manifestVersion}-${manifestVersionCode}`,
-)}`;
 
 if (!/^\d+(?:\.\d+)+$/.test(manifestVersion)) {
   throw new Error("Android manifest has no valid version");
@@ -176,8 +207,17 @@ if (!manifestVersionCode) {
 if (manifest.packageName !== "com.jisudeng.chat") {
   throw new Error("Android manifest packageName is invalid");
 }
-if (manifest.apkUrl !== expectedUrl) {
-  throw new Error("Android manifest does not use the canonical APK URL");
+if (
+  !canonicalManifestApkUrl(
+    manifest.apkUrl,
+    manifestVersion,
+    manifestVersionCode,
+    { requireHash: true },
+  )
+) {
+  throw new Error(
+    "Android manifest does not use the canonical content-addressed APK URL",
+  );
 }
 if (manifest.sha256 !== sha256 || manifest.bytes !== apk.length) {
   throw new Error("Android manifest does not match the canonical APK file");
@@ -208,9 +248,15 @@ if (versionCode(embedded.androidVersionCode) !== manifestVersionCode) {
     "Embedded Android androidVersionCode does not match the release manifest",
   );
 }
-if (embedded.androidApkUrl !== expectedUrl) {
+if (
+  !canonicalManifestApkUrl(
+    embedded.androidApkUrl,
+    manifestVersion,
+    manifestVersionCode,
+  )
+) {
   throw new Error(
-    "Embedded Android APK URL does not match the release manifest",
+    "Embedded Android APK URL is not a canonical URL for the release",
   );
 }
 assertNoEmbeddedAndroidManifest();

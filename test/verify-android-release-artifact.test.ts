@@ -85,6 +85,7 @@ function createFixture(options: FixtureOptions = {}) {
   });
 
   const apk = readFileSync(apkPath);
+  const apkSha256 = createHash("sha256").update(apk).digest("hex");
   writeJson(manifestPath, {
     platform: "android",
     version: releaseVersion,
@@ -95,8 +96,10 @@ function createFixture(options: FixtureOptions = {}) {
       "/downloads/jisudengchat-android.apk?v=" +
       releaseVersion +
       "-" +
-      releaseVersionCode,
-    sha256: createHash("sha256").update(apk).digest("hex"),
+      releaseVersionCode +
+      "-" +
+      apkSha256,
+    sha256: apkSha256,
     bytes: apk.length,
     sourceCommit: "a".repeat(40),
     builtFromCommit: "a".repeat(40),

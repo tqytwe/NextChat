@@ -17,6 +17,7 @@ describe("mobile admin capabilities", () => {
       apiBasePath: "",
       stepUpPath: "",
       compliancePath: "",
+      writeOperations: [],
     });
   });
 
@@ -45,6 +46,7 @@ describe("mobile admin capabilities", () => {
       apiBasePath: "/api/v1/admin",
       stepUpPath: "/api/v1/user/totp/step-up",
       compliancePath: "",
+      writeOperations: [],
     });
     expect(isMobileAdminAvailable(protocol)).toBe(true);
     expect(isMobileAdminComplianceAvailable(protocol)).toBe(false);

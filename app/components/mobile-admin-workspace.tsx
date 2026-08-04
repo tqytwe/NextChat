@@ -10,6 +10,7 @@ import {
 import styles from "./mobile-app.module.scss";
 import {
   acceptMobileAdminCompliance,
+  executeMobileAdminMutation,
   getMobileAdminComplianceStatus,
   getMobileAdminDashboardSnapshot,
   getMobileAdminAuditLog,
@@ -42,6 +43,7 @@ import {
   mobileAdminErrorCode,
   mobileAdminErrorMetadata,
   mobileAdminRequestId,
+  MOBILE_ADMIN_MUTATION_PATHS,
   verifyMobileAdminStepUp,
 } from "../client/mobile-admin";
 import type {
@@ -120,6 +122,8 @@ type SelectedAdminDetail = {
   loading: boolean;
   error?: string;
 };
+
+type AdminAction = "approve" | "reject" | "mark-paid";
 
 const INITIAL_PAGES: Record<AdminPageKey, number> = {
   users: 1,
@@ -458,8 +462,25 @@ function AdminDetailSheet(props: {
   detail: SelectedAdminDetail;
   text: ManagedMobileText;
   onClose: () => void;
+  onAction?: (action: AdminAction) => void;
+  actionBusy?: boolean;
+  actionMessage?: string;
 }) {
   const labels = props.text.account.adminWorkspace;
+  const detailKind = props.detail.kind;
+  const status = String(
+    first(props.detail.source, ["status", "state"]) || "",
+  ).toLowerCase();
+  const isPending = status === "pending" || status === "processing";
+  const isPaidReady =
+    status === "approved" || status === "accepted" || status === "processing";
+  const actions =
+    detailKind === "refund" || detailKind === "withdrawal"
+      ? [
+          ...(isPending ? (["approve", "reject"] as AdminAction[]) : []),
+          ...(isPaidReady ? (["mark-paid"] as AdminAction[]) : []),
+        ]
+      : [];
   return (
     <div
       className={styles["admin-detail-backdrop"]}
@@ -516,6 +537,27 @@ function AdminDetailSheet(props: {
             <p className={styles["admin-protected-hint"]}>
               {labels.protectedActionHint}
             </p>
+            {actions.length > 0 && props.onAction && (
+              <div className={styles["admin-detail-actions"]}>
+                {actions.map((action) => (
+                  <button
+                    type="button"
+                    key={action}
+                    disabled={props.actionBusy}
+                    onClick={() => props.onAction?.(action)}
+                  >
+                    {action === "approve"
+                      ? labels.approve
+                      : action === "reject"
+                      ? labels.reject
+                      : labels.markPaid}
+                  </button>
+                ))}
+                {props.actionMessage && (
+                  <p className={styles["form-error"]}>{props.actionMessage}</p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -634,6 +676,8 @@ export function MobileAdminWorkspace(props: {
     useState<Record<AdminPageKey, number>>(INITIAL_PAGES);
   const [selectedDetail, setSelectedDetail] =
     useState<SelectedAdminDetail | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionMessage, setActionMessage] = useState("");
 
   const client = useMemo(() => props.client, [props.client]);
   const complianceSupported = isMobileAdminComplianceAvailable(
@@ -1018,6 +1062,53 @@ export function MobileAdminWorkspace(props: {
         error: formatMobileAdminWorkspaceError(caught, labels.unavailable),
       });
       setRequestId(mobileAdminRequestId(caught));
+    }
+  }
+
+  async function performAdminAction(action: AdminAction) {
+    if (
+      !selectedDetail ||
+      !["refund", "withdrawal"].includes(selectedDetail.kind)
+    ) {
+      return;
+    }
+    const id = recordID(selectedDetail.source);
+    if (!id) return;
+    const endpoint =
+      selectedDetail.kind === "refund"
+        ? action === "approve"
+          ? MOBILE_ADMIN_MUTATION_PATHS.refundApprove
+          : action === "reject"
+          ? MOBILE_ADMIN_MUTATION_PATHS.refundReject
+          : MOBILE_ADMIN_MUTATION_PATHS.refundMarkPaid
+        : action === "approve"
+        ? MOBILE_ADMIN_MUTATION_PATHS.withdrawalApprove
+        : action === "reject"
+        ? MOBILE_ADMIN_MUTATION_PATHS.withdrawalReject
+        : MOBILE_ADMIN_MUTATION_PATHS.withdrawalMarkPaid;
+    setActionBusy(true);
+    setActionMessage("");
+    try {
+      const result = await executeMobileAdminMutation(
+        client,
+        endpoint,
+        id,
+        {},
+        {
+          locale: props.text.dateLocale,
+          idempotencyKey: `mobile-admin-${selectedDetail.kind}-${action}-${id}`,
+        },
+      );
+      setRequestId(result.requestId);
+      setSelectedDetail(null);
+      await loadView(view);
+    } catch (caught) {
+      setActionMessage(
+        formatMobileAdminWorkspaceError(caught, labels.actionFailed),
+      );
+      setRequestId(mobileAdminRequestId(caught));
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -1454,6 +1545,9 @@ export function MobileAdminWorkspace(props: {
           detail={selectedDetail}
           text={props.text}
           onClose={() => setSelectedDetail(null)}
+          onAction={(action) => void performAdminAction(action)}
+          actionBusy={actionBusy}
+          actionMessage={actionMessage}
         />
       )}
 

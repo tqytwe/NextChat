@@ -1131,6 +1131,7 @@ type GalleryPreferences = Record<string, GalleryPreference>;
 
 type MobileVoiceConversationPreferences = {
   enabled: boolean;
+  continuous: boolean;
   wakeWordEnabled: boolean;
   wakeWordPhrase: string;
   ttsRate: number;
@@ -1139,6 +1140,7 @@ type MobileVoiceConversationPreferences = {
 const DEFAULT_VOICE_CONVERSATION_PREFERENCES: MobileVoiceConversationPreferences =
   {
     enabled: false,
+    continuous: false,
     wakeWordEnabled: false,
     wakeWordPhrase: "极速蹬",
     ttsRate: 1,
@@ -2489,6 +2491,7 @@ function readVoiceConversationPreferences(): MobileVoiceConversationPreferences 
     .slice(0, 64);
   return {
     enabled: Boolean(stored.enabled),
+    continuous: Boolean(stored.continuous),
     wakeWordEnabled: Boolean(stored.wakeWordEnabled) && Boolean(phrase),
     wakeWordPhrase:
       phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
@@ -5112,6 +5115,27 @@ function VoiceConversationSheet(props: {
             })}
           >
             <span>
+              <strong>{props.text.chat.continuousVoice}</strong>
+              <small>{props.text.chat.continuousVoiceHint}</small>
+            </span>
+            <input
+              type="checkbox"
+              disabled={!props.preferences.enabled}
+              checked={
+                props.preferences.enabled && props.preferences.continuous
+              }
+              onChange={(event) =>
+                update({ continuous: event.currentTarget.checked })
+              }
+            />
+          </label>
+
+          <label
+            className={clsx(styles["voice-settings-toggle"], {
+              [styles["disabled"]]: !props.preferences.enabled,
+            })}
+          >
+            <span>
               <strong>{props.text.chat.wakeWord}</strong>
               <small>{props.text.chat.wakeWordHint}</small>
             </span>
@@ -7011,6 +7035,7 @@ function AndroidChat() {
         wakeWordEnabled: Boolean(
           next.enabled && next.wakeWordEnabled && phrase,
         ),
+        continuous: Boolean(next.enabled && next.continuous),
         ttsRate: Math.min(2, Math.max(0.5, Number(next.ttsRate) || 1)),
       };
       writeStoredJSON(VOICE_CONVERSATION_STORAGE_KEY, normalized);
@@ -7043,6 +7068,17 @@ function AndroidChat() {
             event.type === "stopped"
           ) {
             setVoiceSpeaking(false);
+            if (
+              event.type === "done" &&
+              voicePreferencesRef.current.enabled &&
+              voicePreferencesRef.current.continuous &&
+              !running &&
+              !listening
+            ) {
+              window.setTimeout(() => {
+                void startVoiceTurn({ autoSend: true });
+              }, 280);
+            }
           }
         },
       });

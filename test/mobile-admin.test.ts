@@ -24,6 +24,7 @@ const { ManagedApiError, ManagedTransportError } = await import(
 const {
   MobileAdminClientError,
   acceptMobileAdminCompliance,
+  executeMobileAdminMutation,
   getMobileAdminAuditLog,
   getMobileAdminComplianceStatus,
   getMobileAdminMobileFeedback,
@@ -33,6 +34,7 @@ const {
   listMobileAdminOrders,
   listMobileAdminSubscriptions,
   listMobileAdminUsers,
+  MOBILE_ADMIN_MUTATION_PATHS,
   getMobileAdminUserWalletHistory,
   mobileAdminErrorCategory,
   mobileAdminRequestId,
@@ -49,6 +51,14 @@ const client = {
         api_base_path: "/api/v1/admin",
         step_up_path: "/api/v1/user/totp/step-up",
         compliance_path: "/api/v1/admin/compliance",
+        write_operations: [
+          "admin.funds.refund.approve",
+          "admin.funds.refund.reject",
+          "admin.funds.refund.mark_paid",
+          "admin.funds.withdrawal.approve",
+          "admin.funds.withdrawal.reject",
+          "admin.funds.withdrawal.mark_paid",
+        ],
       },
     },
   },
@@ -554,5 +564,36 @@ describe("mobile administrator client", () => {
     expect(headers.get("X-Request-ID")).toBe("admin-step-up-1");
     expect(headers.get("X-Client-Request-ID")).toBe("admin-step-up-1");
     expect(headers.get("Idempotency-Key")).toBeNull();
+  });
+
+  test("executes only the existing step-up protected refund transition", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ code: 0, data: { status: "approved" } })),
+    } as Response);
+
+    await expect(
+      executeMobileAdminMutation(
+        client,
+        MOBILE_ADMIN_MUTATION_PATHS.refundApprove,
+        42,
+        {},
+        {
+          requestId: "admin-refund-approve-42",
+          idempotencyKey: "refund-approve-42",
+          locale: "zh-CN",
+        },
+      ),
+    ).resolves.toMatchObject({ requestId: "admin-refund-approve-42" });
+
+    expect(window.fetch).toHaveBeenCalledWith(
+      "https://api.jisudeng.com/api/v1/admin/funds/refund-requests/42/approve",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const request = jest.mocked(window.fetch).mock.calls[0][1];
+    const headers = new Headers(request?.headers);
+    expect(headers.get("Idempotency-Key")).toBe("refund-approve-42");
+    expect(headers.get("X-Request-ID")).toBe("admin-refund-approve-42");
   });
 });

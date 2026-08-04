@@ -13,6 +13,7 @@ export type ResolvedMobileAdminCapability = {
   apiBasePath: string;
   stepUpPath: string;
   compliancePath: string;
+  writeOperations: string[];
 };
 
 const NO_ADMIN_CAPABILITY: ResolvedMobileAdminCapability = {
@@ -20,6 +21,7 @@ const NO_ADMIN_CAPABILITY: ResolvedMobileAdminCapability = {
   apiBasePath: "",
   stepUpPath: "",
   compliancePath: "",
+  writeOperations: [],
 };
 
 /**
@@ -40,6 +42,11 @@ export function resolveMobileAdminCapability(
     apiBasePath: cleanPath(admin.api_base_path),
     stepUpPath: cleanPath(admin.step_up_path),
     compliancePath: cleanPath(admin.compliance_path),
+    writeOperations: Array.isArray(admin.write_operations)
+      ? admin.write_operations.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [],
   };
 }
 

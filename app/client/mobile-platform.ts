@@ -199,6 +199,7 @@ export interface MobileAdminCapabilities {
   available?: boolean;
   api_base_path?: string;
   step_up_path?: string;
+  write_operations?: string[];
   /**
    * Optional so APKs remain compatible with servers that predate the mobile
    * compliance gate. When absent, the app retains the existing read-only

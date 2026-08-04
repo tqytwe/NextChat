@@ -74,10 +74,41 @@ export const MOBILE_ADMIN_DETAIL_PATHS = {
   auditLog: "/audit-logs/:id",
 } as const;
 
+/**
+ * The only mobile administrator mutations exposed by this client are the
+ * existing payment/withdrawal transitions that the backend already protects
+ * with StepUpAuthMiddleware. No arbitrary path proxy is provided.
+ */
+export const MOBILE_ADMIN_MUTATION_PATHS = {
+  refundApprove: "/funds/refund-requests/:id/approve",
+  refundReject: "/funds/refund-requests/:id/reject",
+  refundMarkPaid: "/funds/refund-requests/:id/mark-paid",
+  withdrawalApprove: "/withdrawals/:id/approve",
+  withdrawalReject: "/withdrawals/:id/reject",
+  withdrawalMarkPaid: "/withdrawals/:id/mark-paid",
+} as const;
+
+const MOBILE_ADMIN_MUTATION_OPERATIONS: Record<
+  MobileAdminMutationEndpoint,
+  string
+> = {
+  [MOBILE_ADMIN_MUTATION_PATHS.refundApprove]: "admin.funds.refund.approve",
+  [MOBILE_ADMIN_MUTATION_PATHS.refundReject]: "admin.funds.refund.reject",
+  [MOBILE_ADMIN_MUTATION_PATHS.refundMarkPaid]: "admin.funds.refund.mark_paid",
+  [MOBILE_ADMIN_MUTATION_PATHS.withdrawalApprove]:
+    "admin.funds.withdrawal.approve",
+  [MOBILE_ADMIN_MUTATION_PATHS.withdrawalReject]:
+    "admin.funds.withdrawal.reject",
+  [MOBILE_ADMIN_MUTATION_PATHS.withdrawalMarkPaid]:
+    "admin.funds.withdrawal.mark_paid",
+};
+
 export type MobileAdminReadEndpoint =
   (typeof MOBILE_ADMIN_READ_PATHS)[keyof typeof MOBILE_ADMIN_READ_PATHS];
 export type MobileAdminDetailEndpoint =
   (typeof MOBILE_ADMIN_DETAIL_PATHS)[keyof typeof MOBILE_ADMIN_DETAIL_PATHS];
+export type MobileAdminMutationEndpoint =
+  (typeof MOBILE_ADMIN_MUTATION_PATHS)[keyof typeof MOBILE_ADMIN_MUTATION_PATHS];
 
 export type MobileAdminQueryValue =
   | string
@@ -471,6 +502,56 @@ export async function requestMobileAdminDetail<T>(
     client.baseUrl,
     path,
     requestInit("GET", requestId, options),
+    client.accessToken,
+  );
+  return { data, requestId };
+}
+
+function resolveMobileAdminMutationPath(
+  endpoint: MobileAdminMutationEndpoint,
+  id: number | string,
+  requestId: string,
+) {
+  const encodedID = encodeAdminRecordID(
+    id,
+    `${CANONICAL_ADMIN_API_BASE_PATH}${endpoint}`,
+    requestId,
+  );
+  return endpoint.replace(":id", encodedID);
+}
+
+/** Execute a reviewed, route-specific admin mutation after server step-up. */
+export async function executeMobileAdminMutation<T = unknown>(
+  client: MobileAdminClient,
+  endpoint: MobileAdminMutationEndpoint,
+  id: number | string,
+  body: Record<string, unknown> = {},
+  options?: MobileAdminRequestOptions,
+): Promise<MobileAdminRequestResult<T>> {
+  const requestId = resolveRequestId(options);
+  const relativePath = resolveMobileAdminMutationPath(endpoint, id, requestId);
+  const capability = resolveMobileAdminCapability(client.mobileProtocol);
+  const operation = MOBILE_ADMIN_MUTATION_OPERATIONS[endpoint];
+  if (!capability.writeOperations.includes(operation)) {
+    throw localAdminError(
+      "The server did not declare this administrator operation for mobile.",
+      `${CANONICAL_ADMIN_API_BASE_PATH}${relativePath}`,
+      requestId,
+      "ADMIN_WRITE_CAPABILITY_UNAVAILABLE",
+      "capability",
+    );
+  }
+  const path = resolveAdminBasePath(client, relativePath, requestId);
+  const data = await managedJsonRequest<T>(
+    client.baseUrl,
+    path,
+    requestInit(
+      "POST",
+      requestId,
+      options,
+      body,
+      resolveIdempotencyKey(options, requestId),
+    ),
     client.accessToken,
   );
   return { data, requestId };
