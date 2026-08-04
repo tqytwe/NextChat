@@ -186,6 +186,13 @@ import {
   searchMobileWeb,
 } from "../client/mobile-web-search";
 import {
+  inferLocalChatAttachmentMimeType,
+  isLocalChatImage,
+  isLocalChatText,
+  localChatAttachmentKind,
+  normalizeLocalChatAttachmentBlob,
+} from "../client/mobile-chat-attachments";
+import {
   mobileInstallationId,
   registerMobilePush,
 } from "../client/mobile-push";
@@ -3462,14 +3469,15 @@ async function readImageFiles(files: FileList | File[], limit = 6) {
   const selected = Array.from(files).slice(0, limit);
   const urls: string[] = [];
   for (const file of selected) {
+    const localFile = normalizeLocalChatAttachmentBlob(file);
     let dataUrl: string;
     try {
-      dataUrl = await compressImage(file, 1024 * 1024);
+      dataUrl = await compressImage(localFile, 1024 * 1024);
     } catch (error) {
-      if (!file.type.startsWith("image/") || file.size > 768 * 1024) {
+      if (!isLocalChatImage(file) || file.size > 768 * 1024) {
         throw error;
       }
-      dataUrl = await blobToDataUrl(file);
+      dataUrl = await blobToDataUrl(localFile);
     }
     urls.push(dataUrl);
   }
@@ -6519,18 +6527,33 @@ function AndroidChat() {
               );
               const dataUrl = material.dataUrl || "";
               if (!dataUrl) throw new Error(text.platform.uploadFailedHint);
+              const fileLike = {
+                name: file.name || file.fileName,
+                type: file.mimeType || "",
+                size: Number(file.size || 0),
+              };
               const isImage =
-                file.kind === "image" || /^image\//i.test(file.mimeType || "");
+                file.kind === "image" || isLocalChatImage(fileLike);
+              const isPlainText =
+                file.kind === "text" || isLocalChatText(fileLike);
+              const rawBlob = dataUrlToBlob(dataUrl);
+              const blob = new Blob([rawBlob], {
+                type:
+                  inferLocalChatAttachmentMimeType(fileLike) || rawBlob.type,
+              });
               if (isImage) {
                 setAttachments((items) => [...items, dataUrl].slice(0, 6));
               }
               await addMaterialDraft({
-                blob: dataUrlToBlob(dataUrl),
+                blob,
                 name: file.name || `shared-${Date.now()}`,
-                kind: file.kind || (isImage ? "image" : "other"),
+                kind: isImage ? "image" : isPlainText ? "text" : "other",
                 previewUrl: isImage ? dataUrl : undefined,
-                localOnly: isImage,
-                unsupported: !isImage,
+                localText: isPlainText
+                  ? (await blobToText(blob)).slice(0, 120_000)
+                  : "",
+                localOnly: isImage || isPlainText,
+                unsupported: !isImage && !isPlainText,
                 source: "share",
               });
             }),
@@ -6880,33 +6903,25 @@ function AndroidChat() {
       let imageCount = 0;
       const selectedFiles = Array.from(files)
         .slice(0, 6)
-        .filter((file) => !/^image\//i.test(file.type) || ++imageCount <= 4);
-      const imageFiles = selectedFiles.filter((file) =>
-        /^image\//i.test(file.type),
-      );
+        .filter((file) => !isLocalChatImage(file) || ++imageCount <= 4);
+      const imageFiles = selectedFiles.filter(isLocalChatImage);
       const urls = await readImageFiles(imageFiles, 4);
       setAttachments((items) => [...items, ...urls].slice(0, 4));
       let imageIndex = 0;
       await Promise.allSettled(
         selectedFiles.map(async (file) => {
-          const isImage = /^image\//i.test(file.type);
-          const isPlainText =
-            /^text\//i.test(file.type) ||
-            /\.(txt|md|csv|json|log)$/i.test(file.name);
+          const kind = localChatAttachmentKind(file);
+          const isImage = kind === "image";
+          const isPlainText = kind === "text";
+          const localFile = normalizeLocalChatAttachmentBlob(file);
           const previewUrl = isImage ? urls[imageIndex++] : undefined;
           const localText = isPlainText
-            ? (await blobToText(file)).slice(0, 120_000)
+            ? (await blobToText(localFile)).slice(0, 120_000)
             : "";
           return addMaterialDraft({
-            blob: file,
+            blob: localFile,
             name: file.name,
-            kind: isImage
-              ? "image"
-              : /^audio\//i.test(file.type)
-              ? "audio"
-              : file.type === "application/pdf"
-              ? "document"
-              : "other",
+            kind: isImage ? "image" : isPlainText ? "text" : "other",
             previewUrl,
             localText,
             localOnly: isImage || isPlainText,
@@ -8361,7 +8376,10 @@ function AndroidChat() {
       setQuotedMessage(null);
       return;
     }
-    navigate(Path.Home);
+    // Chat is a first-level tab. Keep its behavior aligned with the other
+    // main tabs: the first back press shows the exit hint and never changes
+    // the selected tab or discards the draft session.
+    handleNativeHomeBack(text);
   });
 
   return (
@@ -9962,6 +9980,31 @@ function AndroidContentKit() {
     setSelectedProjectId("");
   }
 
+  useNativeBackHandler(true, () => {
+    if (previewAssetId) {
+      setPreviewAssetId("");
+      return;
+    }
+    if (showPlanEditor) {
+      setShowPlanEditor(false);
+      return;
+    }
+    if (showAdvancedFields) {
+      setShowAdvancedFields(false);
+      return;
+    }
+    if (showComposer) {
+      setShowComposer(false);
+      return;
+    }
+    if (selectedProjectId) {
+      setSelectedProjectId("");
+      return;
+    }
+    // Content workbench is opened from the image tab, not a home tab itself.
+    navigateBack(navigate, Path.Sd);
+  });
+
   if (selectedProject) {
     const activeRunId = selectedProject.activeRunId;
     const displayedRunId = selectedProject.runs?.some(
@@ -10384,7 +10427,7 @@ function AndroidContentKit() {
       <header className={styles["detail-header"]}>
         <IconButton
           label={text.common.back}
-          onClick={() => navigate(Path.Home)}
+          onClick={() => navigateBack(navigate, Path.Sd)}
         >
           <LeftIcon />
         </IconButton>

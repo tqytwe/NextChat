@@ -258,6 +258,9 @@ export interface ManagedRequestDiagnostic {
 
 const MANAGED_REQUEST_DIAGNOSTICS_KEY = "nextchat-managed-request-diagnostics";
 const RETRYABLE_HTTP_STATUS = new Set([408, 425, 502, 503, 504]);
+const MAX_NATIVE_IDEMPOTENT_ATTEMPTS = 2;
+const MAX_AUTOMATIC_RETRY_AFTER_MS = 6_000;
+const RETRY_AFTER_SAFETY_MARGIN_MS = 250;
 
 function sanitizedDiagnosticPath(path: string) {
   return path.replace(
@@ -340,6 +343,80 @@ function waitForRetry(delay: number, signal?: AbortSignal | null) {
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function numericRetryAfterMilliseconds(value: unknown) {
+  const seconds = Number(String(value ?? "").trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  return Math.ceil(seconds * 1000) + RETRY_AFTER_SAFETY_MARGIN_MS;
+}
+
+function retryAfterFromBody(bodyText: string) {
+  if (!bodyText.trim()) return null;
+  try {
+    const payload = JSON.parse(bodyText) as {
+      metadata?: { retry_after?: unknown };
+      retry_after?: unknown;
+    };
+    return numericRetryAfterMilliseconds(
+      payload.metadata?.retry_after ?? payload.retry_after,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns the bounded server-directed retry delay for an idempotent native
+ * request. The body fallback is important for the direct Android stream
+ * bridge, which intentionally exposes status and response text but not every
+ * response header. A null value means the response should use normal retry
+ * timing or be shown to the user.
+ */
+export function managedRetryAfterMilliseconds(
+  responseHeaders: HeadersInit | undefined,
+  bodyText: string,
+) {
+  const headerValue = responseHeaders
+    ? new Headers(responseHeaders).get("Retry-After")
+    : null;
+  const delay =
+    numericRetryAfterMilliseconds(headerValue) ?? retryAfterFromBody(bodyText);
+  if (delay === null || delay > MAX_AUTOMATIC_RETRY_AFTER_MS) return null;
+  return delay;
+}
+
+function isIdempotencyRetryBackoffResponse(
+  status: number,
+  bodyText: string,
+  responseHeaders: HeadersInit | undefined,
+) {
+  return (
+    status === 409 &&
+    /IDEMPOTENCY_RETRY_BACKOFF/i.test(bodyText) &&
+    managedRetryAfterMilliseconds(responseHeaders, bodyText) !== null
+  );
+}
+
+function shouldRetryNativeResponse(
+  status: number,
+  bodyText: string,
+  responseHeaders: HeadersInit | undefined,
+) {
+  return (
+    RETRYABLE_HTTP_STATUS.has(status) ||
+    isIdempotencyRetryBackoffResponse(status, bodyText, responseHeaders)
+  );
+}
+
+function nativeRetryDelayMilliseconds(
+  attempt: number,
+  responseHeaders: HeadersInit | undefined,
+  bodyText: string,
+) {
+  return (
+    managedRetryAfterMilliseconds(responseHeaders, bodyText) ?? 250 * attempt
+  );
 }
 
 function settleWithAbort<T>(promise: Promise<T>, signal?: AbortSignal | null) {
@@ -563,7 +640,11 @@ export async function managedRequestText(
   const idempotent =
     method === "GET" || method === "HEAD" || headers.has("Idempotency-Key");
   const native = isAndroidNativeHttpAvailable();
-  const nativeAttempts = native && idempotent ? 2 : 1;
+  const nativeAttempts = native
+    ? idempotent
+      ? MAX_NATIVE_IDEMPOTENT_ATTEMPTS
+      : 1
+    : 1;
   let lastError: unknown;
 
   if (native) {
@@ -602,6 +683,7 @@ export async function managedRequestText(
         const result = {
           ok: response.status >= 200 && response.status < 300,
           status: response.status,
+          headers: "headers" in response ? response.headers : undefined,
           text:
             typeof data === "string"
               ? data
@@ -612,8 +694,17 @@ export async function managedRequestText(
         if (
           idempotent &&
           attempt < nativeAttempts &&
-          RETRYABLE_HTTP_STATUS.has(response.status)
+          shouldRetryNativeResponse(
+            response.status,
+            result.text,
+            result.headers,
+          )
         ) {
+          const retryDelay = nativeRetryDelayMilliseconds(
+            attempt,
+            result.headers,
+            result.text,
+          );
           recordManagedRequestDiagnostic({
             at: Date.now(),
             method,
@@ -622,9 +713,9 @@ export async function managedRequestText(
             attempt,
             status: response.status,
             category: "http",
-            message: `HTTP ${response.status}`,
+            message: `HTTP ${response.status}; retry in ${retryDelay}ms`,
           });
-          await waitForRetry(250 * attempt, signal);
+          await waitForRetry(retryDelay, signal);
           continue;
         }
         if (attempt > 1 && result.ok) {
@@ -785,12 +876,14 @@ export async function managedJsonRequest<T>(
     : null;
   if (!res.ok || !payload || payload.code !== 0) {
     const category = !res.ok ? "http" : "api";
+    const errorCode = payload?.metadata?.error_code;
     throw new ManagedApiError(
       formatManagedMobileError({
         message: payload?.message || bodyText,
         status: res.status,
         path,
         code: payload?.code,
+        errorCode,
         category,
         requestId: res.requestId,
       }),

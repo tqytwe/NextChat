@@ -48,6 +48,7 @@ import type {
   MobileAdminClient,
   MobileAdminComplianceStatus,
   MobileAdminPage,
+  MobileAdminRequestResult,
 } from "../client/mobile-admin";
 import {
   formatManagedMobileError,
@@ -104,6 +105,11 @@ type AdminDetailKind =
 type AdminDetailSection = {
   title: string;
   data: unknown;
+};
+
+type AdminDetailRequest = {
+  title: string;
+  request: () => Promise<MobileAdminRequestResult<unknown>>;
 };
 
 type SelectedAdminDetail = {
@@ -246,6 +252,49 @@ export function formatMobileAdminWorkspaceError(
     category,
     requestId,
   });
+}
+
+/**
+ * Detail views combine independent backend reads. One unavailable auxiliary
+ * endpoint must not hide the user, order, or subscription data that did load.
+ */
+export async function loadAdminDetailSections(
+  requests: AdminDetailRequest[],
+  unavailable: string,
+) {
+  const settled = await Promise.allSettled(
+    requests.map((request) => request.request()),
+  );
+  const sections: AdminDetailSection[] = [];
+  let requestId = "";
+  let firstFailure: unknown = null;
+  let successCount = 0;
+
+  settled.forEach((result, index) => {
+    const request = requests[index];
+    if (result.status === "fulfilled") {
+      successCount += 1;
+      requestId = result.value.requestId || requestId;
+      sections.push({ title: request.title, data: result.value.data });
+      return;
+    }
+    firstFailure ||= result.reason;
+    const failedRequestId = mobileAdminRequestId(result.reason);
+    requestId = requestId || failedRequestId;
+    sections.push({
+      title: request.title,
+      data: {
+        unavailable: formatMobileAdminWorkspaceError(
+          result.reason,
+          unavailable,
+        ),
+        request_id: failedRequestId,
+      },
+    });
+  });
+
+  if (!successCount && firstFailure) throw firstFailure;
+  return { sections, requestId };
 }
 
 function requiredComplianceFromError(error: unknown) {
@@ -836,37 +885,52 @@ export function MobileAdminWorkspace(props: {
       let nextRequestId = "";
 
       if (kind === "user") {
-        const [user, usage, history, reconciliation, subscriptions] =
-          await Promise.all([
-            getMobileAdminUser(client, id, options),
-            getMobileAdminUserUsage(client, id, { period: "month" }, options),
-            getMobileAdminUserWalletHistory(
-              client,
-              id,
-              { page: 1, page_size: 20 },
-              options,
-            ),
-            getMobileAdminUserWalletReconciliation(client, id, options),
-            listMobileAdminUserSubscriptions(
-              client,
-              id,
-              { page: 1, page_size: 20 },
-              options,
-            ),
-          ]);
-        sections = [
-          { title: labels.userDetails, data: user.data },
-          { title: labels.usage, data: usage.data },
-          { title: labels.reconciliation, data: reconciliation.data },
-          { title: labels.balanceHistory, data: history.data },
-          { title: labels.subscriptions, data: subscriptions.data },
-        ];
-        nextRequestId =
-          subscriptions.requestId ||
-          reconciliation.requestId ||
-          history.requestId ||
-          usage.requestId ||
-          user.requestId;
+        const loaded = await loadAdminDetailSections(
+          [
+            {
+              title: labels.userDetails,
+              request: () => getMobileAdminUser(client, id, options),
+            },
+            {
+              title: labels.usage,
+              request: () =>
+                getMobileAdminUserUsage(
+                  client,
+                  id,
+                  { period: "month" },
+                  options,
+                ),
+            },
+            {
+              title: labels.balanceHistory,
+              request: () =>
+                getMobileAdminUserWalletHistory(
+                  client,
+                  id,
+                  { page: 1, page_size: 20 },
+                  options,
+                ),
+            },
+            {
+              title: labels.reconciliation,
+              request: () =>
+                getMobileAdminUserWalletReconciliation(client, id, options),
+            },
+            {
+              title: labels.subscriptions,
+              request: () =>
+                listMobileAdminUserSubscriptions(
+                  client,
+                  id,
+                  { page: 1, page_size: 20 },
+                  options,
+                ),
+            },
+          ],
+          labels.unavailable,
+        );
+        sections = loaded.sections;
+        nextRequestId = loaded.requestId;
       } else if (kind === "order") {
         const order = await getMobileAdminOrder(client, id, options);
         sections = [{ title: labels.orderDetails, data: order.data }];
@@ -887,25 +951,38 @@ export function MobileAdminWorkspace(props: {
             progress.requestId || subscription.requestId || nextRequestId;
         }
       } else if (kind === "subscription") {
-        const [subscription, progress] = await Promise.all([
-          getMobileAdminSubscription(client, id, options),
-          getMobileAdminSubscriptionProgress(client, id, options),
-        ]);
-        sections = [
-          { title: labels.subscriptionDetails, data: subscription.data },
-          { title: labels.subscriptionProgress, data: progress.data },
-        ];
-        nextRequestId = progress.requestId || subscription.requestId;
+        const loaded = await loadAdminDetailSections(
+          [
+            {
+              title: labels.subscriptionDetails,
+              request: () => getMobileAdminSubscription(client, id, options),
+            },
+            {
+              title: labels.subscriptionProgress,
+              request: () =>
+                getMobileAdminSubscriptionProgress(client, id, options),
+            },
+          ],
+          labels.unavailable,
+        );
+        sections = loaded.sections;
+        nextRequestId = loaded.requestId;
       } else if (kind === "group") {
-        const [group, stats] = await Promise.all([
-          getMobileAdminGroup(client, id, options),
-          getMobileAdminGroupStats(client, id, options),
-        ]);
-        sections = [
-          { title: labels.groupDetails, data: group.data },
-          { title: labels.groupStats, data: stats.data },
-        ];
-        nextRequestId = stats.requestId || group.requestId;
+        const loaded = await loadAdminDetailSections(
+          [
+            {
+              title: labels.groupDetails,
+              request: () => getMobileAdminGroup(client, id, options),
+            },
+            {
+              title: labels.groupStats,
+              request: () => getMobileAdminGroupStats(client, id, options),
+            },
+          ],
+          labels.unavailable,
+        );
+        sections = loaded.sections;
+        nextRequestId = loaded.requestId;
       } else if (kind === "withdrawal") {
         const withdrawal = await getMobileAdminWithdrawal(client, id, options);
         sections = [{ title: labels.withdrawalDetails, data: withdrawal.data }];
