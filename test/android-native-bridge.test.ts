@@ -13,8 +13,11 @@ const {
   finishNativeApp,
   loadLoginCredentials,
   showNativeToast,
+  speakNativeText,
   startForegroundPttSession,
+  startForegroundWakeWordSession,
   startDirectNativeStreamRequest,
+  stopNativeSpeech,
 } = await import(
   "../app/client/android-native"
 );
@@ -129,6 +132,39 @@ test("native bridge implements a system toast and finish action for double back"
   expect(source).toContain("Toast.makeText(");
   expect(source).toContain('case "finishApp"');
   expect(source).toContain("finishAndRemoveTask()");
+});
+
+test("native image storage requires an owner and never claims legacy files", () => {
+  const source = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  const plugin = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/NextChatNativePlugin.java",
+    ),
+    "utf8",
+  );
+  for (const implementation of [source, plugin]) {
+    expect(implementation).toContain("image owner is required");
+    expect(implementation).toContain(
+      'String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();',
+    );
+    expect(implementation).toContain(
+      'metadata.put("ownerUserId", requestedOwner)',
+    );
+    expect(implementation).toContain('requestedOwner.equals(owner)');
+    expect(implementation).toContain(
+      'requestedOwner.equals(imageMetadata.optString("ownerUserId", ""))',
+    );
+    expect(implementation).not.toContain(
+      'metadata.put("ownerUserId", ownerUserId)',
+    );
+  }
 });
 
 test("foreground PTT streams transcript events by session and cancels on route change", async () => {
@@ -300,6 +336,123 @@ test("foreground PTT native bridge exposes partial, final, error, and lifecycle 
   expect(source).toContain('"error",');
   expect(source).toContain('cancelActiveSpeechSessions("app_backgrounded")');
   expect(source).toContain('cancelActiveSpeechSessions("route_changed")');
+});
+
+test("foreground wake word stays in the native bridge and releases after a match", async () => {
+  window.history.replaceState(
+    {},
+    "",
+    "/?nativeBridgeToken=launch-secret-123",
+  );
+  const requests: Array<{
+    id: string;
+    method: string;
+    options?: Record<string, unknown>;
+  }> = [];
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const request = JSON.parse(raw) as {
+        id: string;
+        method: string;
+        options?: Record<string, unknown>;
+      };
+      requests.push(request);
+      if (request.method === "requestMicrophonePermission") {
+        window.__jisudengNativeResolve?.(request.id, { granted: true });
+        return;
+      }
+      if (request.method === "startWakeWord") {
+        window.__jisudengNativeResolve?.(request.id, {
+          sessionId: request.options?.sessionId,
+          state: "listening",
+        });
+        return;
+      }
+      if (request.method === "speakText") {
+        const utteranceId = String(request.options?.utteranceId || "");
+        // This intentionally precedes the request response. The bridge must
+        // already know the caller's utterance ID before native TTS can finish.
+        window.__jisudengNativeSpeechEvent?.(utteranceId, "done");
+        window.__jisudengNativeResolve?.(request.id, {
+          utteranceId,
+        });
+        return;
+      }
+      if (request.method === "stopSpeaking") {
+        window.__jisudengNativeResolve?.(request.id, {});
+      }
+    },
+  };
+
+  const events: Array<{ type: string; transcript?: string }> = [];
+  await startForegroundWakeWordSession({
+    sessionId: "wake-session-1",
+    phrase: "极速蹬",
+    language: "zh-CN",
+    onEvent: (event) => events.push(event),
+  });
+  window.__jisudengNativeWakeWordEvent?.("wake-session-1", "partial", {
+    transcript: "极速蹬",
+  });
+  window.__jisudengNativeWakeWordEvent?.("wake-session-1", "matched", {
+    transcript: "极速蹬 帮我总结这段话",
+  });
+
+  const speechEvents: Array<{ type: string; utteranceId: string }> = [];
+  await speakNativeText({
+    text: "好的，我来帮你总结。",
+    language: "zh-CN",
+    onEvent: (event) => speechEvents.push(event),
+  });
+  await stopNativeSpeech();
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(events).toEqual([
+    { sessionId: "wake-session-1", type: "partial", transcript: "极速蹬" },
+    {
+      sessionId: "wake-session-1",
+      type: "matched",
+      transcript: "极速蹬 帮我总结这段话",
+    },
+  ]);
+  expect(requests.map((request) => request.method)).toEqual([
+    "requestMicrophonePermission",
+    "startWakeWord",
+    "speakText",
+    "stopSpeaking",
+  ]);
+  expect(requests[1].options).toMatchObject({
+    sessionId: "wake-session-1",
+    phrase: "极速蹬",
+    language: "zh-CN",
+  });
+  expect(speechEvents).toEqual([
+    {
+      utteranceId: expect.stringMatching(/^tts-/),
+      type: "done",
+      message: undefined,
+    },
+  ]);
+  expect(requests[2].options?.utteranceId).toMatch(/^tts-/);
+});
+
+test("native wake word and speech APIs are foreground lifecycle bounded", () => {
+  const source = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  expect(source).toContain('case "startWakeWord"');
+  expect(source).toContain('case "stopWakeWord"');
+  expect(source).toContain('case "speakText"');
+  expect(source).toContain('case "stopSpeaking"');
+  expect(source).toContain("TextToSpeech");
+  expect(source).toContain("UtteranceProgressListener");
+  expect(source).toContain("__jisudengNativeSpeechEvent");
+  expect(source).toContain('cancelActiveSpeechSessions("app_backgrounded")');
 });
 
 test("native app storage retains local project grouping metadata", () => {

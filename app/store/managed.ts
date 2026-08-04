@@ -56,6 +56,24 @@ const DEFAULT_MANAGED_STATE = {
   loading: false,
 };
 
+/**
+ * Authentication/session data belongs in Android Keystore.  The IndexedDB
+ * store keeps only the fixed backend origin, so a transient error or a prior
+ * account's workspace cannot reappear after an upgrade or app restart.
+ */
+export function managedPersistedState(input: {
+  backendBaseUrl?: unknown;
+  [key: string]: unknown;
+}) {
+  return {
+    backendBaseUrl: normalizeManagedBaseUrl(
+      typeof input.backendBaseUrl === "string"
+        ? input.backendBaseUrl
+        : DEFAULT_MANAGED_BACKEND_BASE_URL,
+    ),
+  };
+}
+
 type ManagedLoginResult = {
   requires2FA: boolean;
 };
@@ -565,22 +583,11 @@ export const useManagedNextChatStore = createPersistStore<
   },
   {
     name: StoreKey.ManagedNextChat,
-    version: 3,
-    partialize: (state: any) => {
-      const {
-        accessToken: _accessToken,
-        refreshToken: _refreshToken,
-        accessTokenExpiresAt: _accessTokenExpiresAt,
-        session: _session,
-        imageSession: _imageSession,
-        mobileProtocol: _mobileProtocol,
-        ...persisted
-      } = state;
-      return persisted;
-    },
-    migrate: (persistedState: any, _persistedVersion: number) => ({
+    version: 4,
+    partialize: ((state: any) => managedPersistedState(state)) as any,
+    migrate: ((persistedState: any, _persistedVersion: number) => ({
       ...DEFAULT_MANAGED_STATE,
-      ...(persistedState || {}),
-    }),
+      ...managedPersistedState(persistedState || {}),
+    })) as any,
   },
 );

@@ -324,6 +324,11 @@ public class NextChatNativePlugin extends Plugin {
         String label = call.getString("label", "");
         String collectionId = call.getString("collectionId", "");
         try {
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                call.reject("image owner is required");
+                return;
+            }
             byte[] data = decodeDataUrl(dataUrl);
             String mimeType = mimeTypeFromDataUrl(dataUrl);
             File dir = getAppImageDir();
@@ -336,7 +341,7 @@ public class NextChatNativePlugin extends Plugin {
             metadata.put("fileName", file.getName());
             metadata.put("prompt", prompt == null ? "" : prompt);
             metadata.put("model", model == null ? "" : model);
-            metadata.put("ownerUserId", ownerUserId == null ? "" : ownerUserId);
+            metadata.put("ownerUserId", requestedOwner);
             metadata.put("projectId", projectId == null ? "" : projectId);
             metadata.put("runId", runId == null ? "" : runId);
             metadata.put("shotId", shotId == null ? "" : shotId);
@@ -357,6 +362,11 @@ public class NextChatNativePlugin extends Plugin {
     public void listAppImages(PluginCall call) {
         try {
             String ownerUserId = call.getString("ownerUserId", "");
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                call.reject("image owner is required");
+                return;
+            }
             JSONArray items = new JSONArray();
             File[] files = getAppImageDir().listFiles();
             if (files != null) {
@@ -370,14 +380,9 @@ public class NextChatNativePlugin extends Plugin {
                 for (File file : images) {
                     JSONObject metadata = readImageMetadata(file);
                     String owner = metadata.optString("ownerUserId", "");
-                    // Old releases did not have account ownership metadata. Claim
-                    // those legacy files only for the account that first opens them.
-                    if (owner.isEmpty() && ownerUserId != null && !ownerUserId.isEmpty()) {
-                        metadata.put("ownerUserId", ownerUserId);
-                        writeImageMetadata(file, metadata);
-                        owner = ownerUserId;
-                    }
-                    if (ownerUserId == null || ownerUserId.isEmpty() || ownerUserId.equals(owner)) {
+                    // Keep legacy files without ownership metadata on disk, but
+                    // never expose them to whichever account logs in first.
+                    if (!owner.isEmpty() && requestedOwner.equals(owner)) {
                         items.put(appImagePayload(file, metadata));
                     }
                 }
@@ -394,6 +399,12 @@ public class NextChatNativePlugin extends Plugin {
     public void deleteAppImages(PluginCall call) {
         int deleted = 0;
         try {
+            String ownerUserId = call.getString("ownerUserId", "");
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                call.reject("image owner is required");
+                return;
+            }
             JSONArray fileNames = call.getArray("fileNames");
             if (fileNames != null) {
                 File dir = getAppImageDir();
@@ -405,6 +416,10 @@ public class NextChatNativePlugin extends Plugin {
                         continue;
                     }
                     File metadata = metadataFile(file);
+                    JSONObject imageMetadata = readImageMetadata(file);
+                    if (!requestedOwner.equals(imageMetadata.optString("ownerUserId", ""))) {
+                        continue;
+                    }
                     if (file.exists() && file.delete()) {
                         deleted += 1;
                     }

@@ -65,7 +65,6 @@ import type {
   AndroidReleaseVersion,
 } from "../client/android-release-version";
 import { compressImage, removeImage } from "../utils/chat";
-import { indexedDBStorage } from "../utils/indexedDB-storage";
 import {
   ManagedApiError,
   ManagedTransportError,
@@ -136,6 +135,7 @@ import {
   requestMicrophonePermission,
   requestNotificationPermission,
   cancelForegroundPttSession,
+  cancelAllForegroundWakeWordSessions,
   notifyForegroundPttRouteChange,
   recognizeSpeech,
   saveImageToAppStorage,
@@ -147,8 +147,11 @@ import {
   isDirectNativeStreamAvailable,
   startDirectNativeStreamRequest,
   startForegroundPttSession,
+  startForegroundWakeWordSession,
   startNativeDownload,
+  speakNativeText,
   stopForegroundPttSession,
+  stopNativeSpeech,
   readNativeSharedMaterial,
   loadLoginCredentials,
   saveLoginCredentials,
@@ -160,6 +163,7 @@ import type {
   NativeAppImage,
   NativeForegroundPttSession,
   NativeSharedMaterial,
+  NativeWakeWordSession,
 } from "../client/android-native";
 import {
   deleteLocalMaterials,
@@ -167,6 +171,7 @@ import {
   listLocalMaterials,
   readLocalMaterialBlob,
   readLocalMaterialDataUrl,
+  clearLocalMaterials,
 } from "../client/local-materials";
 import type { LocalMaterial } from "../client/local-materials";
 import {
@@ -1115,6 +1120,21 @@ type GalleryPreference = {
 
 type GalleryPreferences = Record<string, GalleryPreference>;
 
+type MobileVoiceConversationPreferences = {
+  enabled: boolean;
+  wakeWordEnabled: boolean;
+  wakeWordPhrase: string;
+  ttsRate: number;
+};
+
+const DEFAULT_VOICE_CONVERSATION_PREFERENCES: MobileVoiceConversationPreferences =
+  {
+    enabled: false,
+    wakeWordEnabled: false,
+    wakeWordPhrase: "极速蹬",
+    ttsRate: 1,
+  };
+
 type LocalizedString = {
   cn: string;
   en: string;
@@ -1199,6 +1219,7 @@ const PAYMENT_RESULT_FALLBACK_URL = "https://www.jisudeng.com/payment/result";
 const GALLERY_PREF_STORAGE_KEY = "jisudengchat-gallery-preferences-v1";
 const IMAGE_PREF_STORAGE_KEY = "jisudengchat-image-preferences-v1";
 const CHAT_PREF_STORAGE_KEY = "jisudengchat-chat-preferences-v1";
+const VOICE_CONVERSATION_STORAGE_KEY = "jisudengchat-voice-conversation-v1";
 const NATIVE_SHARE_DRAFT_KEY = "jisudengchat-native-share-draft-v1";
 const CRASH_LOG_STORAGE_KEY = "nextchat-mobile-crash-log";
 const DIAGNOSTICS_CURSOR_STORAGE_KEY = "jisudengchat-diagnostics-last-sent-v1";
@@ -2449,6 +2470,33 @@ function readChatPreference() {
   );
 }
 
+function readVoiceConversationPreferences(): MobileVoiceConversationPreferences {
+  const stored = readStoredJSON(
+    VOICE_CONVERSATION_STORAGE_KEY,
+    DEFAULT_VOICE_CONVERSATION_PREFERENCES,
+  );
+  const phrase = String(stored.wakeWordPhrase || "")
+    .trim()
+    .slice(0, 64);
+  return {
+    enabled: Boolean(stored.enabled),
+    wakeWordEnabled: Boolean(stored.wakeWordEnabled) && Boolean(phrase),
+    wakeWordPhrase:
+      phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
+    ttsRate: Math.min(2, Math.max(0.5, Number(stored.ttsRate) || 1)),
+  };
+}
+
+function plainVoiceText(value: string) {
+  return value
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/!?(?:\[[^\]]*\])?\([^)]*\)/g, "")
+    .replace(/[`*_>#]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 3800);
+}
+
 function resolveChatPreference(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
   preferredGroupId?: number,
@@ -2650,6 +2698,19 @@ function accountStorageKey(key: string) {
   const userId =
     state.user?.id || state.session?.user_id || state.workspace?.user?.id;
   return userId ? `${key}:user:${userId}` : key;
+}
+
+function clearAccountScopedLocalStorage(userId: string) {
+  if (typeof localStorage === "undefined") return;
+  const owner = String(userId || "").trim();
+  if (!owner) return;
+  const suffix = `:user:${owner}`;
+  const keys: string[] = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key && key.endsWith(suffix)) keys.push(key);
+  }
+  keys.forEach((key) => localStorage.removeItem(key));
 }
 
 function readStoredJSON<T>(key: string, fallback: T): T {
@@ -4252,6 +4313,9 @@ function AndroidDashboard() {
   const text = useMobileText();
   const navigate = useNavigate();
   const workspace = managed.workspace;
+  const activeAccountId = String(
+    managed.user?.id || managed.session?.user_id || workspace?.user?.id || "",
+  );
   const [dashboardChatGroupId, setDashboardChatGroupId] = useState<
     number | undefined
   >(() => storedChatPreferenceGroupID() || undefined);
@@ -4364,7 +4428,7 @@ function AndroidDashboard() {
     try {
       const localFileNames = imageLocalFileNames(item);
       if (localFileNames.length) {
-        await deleteAppImages(localFileNames);
+        await deleteAppImages(localFileNames, activeAccountId);
       }
       await Promise.allSettled(
         imageResults(item)
@@ -4722,7 +4786,16 @@ function AndroidDashboard() {
       </section>
 
       {managed.lastError && !workspace && (
-        <div className={styles["form-error"]}>{managed.lastError}</div>
+        <div className={styles["workspace-recovery-error"]} role="alert">
+          <span>{managed.lastError}</span>
+          <button
+            type="button"
+            onClick={() => managed.bootstrap().catch(() => undefined)}
+            disabled={managed.loading}
+          >
+            {text.common.retry}
+          </button>
+        </div>
       )}
       <SessionActionSheet
         session={sessionActionTarget}
@@ -4962,6 +5035,143 @@ function ChoiceSheet(props: {
               {item.active && <em>{props.text.common.selectedMark}</em>}
             </button>
           ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function VoiceConversationSheet(props: {
+  open: boolean;
+  text: ManagedMobileText;
+  preferences: MobileVoiceConversationPreferences;
+  listening: boolean;
+  speaking: boolean;
+  onClose: () => void;
+  onChange: (next: MobileVoiceConversationPreferences) => void;
+  onStopSpeaking: () => void;
+}) {
+  if (!props.open) return null;
+  const update = (patch: Partial<MobileVoiceConversationPreferences>) => {
+    const next = { ...props.preferences, ...patch };
+    if (!next.enabled) next.wakeWordEnabled = false;
+    props.onChange(next);
+  };
+  const rateLabel = `${Number(props.preferences.ttsRate || 1).toFixed(1)}x`;
+
+  return (
+    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+      <aside
+        className={clsx(
+          styles["session-sheet"],
+          styles["voice-settings-sheet"],
+        )}
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.text.chat.voiceConversation}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className={styles["sheet-head"]}>
+          <div>
+            <h2>{props.text.chat.voiceConversation}</h2>
+            <small>{props.text.chat.voiceConversationHint}</small>
+          </div>
+          <IconButton label={props.text.common.close} onClick={props.onClose}>
+            <CloseIcon />
+          </IconButton>
+        </div>
+
+        <div className={styles["voice-settings-list"]}>
+          <label className={styles["voice-settings-toggle"]}>
+            <span>
+              <strong>{props.text.chat.voiceConversation}</strong>
+              <small>{props.text.chat.voiceConversationHint}</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={props.preferences.enabled}
+              onChange={(event) =>
+                update({ enabled: event.currentTarget.checked })
+              }
+            />
+          </label>
+
+          <label
+            className={clsx(styles["voice-settings-toggle"], {
+              [styles["disabled"]]: !props.preferences.enabled,
+            })}
+          >
+            <span>
+              <strong>{props.text.chat.wakeWord}</strong>
+              <small>{props.text.chat.wakeWordHint}</small>
+            </span>
+            <input
+              type="checkbox"
+              disabled={!props.preferences.enabled}
+              checked={
+                props.preferences.enabled && props.preferences.wakeWordEnabled
+              }
+              onChange={(event) =>
+                update({ wakeWordEnabled: event.currentTarget.checked })
+              }
+            />
+          </label>
+
+          <label
+            className={clsx(styles["voice-settings-field"], {
+              [styles["disabled"]]: !props.preferences.enabled,
+            })}
+          >
+            <span>{props.text.chat.wakeWordPhrase}</span>
+            <input
+              value={props.preferences.wakeWordPhrase}
+              maxLength={64}
+              disabled={!props.preferences.enabled}
+              placeholder={props.text.chat.wakeWordPlaceholder}
+              onChange={(event) =>
+                update({ wakeWordPhrase: event.currentTarget.value })
+              }
+            />
+          </label>
+
+          <label
+            className={clsx(styles["voice-settings-field"], {
+              [styles["disabled"]]: !props.preferences.enabled,
+            })}
+          >
+            <span>
+              {props.text.chat.voicePlaybackRate} <em>{rateLabel}</em>
+            </span>
+            <input
+              type="range"
+              min="0.5"
+              max="2"
+              step="0.1"
+              disabled={!props.preferences.enabled}
+              value={props.preferences.ttsRate}
+              onChange={(event) =>
+                update({ ttsRate: Number(event.currentTarget.value) || 1 })
+              }
+            />
+          </label>
+
+          {(props.listening || props.speaking) && (
+            <div className={styles["voice-settings-state"]}>
+              <VoiceIcon />
+              <span>
+                {props.speaking
+                  ? props.text.chat.voiceStopSpeaking
+                  : props.text.chat.wakeWordListening(
+                      props.preferences.wakeWordPhrase,
+                    )}
+              </span>
+              {props.speaking && (
+                <button type="button" onClick={props.onStopSpeaking}>
+                  {props.text.chat.voiceStopSpeaking}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </aside>
     </div>
@@ -6151,6 +6361,7 @@ function AndroidChat() {
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
   const [skillSheetOpen, setSkillSheetOpen] = useState(false);
+  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [webSearchBusy, setWebSearchBusy] = useState(false);
@@ -6171,6 +6382,12 @@ function AndroidChat() {
   const [voiceBarOpen, setVoiceBarOpen] = useState(false);
   const [voiceCancelling, setVoiceCancelling] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [voicePreferences, setVoicePreferences] = useState(
+    readVoiceConversationPreferences,
+  );
+  const [wakeWordListening, setWakeWordListening] = useState(false);
+  const [wakeWordStatus, setWakeWordStatus] = useState("");
+  const [voiceSpeaking, setVoiceSpeaking] = useState(false);
   const [groupSwitching, setGroupSwitching] = useState(false);
   const [chatError, setChatError] = useState("");
   const [quotedMessage, setQuotedMessage] = useState<QuotedChatMessage | null>(
@@ -6191,6 +6408,9 @@ function AndroidChat() {
   const voiceReleasedRef = useRef(false);
   const voicePttSessionRef = useRef<NativeForegroundPttSession | null>(null);
   const voicePttSessionIdRef = useRef("");
+  const voiceAutoSendRef = useRef(false);
+  const wakeWordSessionRef = useRef<NativeWakeWordSession | null>(null);
+  const voicePreferencesRef = useRef(voicePreferences);
   const listRef = useRef<HTMLDivElement | null>(null);
   const autoFollowRef = useRef(true);
   const lastScrolledSessionRef = useRef("");
@@ -6759,21 +6979,89 @@ function AndroidChat() {
     }
   }
 
-  async function beginVoiceHold(event: PointerEvent<HTMLButtonElement>) {
+  function updateVoicePreferences(
+    updater: (
+      current: MobileVoiceConversationPreferences,
+    ) => MobileVoiceConversationPreferences,
+  ) {
+    setVoicePreferences((current) => {
+      const next = updater(current);
+      const phrase = next.wakeWordPhrase.trim().slice(0, 64);
+      const normalized = {
+        ...next,
+        wakeWordPhrase:
+          phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
+        wakeWordEnabled: Boolean(
+          next.enabled && next.wakeWordEnabled && phrase,
+        ),
+        ttsRate: Math.min(2, Math.max(0.5, Number(next.ttsRate) || 1)),
+      };
+      writeStoredJSON(VOICE_CONVERSATION_STORAGE_KEY, normalized);
+      return normalized;
+    });
+  }
+
+  async function stopVoiceSpeaking() {
+    try {
+      await stopNativeSpeech();
+    } finally {
+      setVoiceSpeaking(false);
+    }
+  }
+
+  async function speakAssistantReply(content: string) {
+    if (!voicePreferencesRef.current.enabled) return;
+    const speech = plainVoiceText(content);
+    if (!speech) return;
+    setVoiceSpeaking(true);
+    try {
+      const utteranceId = await speakNativeText({
+        text: speech,
+        language: text.dateLocale,
+        rate: voicePreferencesRef.current.ttsRate,
+        onEvent: (event) => {
+          if (
+            event.type === "done" ||
+            event.type === "error" ||
+            event.type === "stopped"
+          ) {
+            setVoiceSpeaking(false);
+          }
+        },
+      });
+      if (!utteranceId) setVoiceSpeaking(false);
+    } catch {
+      setVoiceSpeaking(false);
+      setChatError(text.chat.ttsUnavailable);
+    }
+  }
+
+  async function startVoiceTurn(
+    options: {
+      event?: PointerEvent<HTMLButtonElement>;
+      autoSend?: boolean;
+    } = {},
+  ) {
     if (listening || running) return;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    voiceStartYRef.current = event.clientY;
+    options.event?.currentTarget.setPointerCapture?.(options.event.pointerId);
+    voiceStartYRef.current = options.event?.clientY || 0;
     voiceCancelledRef.current = false;
     voiceReleasedRef.current = false;
+    voiceAutoSendRef.current = Boolean(options.autoSend);
     setVoiceCancelling(false);
     setVoiceTranscript("");
     setListening(true);
     setChatError("");
+    setWakeWordStatus("");
     const sessionId = `chat-ptt-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 10)}`;
     voicePttSessionIdRef.current = sessionId;
     try {
+      await cancelAllForegroundWakeWordSessions("ptt_started");
+      wakeWordSessionRef.current?.unsubscribe();
+      wakeWordSessionRef.current = null;
+      setWakeWordListening(false);
       const session = await startForegroundPttSession({
         sessionId,
         language: text.dateLocale,
@@ -6786,10 +7074,19 @@ function AndroidChat() {
           }
           if (result.type === "final") {
             const recognized = (result.text || "").trim();
+            const autoSend = voiceAutoSendRef.current;
             if (recognized) {
-              setInput((value) =>
-                [value.trim(), recognized].filter(Boolean).join("\n"),
-              );
+              if (autoSend) {
+                setInput("");
+                setQuotedMessage(null);
+                window.setTimeout(() => {
+                  void sendChat(recognized);
+                }, 0);
+              } else {
+                setInput((value) =>
+                  [value.trim(), recognized].filter(Boolean).join("\n"),
+                );
+              }
               setVoiceBarOpen(false);
             } else if (!voiceCancelledRef.current) {
               setChatError(text.errors.emptySpeechResult);
@@ -6814,6 +7111,7 @@ function AndroidChat() {
             setVoiceCancelling(false);
             voiceCancelledRef.current = false;
             voiceReleasedRef.current = false;
+            voiceAutoSendRef.current = false;
           }
         },
       });
@@ -6846,9 +7144,119 @@ function AndroidChat() {
         voicePttSessionIdRef.current = "";
         voiceCancelledRef.current = false;
         voiceReleasedRef.current = false;
+        voiceAutoSendRef.current = false;
       }
     }
   }
+
+  function beginVoiceHold(event: PointerEvent<HTMLButtonElement>) {
+    void startVoiceTurn({ event });
+  }
+
+  function startVoiceConversationTurn() {
+    if (listening || running) return;
+    setWakeWordStatus(text.chat.wakeWordMatched);
+    setVoiceBarOpen(true);
+    void startVoiceTurn({ autoSend: true });
+  }
+
+  useEffect(() => {
+    voicePreferencesRef.current = voicePreferences;
+  }, [voicePreferences]);
+
+  useEffect(() => {
+    let disposed = false;
+    const enabled =
+      voicePreferences.enabled && voicePreferences.wakeWordEnabled;
+    const phrase = voicePreferences.wakeWordPhrase.trim();
+
+    async function stopWakeWord(reason: string) {
+      const session = wakeWordSessionRef.current;
+      wakeWordSessionRef.current = null;
+      setWakeWordListening(false);
+      if (session) {
+        session.unsubscribe();
+        await session.stop(reason).catch(() => undefined);
+      } else {
+        await cancelAllForegroundWakeWordSessions(reason).catch(
+          () => undefined,
+        );
+      }
+    }
+
+    async function syncWakeWord() {
+      if (!enabled || !phrase || running || listening) {
+        await stopWakeWord("voice_turn_active");
+        if (!enabled || !phrase) setWakeWordStatus("");
+        return;
+      }
+      if (wakeWordSessionRef.current) return;
+      try {
+        const session = await startForegroundWakeWordSession({
+          phrase,
+          language: text.dateLocale,
+          onEvent: (event) => {
+            if (disposed) return;
+            if (event.type === "ready") {
+              setWakeWordListening(true);
+              setWakeWordStatus(text.chat.wakeWordListening(phrase));
+              return;
+            }
+            if (event.type === "partial") return;
+            if (event.type === "matched") {
+              wakeWordSessionRef.current?.unsubscribe();
+              wakeWordSessionRef.current = null;
+              setWakeWordListening(false);
+              startVoiceConversationTurn();
+              return;
+            }
+            if (event.type === "error") {
+              wakeWordSessionRef.current?.unsubscribe();
+              wakeWordSessionRef.current = null;
+              setWakeWordListening(false);
+              setWakeWordStatus("");
+              setChatError(text.chat.wakeWordUnavailable);
+              return;
+            }
+            if (event.type === "stopped") {
+              wakeWordSessionRef.current?.unsubscribe();
+              wakeWordSessionRef.current = null;
+              setWakeWordListening(false);
+            }
+          },
+        });
+        if (disposed) {
+          session.unsubscribe();
+          await session.stop("chat_unmounted").catch(() => undefined);
+          return;
+        }
+        wakeWordSessionRef.current = session;
+        setWakeWordListening(true);
+        setWakeWordStatus(text.chat.wakeWordListening(phrase));
+      } catch {
+        if (disposed) return;
+        setWakeWordListening(false);
+        setWakeWordStatus("");
+        setChatError(text.chat.wakeWordUnavailable);
+      }
+    }
+
+    void syncWakeWord();
+    return () => {
+      disposed = true;
+      void stopWakeWord("chat_state_changed");
+    };
+    // `startVoiceConversationTurn` is intentionally read from this render;
+    // the state inputs below define exactly when a recognizer may own the mic.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    listening,
+    running,
+    text.dateLocale,
+    voicePreferences.enabled,
+    voicePreferences.wakeWordEnabled,
+    voicePreferences.wakeWordPhrase,
+  ]);
 
   function moveVoiceHold(event: PointerEvent<HTMLButtonElement>) {
     if (!listening) return;
@@ -6873,6 +7281,10 @@ function AndroidChat() {
   useEffect(() => {
     return () => {
       notifyForegroundPttRouteChange();
+      void stopVoiceSpeaking();
+      wakeWordSessionRef.current?.unsubscribe();
+      wakeWordSessionRef.current = null;
+      setWakeWordListening(false);
     };
   }, [location.pathname]);
 
@@ -7474,10 +7886,14 @@ function AndroidChat() {
         const cleaned = stripVisibleToolCallMarkup(contentBuffer);
         contentBuffer = cleaned || text.chat.assistantThinking;
       }
+      const completedContent = contentBuffer || text.chat.assistantThinking;
       mobileStore.updateChatMessage(sessionId, assistantId, {
-        content: contentBuffer || text.chat.assistantThinking,
+        content: completedContent,
         status: "done",
       });
+      if (contentBuffer.trim()) {
+        void speakAssistantReply(completedContent);
+      }
       void projectedTaskPromise.then(async (completedTask) => {
         if (!completedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
@@ -7931,6 +8347,10 @@ function AndroidChat() {
       setSkillSheetOpen(false);
       return;
     }
+    if (voiceSettingsOpen) {
+      setVoiceSettingsOpen(false);
+      return;
+    }
     if (moreToolsOpen) {
       setMoreToolsOpen(false);
       return;
@@ -8194,6 +8614,12 @@ function AndroidChat() {
               </button>
             </div>
           )}
+          {voicePreferences.enabled && wakeWordStatus && (
+            <div className={styles["voice-status"]} aria-live="polite">
+              <VoiceIcon />
+              <span>{wakeWordStatus}</span>
+            </div>
+          )}
           {moreToolsOpen && (
             <div className={styles["composer-tools"]}>
               <button type="button" onClick={() => fileRef.current?.click()}>
@@ -8227,6 +8653,31 @@ function AndroidChat() {
                     : text.chat.webSearch}
                 </span>
               </button>
+              <button
+                type="button"
+                aria-pressed={voicePreferences.enabled}
+                className={clsx({
+                  [styles["active"]]: voicePreferences.enabled,
+                })}
+                onClick={() => setVoiceSettingsOpen(true)}
+              >
+                <VoiceIcon />
+                <span>
+                  {voicePreferences.enabled
+                    ? text.chat.voiceConversationEnabled
+                    : text.chat.voiceConversation}
+                </span>
+              </button>
+              {voicePreferences.enabled && (
+                <button
+                  type="button"
+                  disabled={!voiceSpeaking}
+                  onClick={() => void stopVoiceSpeaking()}
+                >
+                  <CloseIcon />
+                  <span>{text.chat.voiceStopSpeaking}</span>
+                </button>
+              )}
             </div>
           )}
           <div className={styles["composer-row"]}>
@@ -8372,6 +8823,16 @@ function AndroidChat() {
             changeModel(id);
           }}
         />
+        <VoiceConversationSheet
+          open={voiceSettingsOpen}
+          text={text}
+          preferences={voicePreferences}
+          listening={wakeWordListening}
+          speaking={voiceSpeaking}
+          onClose={() => setVoiceSettingsOpen(false)}
+          onChange={(next) => updateVoicePreferences(() => next)}
+          onStopSpeaking={() => void stopVoiceSpeaking()}
+        />
         <ChatAgentLibrarySheet
           open={agentSheetOpen}
           text={text}
@@ -8447,6 +8908,12 @@ function AndroidContentKit() {
   const mobileStore = useManagedMobileAppStore();
   const text = useMobileText();
   const navigate = useNavigate();
+  const activeAccountId = String(
+    managed.user?.id ||
+      managed.session?.user_id ||
+      managed.workspace?.user?.id ||
+      "",
+  );
   const workspace = managed.workspace
     ? {
         ...managed.workspace,
@@ -9485,7 +9952,7 @@ function AndroidContentKit() {
       .map((asset) => asset.fileName)
       .filter((fileName): fileName is string => Boolean(fileName));
     try {
-      await deleteAppImages(localFileNames);
+      await deleteAppImages(localFileNames, activeAccountId);
     } catch {
       setError(text.platform.contentKit.removeLocalFailed);
     }
@@ -10449,6 +10916,12 @@ function AndroidImageStudio() {
   const sdStore = useSdStore();
   const navigate = useNavigate();
   const location = useLocation();
+  const activeAccountId = String(
+    managed.user?.id ||
+      managed.session?.user_id ||
+      managed.workspace?.user?.id ||
+      "",
+  );
   const workspace = managed.workspace
     ? {
         ...managed.workspace,
@@ -11357,7 +11830,7 @@ function AndroidImageStudio() {
       const removedUrls = items.flatMap(imageResults);
       const localFileNames = items.flatMap(imageLocalFileNames);
       if (localFileNames.length) {
-        await deleteAppImages(localFileNames);
+        await deleteAppImages(localFileNames, activeAccountId);
       }
       await Promise.allSettled(
         removedUrls
@@ -12204,7 +12677,7 @@ function AndroidGallery() {
       const removedUrls = items.flatMap(imageResults);
       const localFileNames = items.flatMap(imageLocalFileNames);
       if (localFileNames.length) {
-        await deleteAppImages(localFileNames);
+        await deleteAppImages(localFileNames, activeAccountId);
       }
       await Promise.allSettled(
         removedUrls
@@ -13348,6 +13821,12 @@ function AndroidAccountSettings() {
   const [supportReply, setSupportReply] = useState("");
   const [supportBusy, setSupportBusy] = useState(false);
   const [supportError, setSupportError] = useState("");
+  const activeAccountId = String(
+    managed.user?.id ||
+      managed.session?.user_id ||
+      managed.workspace?.user?.id ||
+      "",
+  );
   const welfareAccountID = workspace?.user?.id || managed.user?.id || 0;
 
   useEffect(() => {
@@ -13368,17 +13847,19 @@ function AndroidAccountSettings() {
     }
     if (clearAll) {
       await clearLoginCredentials().catch(() => undefined);
-      const localImages = await listAppImages().catch(() => []);
+      const localImages = await listAppImages(activeAccountId).catch(() => []);
       const fileNames = localImages
         .map((item) => item.fileName || "")
         .filter(Boolean);
       if (fileNames.length) {
-        await deleteAppImages(fileNames).catch(() => undefined);
+        await deleteAppImages(fileNames, activeAccountId).catch(
+          () => undefined,
+        );
       }
-      localStorage.clear();
-      await indexedDBStorage.clear().catch(() => undefined);
-      mobileStore.clearAllAccounts();
-      sdStore.clearAllAccounts();
+      await clearLocalMaterials(activeAccountId).catch(() => undefined);
+      clearAccountScopedLocalStorage(activeAccountId);
+      mobileStore.clearActiveAccount();
+      sdStore.clearActiveAccount();
     }
     await managed.logout();
   }
@@ -18567,7 +19048,21 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     )
       return;
     secureRestoreStartedRef.current = true;
-    void managed.restoreSecureSession().finally(() => {
+    void (async () => {
+      const restored = await managed.restoreSecureSession();
+      if (!restored) return;
+      const current = useManagedNextChatStore.getState();
+      if (
+        current.accessToken &&
+        (!current.workspace ||
+          shouldRefreshManagedSession(current.session) ||
+          shouldRefreshManagedSession(current.imageSession))
+      ) {
+        await current
+          .bootstrap({ silent: Boolean(current.workspace) })
+          .catch(() => undefined);
+      }
+    })().finally(() => {
       setSecureRestoreDone(true);
     });
   }, [managed, managed._hasHydrated, secureRestoreDone]);
@@ -18680,7 +19175,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       backendBaseUrl &&
       managed.backendBaseUrl === backendBaseUrl &&
       managed.accessToken &&
-      shouldRefreshManagedSession(managed.session) &&
+      (!managed.workspace || shouldRefreshManagedSession(managed.session)) &&
       !managed.loading
     ) {
       managed.bootstrap().catch(() => {});
@@ -18709,10 +19204,13 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
         await store.ensureFreshAuthToken(force).catch(() => undefined);
         const latest = useManagedNextChatStore.getState();
         if (
+          !latest.workspace ||
           shouldRefreshManagedSession(latest.session) ||
           shouldRefreshManagedSession(latest.imageSession)
         ) {
-          await latest.bootstrap({ silent: true }).catch(() => undefined);
+          await latest
+            .bootstrap({ silent: Boolean(latest.workspace) })
+            .catch(() => undefined);
         }
       } finally {
         recovering = false;

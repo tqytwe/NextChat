@@ -33,6 +33,8 @@ import android.provider.Settings;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.util.Base64;
 import android.util.Log;
 import android.security.keystore.KeyGenParameterSpec;
@@ -118,6 +120,13 @@ public class MainActivity extends Activity {
     private String foregroundPttSessionId;
     private ArrayList<String> foregroundPttMatches = new ArrayList<>();
     private boolean foregroundPttStopRequested;
+    private SpeechRecognizer wakeWordRecognizer;
+    private String wakeWordSessionId;
+    private String wakeWordPhrase;
+    private String wakeWordLanguage;
+    private TextToSpeech textToSpeech;
+    private boolean textToSpeechReady;
+    private final Map<String, Boolean> activeSpeechUtterances = new ConcurrentHashMap<>();
     private final Map<String, HttpURLConnection> streamConnections = new ConcurrentHashMap<>();
     private final Map<String, Boolean> cancelledStreamRequests = new ConcurrentHashMap<>();
     private boolean e2eFirstImage502Fixture;
@@ -134,6 +143,36 @@ public class MainActivity extends Activity {
     @SuppressLint("SetJavaScriptEnabled")
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        textToSpeech = new TextToSpeech(this, status -> {
+            textToSpeechReady = status == TextToSpeech.SUCCESS;
+            if (textToSpeechReady && textToSpeech != null) {
+                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                    @Override
+                    public void onStart(String utteranceId) {
+                        emitSpeechEvent(utteranceId, "started", null);
+                    }
+
+                    @Override
+                    public void onDone(String utteranceId) {
+                        activeSpeechUtterances.remove(utteranceId);
+                        emitSpeechEvent(utteranceId, "done", null);
+                    }
+
+                    @Override
+                    @Deprecated
+                    public void onError(String utteranceId) {
+                        activeSpeechUtterances.remove(utteranceId);
+                        JSONObject payload = new JSONObject();
+                        try {
+                            payload.put("message", "text to speech failed");
+                        } catch (JSONException ignored) {
+                        }
+                        emitSpeechEvent(utteranceId, "error", payload);
+                    }
+                });
+            }
+        });
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.rgb(245, 245, 247));
@@ -276,6 +315,15 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         cancelActiveSpeechSessions("activity_destroyed");
+        if (textToSpeech != null) {
+            try {
+                textToSpeech.stop();
+                textToSpeech.shutdown();
+            } catch (Exception ignored) {
+            }
+            textToSpeech = null;
+            textToSpeechReady = false;
+        }
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
@@ -704,6 +752,34 @@ public class MainActivity extends Activity {
                         options.optString("reason", "cancelled")
                     );
                     break;
+                case "startWakeWord":
+                    startWakeWord(
+                        requestId,
+                        options.optString("sessionId"),
+                        options.optString("phrase"),
+                        options.optString("language", Locale.getDefault().toLanguageTag())
+                    );
+                    break;
+                case "stopWakeWord":
+                    stopWakeWord(
+                        requestId,
+                        options.optString("sessionId"),
+                        options.optString("reason", "cancelled")
+                    );
+                    break;
+                case "speakText":
+                    speakText(
+                        requestId,
+                        options.optString("text"),
+                        options.optString("language", Locale.getDefault().toLanguageTag()),
+                        options.optDouble("rate", 1.0),
+                        options.optString("utteranceId")
+                    );
+                    break;
+                case "stopSpeaking":
+                    stopSpeaking();
+                    resolve(requestId, new JSONObject());
+                    break;
                 case "saveImageToGallery":
                     saveImageToGallery(
                         requestId,
@@ -732,7 +808,11 @@ public class MainActivity extends Activity {
                     listAppImages(requestId, options.optString("ownerUserId", ""));
                     break;
                 case "deleteAppImages":
-                    deleteAppImages(requestId, options.optJSONArray("fileNames"));
+                    deleteAppImages(
+                        requestId,
+                        options.optString("ownerUserId", ""),
+                        options.optJSONArray("fileNames")
+                    );
                     break;
                 case "shareImage":
                     shareImage(
@@ -1208,6 +1288,8 @@ public class MainActivity extends Activity {
     private void cancelActiveSpeechSessions(String reason) {
         cancelHoldSpeechSession(reason);
         cancelForegroundPttSession(null, reason);
+        stopWakeWordSession(null, reason);
+        stopSpeaking();
     }
 
     private void cancelHoldSpeechSession(String reason) {
@@ -1446,6 +1528,341 @@ public class MainActivity extends Activity {
         }
     }
 
+    // Wake-word recognition is intentionally activity-foreground only. The
+    // browser starts a normal PTT turn after a match; it never receives audio
+    // bytes or an always-on background microphone capability.
+    private void startWakeWord(String requestId, String sessionId, String phrase, String language) {
+        if (!isValidForegroundPttSessionId(sessionId)) {
+            reject(requestId, "wake word session id is invalid");
+            return;
+        }
+        String cleanPhrase = phrase == null ? "" : phrase.trim();
+        if (cleanPhrase.isEmpty() || cleanPhrase.length() > 64 || normalizeWakeWord(cleanPhrase).isEmpty()) {
+            reject(requestId, "wake word must contain 1 to 64 characters");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            reject(requestId, "microphone permission denied");
+            return;
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            reject(requestId, "speech recognition is not available");
+            return;
+        }
+
+        cancelForegroundPttSession(null, "replaced");
+        cancelHoldSpeechSession("replaced");
+        stopWakeWordSession(null, "replaced");
+
+        wakeWordSessionId = sessionId;
+        wakeWordPhrase = cleanPhrase;
+        wakeWordLanguage = language == null || language.trim().isEmpty()
+            ? Locale.getDefault().toLanguageTag()
+            : language.trim();
+        wakeWordRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        wakeWordRecognizer.setRecognitionListener(new RecognitionListener() {
+            @Override
+            public void onReadyForSpeech(Bundle params) {
+                String activeSessionId = wakeWordSessionId;
+                if (isWakeWordSessionActive(activeSessionId)) {
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("phrase", wakeWordPhrase);
+                    } catch (JSONException ignored) {
+                    }
+                    emitWakeWordEvent(activeSessionId, "ready", payload);
+                }
+            }
+
+            @Override
+            public void onBeginningOfSpeech() {
+            }
+
+            @Override
+            public void onRmsChanged(float rmsdB) {
+            }
+
+            @Override
+            public void onBufferReceived(byte[] buffer) {
+            }
+
+            @Override
+            public void onEndOfSpeech() {
+            }
+
+            @Override
+            public void onError(int error) {
+                String activeSessionId = wakeWordSessionId;
+                if (!isWakeWordSessionActive(activeSessionId)) return;
+                if (wakeWordErrorIsRecoverable(error)) {
+                    restartWakeWordRecognizer(activeSessionId);
+                    return;
+                }
+                JSONObject payload = wakeWordErrorPayload(error);
+                releaseWakeWordRecognizer();
+                clearWakeWordSession();
+                emitWakeWordEvent(activeSessionId, "error", payload);
+            }
+
+            @Override
+            public void onResults(Bundle results) {
+                String activeSessionId = wakeWordSessionId;
+                if (!isWakeWordSessionActive(activeSessionId)) return;
+                ArrayList<String> matches = results == null
+                    ? new ArrayList<>()
+                    : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (!emitWakeWordMatchIfPresent(activeSessionId, matches)) {
+                    restartWakeWordRecognizer(activeSessionId);
+                }
+            }
+
+            @Override
+            public void onPartialResults(Bundle partialResults) {
+                String activeSessionId = wakeWordSessionId;
+                if (!isWakeWordSessionActive(activeSessionId)) return;
+                ArrayList<String> matches = partialResults == null
+                    ? new ArrayList<>()
+                    : partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (emitWakeWordMatchIfPresent(activeSessionId, matches)) return;
+                if (matches != null && !matches.isEmpty()) {
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("transcript", matches.get(0));
+                        payload.put("phrase", wakeWordPhrase);
+                    } catch (JSONException ignored) {
+                    }
+                    emitWakeWordEvent(activeSessionId, "partial", payload);
+                }
+            }
+
+            @Override
+            public void onEvent(int eventType, Bundle params) {
+            }
+        });
+        startWakeWordListening(sessionId);
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("sessionId", sessionId);
+            payload.put("state", "listening");
+        } catch (JSONException ignored) {
+        }
+        resolve(requestId, payload);
+    }
+
+    private void startWakeWordListening(String sessionId) {
+        if (!isWakeWordSessionActive(sessionId) || wakeWordRecognizer == null) return;
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, wakeWordLanguage);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+        try {
+            wakeWordRecognizer.startListening(intent);
+        } catch (Exception error) {
+            JSONObject payload = wakeWordErrorPayload(SpeechRecognizer.ERROR_CLIENT);
+            releaseWakeWordRecognizer();
+            clearWakeWordSession();
+            emitWakeWordEvent(sessionId, "error", payload);
+        }
+    }
+
+    private void restartWakeWordRecognizer(String sessionId) {
+        if (!isWakeWordSessionActive(sessionId) || webView == null) return;
+        WebView activeWebView = webView;
+        activeWebView.postDelayed(() -> startWakeWordListening(sessionId), 350L);
+    }
+
+    private boolean emitWakeWordMatchIfPresent(String sessionId, ArrayList<String> matches) {
+        if (!isWakeWordSessionActive(sessionId) || matches == null) return false;
+        String phrase = normalizeWakeWord(wakeWordPhrase);
+        for (String candidate : matches) {
+            String transcript = candidate == null ? "" : candidate.trim();
+            if (transcript.isEmpty() || !normalizeWakeWord(transcript).contains(phrase)) continue;
+            JSONObject payload = new JSONObject();
+            try {
+                payload.put("transcript", transcript);
+                payload.put("phrase", wakeWordPhrase);
+            } catch (JSONException ignored) {
+            }
+            releaseWakeWordRecognizer();
+            clearWakeWordSession();
+            emitWakeWordEvent(sessionId, "matched", payload);
+            return true;
+        }
+        return false;
+    }
+
+    private void stopWakeWord(String requestId, String sessionId, String reason) {
+        if (!sessionId.isEmpty() && !isWakeWordSessionActive(sessionId)) {
+            resolve(requestId, new JSONObject());
+            return;
+        }
+        stopWakeWordSession(sessionId, reason);
+        resolve(requestId, new JSONObject());
+    }
+
+    private void stopWakeWordSession(String requestedSessionId, String reason) {
+        String activeSessionId = wakeWordSessionId;
+        if (activeSessionId == null ||
+            (requestedSessionId != null && !requestedSessionId.isEmpty() && !requestedSessionId.equals(activeSessionId))) {
+            return;
+        }
+        releaseWakeWordRecognizer();
+        clearWakeWordSession();
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("reason", reason == null ? "cancelled" : reason);
+        } catch (JSONException ignored) {
+        }
+        emitWakeWordEvent(activeSessionId, "stopped", payload);
+    }
+
+    private boolean isWakeWordSessionActive(String sessionId) {
+        return sessionId != null && sessionId.equals(wakeWordSessionId) && wakeWordRecognizer != null;
+    }
+
+    private void clearWakeWordSession() {
+        wakeWordSessionId = null;
+        wakeWordPhrase = null;
+        wakeWordLanguage = null;
+    }
+
+    private void releaseWakeWordRecognizer() {
+        SpeechRecognizer recognizer = wakeWordRecognizer;
+        wakeWordRecognizer = null;
+        if (recognizer != null) {
+            try {
+                recognizer.cancel();
+                recognizer.destroy();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private String normalizeWakeWord(String value) {
+        String lower = value == null ? "" : value.toLowerCase(Locale.ROOT);
+        return lower.replaceAll("[\\s\\p{Punct}]+", "");
+    }
+
+    private boolean wakeWordErrorIsRecoverable(int error) {
+        return error == SpeechRecognizer.ERROR_NO_MATCH ||
+            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY;
+    }
+
+    private JSONObject wakeWordErrorPayload(int error) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("errorCode", foregroundPttErrorCode(error));
+            payload.put("errorMessage", foregroundPttErrorMessage(error));
+            payload.put("recoverable", wakeWordErrorIsRecoverable(error));
+        } catch (JSONException ignored) {
+        }
+        return payload;
+    }
+
+    private void emitWakeWordEvent(String sessionId, String type, JSONObject payload) {
+        if (webView == null || sessionId == null || type == null) return;
+        try {
+            JSONObject eventPayload = payload == null ? new JSONObject() : payload;
+            eventPayload.put("sessionId", sessionId);
+            eventPayload.put("type", type);
+            String script =
+                "(function(){var callback=window.__jisudengNativeWakeWordEvent;" +
+                "if(typeof callback!=='function')return;" +
+                "callback(" + JSONObject.quote(sessionId) + "," + JSONObject.quote(type) +
+                ",JSON.parse(" + JSONObject.quote(eventPayload.toString()) + "));})();";
+            WebView activeWebView = webView;
+            activeWebView.post(() -> activeWebView.evaluateJavascript(script, null));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void emitSpeechEvent(String utteranceId, String type, JSONObject payload) {
+        if (webView == null || utteranceId == null || type == null) return;
+        try {
+            JSONObject eventPayload = payload == null ? new JSONObject() : payload;
+            eventPayload.put("utteranceId", utteranceId);
+            eventPayload.put("type", type);
+            String script =
+                "(function(){var callback=window.__jisudengNativeSpeechEvent;" +
+                "if(typeof callback!=='function')return;" +
+                "callback(" + JSONObject.quote(utteranceId) + "," + JSONObject.quote(type) +
+                ",JSON.parse(" + JSONObject.quote(eventPayload.toString()) + "));})();";
+            WebView activeWebView = webView;
+            activeWebView.post(() -> activeWebView.evaluateJavascript(script, null));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void speakText(
+        String requestId,
+        String text,
+        String language,
+        double rate,
+        String requestedUtteranceId
+    ) {
+        String cleanText = text == null ? "" : text.trim();
+        if (cleanText.isEmpty()) {
+            reject(requestId, "text to speech text is required");
+            return;
+        }
+        if (textToSpeech == null || !textToSpeechReady) {
+            reject(requestId, "text to speech is not ready");
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && language != null && !language.trim().isEmpty()) {
+                textToSpeech.setLanguage(Locale.forLanguageTag(language.trim()));
+            }
+            textToSpeech.setSpeechRate((float) Math.max(0.5d, Math.min(2.0d, rate)));
+            String utteranceId = requestedUtteranceId == null || requestedUtteranceId.trim().isEmpty()
+                ? "jisudeng-tts-" + UUID.randomUUID().toString()
+                : requestedUtteranceId.trim();
+            if (!isValidNativeSpeechUtteranceId(utteranceId)) {
+                reject(requestId, "text to speech utterance id is invalid");
+                return;
+            }
+            activeSpeechUtterances.put(utteranceId, true);
+            int status = textToSpeech.speak(
+                cleanText.substring(0, Math.min(cleanText.length(), 3800)),
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                utteranceId
+            );
+            if (status == TextToSpeech.ERROR) {
+                activeSpeechUtterances.remove(utteranceId);
+                reject(requestId, "text to speech failed");
+                return;
+            }
+            JSONObject payload = new JSONObject();
+            payload.put("utteranceId", utteranceId);
+            resolve(requestId, payload);
+        } catch (Exception error) {
+            reject(requestId, error.getMessage());
+        }
+    }
+
+    private void stopSpeaking() {
+        if (textToSpeech == null) return;
+        try {
+            textToSpeech.stop();
+            for (String utteranceId : new ArrayList<>(activeSpeechUtterances.keySet())) {
+                activeSpeechUtterances.remove(utteranceId);
+                emitSpeechEvent(utteranceId, "stopped", null);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private boolean isValidNativeSpeechUtteranceId(String utteranceId) {
+        return utteranceId != null &&
+            utteranceId.length() > 0 &&
+            utteranceId.length() <= 128 &&
+            utteranceId.matches("[A-Za-z0-9._:-]+");
+    }
+
     private JSONObject foregroundPttCommandPayload(String sessionId, boolean active) {
         JSONObject payload = new JSONObject();
         try {
@@ -1579,6 +1996,11 @@ public class MainActivity extends Activity {
         String collectionId
     ) {
         try {
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                reject(requestId, "image owner is required");
+                return;
+            }
             byte[] data = decodeDataUrl(dataUrl);
             String mimeType = mimeTypeFromDataUrl(dataUrl);
             File dir = getAppImageDir();
@@ -1591,7 +2013,7 @@ public class MainActivity extends Activity {
             metadata.put("fileName", file.getName());
             metadata.put("prompt", prompt == null ? "" : prompt);
             metadata.put("model", model == null ? "" : model);
-            metadata.put("ownerUserId", ownerUserId == null ? "" : ownerUserId);
+            metadata.put("ownerUserId", requestedOwner);
             metadata.put("projectId", projectId == null ? "" : projectId);
             metadata.put("runId", runId == null ? "" : runId);
             metadata.put("shotId", shotId == null ? "" : shotId);
@@ -1612,6 +2034,11 @@ public class MainActivity extends Activity {
         JSONObject payload = new JSONObject();
         JSONArray items = new JSONArray();
         try {
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                reject(requestId, "image owner is required");
+                return;
+            }
             File[] files = getAppImageDir().listFiles();
             if (files != null) {
                 ArrayList<File> images = new ArrayList<>();
@@ -1627,12 +2054,11 @@ public class MainActivity extends Activity {
                 for (File file : images) {
                     JSONObject metadata = readImageMetadata(file);
                     String owner = metadata.optString("ownerUserId", "");
-                    if (owner.isEmpty() && ownerUserId != null && !ownerUserId.isEmpty()) {
-                        metadata.put("ownerUserId", ownerUserId);
-                        writeImageMetadata(file, metadata);
-                        owner = ownerUserId;
-                    }
-                    if (ownerUserId == null || ownerUserId.isEmpty() || ownerUserId.equals(owner)) {
+                    // Files from pre-account versions remain on disk but are
+                    // hidden until an explicit, account-aware migration is
+                    // available. Never claim them for whichever account logs
+                    // in first.
+                    if (!owner.isEmpty() && requestedOwner.equals(owner)) {
                         items.put(appImagePayload(file, metadata));
                     }
                 }
@@ -1644,10 +2070,15 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void deleteAppImages(String requestId, JSONArray fileNames) {
+    private void deleteAppImages(String requestId, String ownerUserId, JSONArray fileNames) {
         JSONObject payload = new JSONObject();
         int deleted = 0;
         try {
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                reject(requestId, "image owner is required");
+                return;
+            }
             if (fileNames != null) {
                 File dir = getAppImageDir();
                 String root = dir.getCanonicalPath() + File.separator;
@@ -1658,6 +2089,10 @@ public class MainActivity extends Activity {
                         continue;
                     }
                     File metadata = metadataFile(file);
+                    JSONObject imageMetadata = readImageMetadata(file);
+                    if (!requestedOwner.equals(imageMetadata.optString("ownerUserId", ""))) {
+                        continue;
+                    }
                     if (file.exists() && file.delete()) {
                         deleted += 1;
                     }
