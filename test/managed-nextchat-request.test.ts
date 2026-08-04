@@ -21,6 +21,7 @@ const { Capacitor, CapacitorHttp } = await import("@capacitor/core");
 const {
   isManagedAuthError,
   loginManagedUser,
+  managedRetryAfterMilliseconds,
   managedRequestText,
   managedJsonRequest,
   shouldRefreshManagedSession,
@@ -70,6 +71,34 @@ describe("managed NextChat API requests", () => {
       }),
     );
     expect(CapacitorHttp.request).not.toHaveBeenCalled();
+  });
+
+  test("keeps a server error code beside HTTP status and request ID", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            code: 409,
+            message: "Web search is recovering",
+            metadata: {
+              error_code: "MOBILE_WEB_SEARCH_RETRY_BACKOFF",
+              request_id: "search-retry-42",
+              retry_after: "1",
+            },
+          }),
+        ),
+    } as Response);
+
+    await expect(
+      managedJsonRequest(
+        "https://api.jisudeng.com",
+        "/api/v1/mobile/web-search",
+      ),
+    ).rejects.toThrow(
+      "HTTP 409, http, MOBILE_WEB_SEARCH_RETRY_BACKOFF, request",
+    );
   });
 
   test("falls back to the legacy group route when image sessions are not deployed", async () => {
@@ -537,6 +566,27 @@ describe("managed NextChat API requests", () => {
 
     expect(CapacitorHttp.request).toHaveBeenCalledTimes(2);
     expect(window.fetch).not.toHaveBeenCalled();
+  });
+
+  test("uses a bounded server retry hint for an idempotent native replay", () => {
+    expect(
+      managedRetryAfterMilliseconds(
+        { "Retry-After": "5" },
+        JSON.stringify({ metadata: { retry_after: "1" } }),
+      ),
+    ).toBe(5_250);
+    expect(
+      managedRetryAfterMilliseconds(
+        undefined,
+        JSON.stringify({
+          metadata: { retry_after: "3" },
+          reason: "idempotency_retry_backoff",
+        }),
+      ),
+    ).toBe(3_250);
+    expect(
+      managedRetryAfterMilliseconds({ "Retry-After": "30" }, ""),
+    ).toBeNull();
   });
 
   test("reports HTTP status, category, and request ID for API failures", async () => {

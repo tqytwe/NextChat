@@ -18,9 +18,11 @@ jest.unstable_mockModule("@capacitor/core", () => ({
   registerPlugin: jest.fn(() => ({})),
 }));
 
-const { MobileAdminWorkspace, formatMobileAdminWorkspaceError } = await import(
-  "../app/components/mobile-admin-workspace"
-);
+const {
+  MobileAdminWorkspace,
+  formatMobileAdminWorkspaceError,
+  loadAdminDetailSections,
+} = await import("../app/components/mobile-admin-workspace");
 const { getManagedMobileText } = await import(
   "../app/client/managed-mobile-i18n"
 );
@@ -176,5 +178,43 @@ describe("mobile administrator workspace", () => {
         "Administrator data is unavailable",
       ),
     ).toContain("HTTP unavailable, network, request admin-workspace-network");
+  });
+
+  test("keeps successful administrator detail sections visible when one auxiliary read fails", async () => {
+    const unavailable = new ManagedApiError(
+      "upstream unavailable",
+      503,
+      "/api/v1/admin/users/42/balance-reconciliation",
+      "UPSTREAM_UNAVAILABLE",
+      "admin-detail-reconciliation",
+      "http",
+    );
+    const result = await loadAdminDetailSections(
+      [
+        {
+          title: "User profile",
+          request: async () => ({ data: { id: 42 }, requestId: "profile-42" }),
+        },
+        {
+          title: "Reconciliation",
+          request: async () => Promise.reject(unavailable),
+        },
+        {
+          title: "Subscriptions",
+          request: async () => ({ data: { items: [] }, requestId: "subs-42" }),
+        },
+      ],
+      "Administrator data is unavailable",
+    );
+
+    expect(result.sections).toHaveLength(3);
+    expect(result.sections[0]).toMatchObject({ data: { id: 42 } });
+    expect(result.sections[1]).toMatchObject({
+      data: {
+        request_id: "admin-detail-reconciliation",
+      },
+    });
+    expect(result.sections[2]).toMatchObject({ data: { items: [] } });
+    expect(result.requestId).toBe("subs-42");
   });
 });

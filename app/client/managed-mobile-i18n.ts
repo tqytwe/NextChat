@@ -302,7 +302,7 @@ export const MANAGED_MOBILE_TEXT = {
       uploadFailed: "添加素材失败",
       uploadFailedHint: "素材未能保存到本机，请重新添加",
       localFileUnsupported:
-        "当前文件类型不能直接用于聊天或生图；图片和纯文本可在本机附加。",
+        "该文件已保留在本机，但当前聊天只能读取图片和文本文件；PDF、Office、音频和视频不会伪装成网络上传失败。",
       deleteAssetConfirm: "确定删除这个本机素材吗？",
       assetDeleted: "素材已删除",
       addToChat: "加入聊天",
@@ -1487,7 +1487,7 @@ export const MANAGED_MOBILE_TEXT = {
       uploadFailedHint:
         "The material was not saved on this device. Add it again.",
       localFileUnsupported:
-        "This file type cannot be used directly in chat or image creation. Images and plain text can be attached locally.",
+        "This file stays on this device, but chat can currently read only images and text files. PDF, Office, audio, and video are not reported as a fake network upload failure.",
       deleteAssetConfirm: "Delete this local material?",
       assetDeleted: "Material deleted",
       addToChat: "Add to chat",
@@ -2678,13 +2678,19 @@ export function formatManagedMobileError(input: {
   status?: number;
   path?: string;
   code?: number | string;
+  errorCode?: unknown;
   category: string;
   requestId: string;
 }) {
   const label = localizeManagedMobileError(input);
+  const rawErrorCode = String(input.errorCode ?? "").trim();
+  const errorCode = /^[a-z0-9_.:-]{2,80}$/i.test(rawErrorCode)
+    ? rawErrorCode
+    : "";
   const details = [
     input.status ? `HTTP ${input.status}` : "HTTP unavailable",
     input.category,
+    ...(errorCode ? [errorCode] : []),
     `request ${input.requestId}`,
   ];
   return `${label} (${details.join(", ")})`;

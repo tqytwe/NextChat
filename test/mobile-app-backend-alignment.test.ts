@@ -38,8 +38,8 @@ describe("mobile app backend alignment", () => {
       'transport: "web",\n                      status',
     );
     expect(source).toContain('"Idempotency-Key": `android-image-${id}-');
-    expect(source).toContain('file.type.startsWith("image/")');
-    expect(source).toContain("dataUrl = await blobToDataUrl(file)");
+    expect(source).toContain("isLocalChatImage(file)");
+    expect(source).toContain("dataUrl = await blobToDataUrl(localFile)");
     expect(source).toContain("getNativeE2EFixtureFlags()");
     expect(source).toContain("!useLocalImageFixture &&");
   });
@@ -239,12 +239,17 @@ describe("mobile app backend alignment", () => {
   test("clears only the active account on logout", () => {
     const signOut = source.slice(
       source.indexOf("async function signOut(clearAll: boolean)"),
-      source.indexOf("const downloadPollRef", source.indexOf("async function signOut(clearAll: boolean)")),
+      source.indexOf(
+        "const downloadPollRef",
+        source.indexOf("async function signOut(clearAll: boolean)"),
+      ),
     );
     expect(signOut).toContain("listAppImages(activeAccountId)");
     expect(signOut).toContain("deleteAppImages(fileNames, activeAccountId)");
     expect(signOut).toContain("clearLocalMaterials(activeAccountId)");
-    expect(signOut).toContain("clearAccountScopedLocalStorage(activeAccountId)");
+    expect(signOut).toContain(
+      "clearAccountScopedLocalStorage(activeAccountId)",
+    );
     expect(signOut).toContain("mobileStore.clearActiveAccount()");
     expect(signOut).toContain("sdStore.clearActiveAccount()");
     expect(signOut).not.toContain("localStorage.clear()");
@@ -283,7 +288,7 @@ describe("mobile app backend alignment", () => {
       "bootstrap({ silent: Boolean(latest.workspace) })",
     );
     expect(source).toContain("function VoiceConversationSheet");
-    expect(source).toContain("replace(/```[\\s\\S]*?```/g, \"\")");
+    expect(source).toContain('replace(/```[\\s\\S]*?```/g, "")');
 
     const accountAdminRoute = source.slice(
       source.indexOf("if (route === Path.AccountAdmin)"),
@@ -516,6 +521,24 @@ describe("mobile app backend alignment", () => {
       source.indexOf("function ChatSessionDrawer("),
     );
     expect(dashboard).toContain("handleNativeHomeBack(text)");
+    const chat = source.slice(
+      source.indexOf("function AndroidChat()"),
+      source.indexOf("function AndroidContentKit()"),
+    );
+    expect(chat).toContain("Chat is a first-level tab");
+    expect(chat).toContain("handleNativeHomeBack(text)");
+    expect(chat).not.toContain(
+      'navigate(Path.Home);\n  });\n\n  return (\n    <main className={styles["mobile-app"]}>\n      <section className={styles["chat-screen"]}',
+    );
+
+    const contentKit = source.slice(
+      source.indexOf("function AndroidContentKit()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    expect(contentKit).toContain(
+      "Content workbench is opened from the image tab",
+    );
+    expect(contentKit).toContain("navigateBack(navigate, Path.Sd)");
   });
 
   test("does not intercept system text selection on chat messages", () => {
