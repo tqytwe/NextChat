@@ -1062,7 +1062,24 @@
   box-shadow: var(--card-shadow);
   user-select: text;
   -webkit-user-select: text;
-  touch-action: pan-y;
+  // Let Android WebView start its native text-selection action mode on a
+  // long press. The chat list still owns vertical scrolling; forcing a
+  // touch-action here makes WebView treat the gesture as a pan and prevents
+  // the system copy/translate menu from appearing.
+  touch-action: auto;
+  -webkit-touch-callout: default;
+
+  * {
+    user-select: text;
+    -webkit-user-select: text;
+    -webkit-touch-callout: default;
+  }
+
+  button {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
 
   p {
     margin: 0;

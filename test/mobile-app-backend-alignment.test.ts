@@ -554,6 +554,18 @@ describe("mobile app backend alignment", () => {
     expect(messages).not.toContain("onDoubleClick");
     expect(messages).toContain('className={styles["message-actions-trigger"]}');
     expect(messages).toContain("aria-label={`chat-message-${message.role}-");
+
+    const stylesheet = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.module.scss"),
+      "utf8",
+    );
+    const messageStyles = stylesheet.slice(
+      stylesheet.indexOf(".message {"),
+      stylesheet.indexOf(".message-text {"),
+    );
+    expect(messageStyles).toContain("touch-action: auto;");
+    expect(messageStyles).toContain("-webkit-touch-callout: default;");
+    expect(messageStyles).not.toContain("touch-action: pan-y;");
   });
 
   test("reuses a failed chat request ID for manual and network recovery", () => {
