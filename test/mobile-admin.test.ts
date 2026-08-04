@@ -24,9 +24,14 @@ const { ManagedApiError, ManagedTransportError } = await import(
 const {
   MobileAdminClientError,
   acceptMobileAdminCompliance,
+  getMobileAdminAuditLog,
   getMobileAdminComplianceStatus,
+  getMobileAdminMobileFeedback,
+  getMobileAdminOrder,
+  getMobileAdminSubscriptionProgress,
   listMobileAdminAuditLogs,
   listMobileAdminOrders,
+  listMobileAdminSubscriptions,
   listMobileAdminUsers,
   getMobileAdminUserWalletHistory,
   mobileAdminErrorCategory,
@@ -415,6 +420,88 @@ describe("mobile administrator client", () => {
       "https://api.jisudeng.com/api/v1/admin/users/42/balance-history?page=1",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  test("reads canonical detail routes through the bounded mobile allowlist", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(JSON.stringify({ code: 0, data: { id: 42 } })),
+    } as Response);
+
+    await Promise.all([
+      getMobileAdminOrder(client, 12, { requestId: "admin-order-detail" }),
+      getMobileAdminSubscriptionProgress(client, 14, {
+        requestId: "admin-subscription-progress",
+      }),
+      getMobileAdminMobileFeedback(client, 16, {
+        requestId: "admin-feedback-detail",
+      }),
+      getMobileAdminAuditLog(client, 18, { requestId: "admin-audit-detail" }),
+    ]);
+
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://api.jisudeng.com/api/v1/admin/payment/orders/12",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://api.jisudeng.com/api/v1/admin/subscriptions/14/progress",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      3,
+      "https://api.jisudeng.com/api/v1/admin/play/mobile-feedback/16",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      4,
+      "https://api.jisudeng.com/api/v1/admin/audit-logs/18",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  test("keeps subscription collection reads on the existing canonical route", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            code: 0,
+            data: { items: [], total: 0, page: 1, page_size: 20, pages: 1 },
+          }),
+        ),
+    } as Response);
+
+    await listMobileAdminSubscriptions(
+      client,
+      { page: 1, page_size: 20 },
+      {
+        requestId: "admin-subscriptions-list",
+      },
+    );
+
+    expect(window.fetch).toHaveBeenCalledWith(
+      "https://api.jisudeng.com/api/v1/admin/subscriptions?page=1&page_size=20",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  test("rejects invalid detail IDs before sending an admin request", async () => {
+    await expect(
+      getMobileAdminOrder(client, "../../settings", {
+        requestId: "admin-detail-invalid-id",
+      }),
+    ).rejects.toMatchObject({
+      code: "ADMIN_RECORD_ID_INVALID",
+      category: "input",
+      path: "/api/v1/admin/payment/orders/:id",
+      requestId: "admin-detail-invalid-id",
+    });
+    expect(window.fetch).not.toHaveBeenCalled();
   });
 
   test("does not submit a TOTP code when the administrator JWT is missing", async () => {

@@ -114,6 +114,10 @@ public class MainActivity extends Activity {
     private SpeechRecognizer holdSpeechRecognizer;
     private String holdSpeechRequestId;
     private ArrayList<String> holdSpeechMatches = new ArrayList<>();
+    private SpeechRecognizer foregroundPttRecognizer;
+    private String foregroundPttSessionId;
+    private ArrayList<String> foregroundPttMatches = new ArrayList<>();
+    private boolean foregroundPttStopRequested;
     private final Map<String, HttpURLConnection> streamConnections = new ConcurrentHashMap<>();
     private final Map<String, Boolean> cancelledStreamRequests = new ConcurrentHashMap<>();
     private boolean e2eFirstImage502Fixture;
@@ -191,6 +195,22 @@ public class MainActivity extends Activity {
         hasResumedOnce = true;
     }
 
+    @Override
+    protected void onPause() {
+        // PTT is intentionally foreground-only. Do not leave the microphone
+        // open while the user switches apps, locks the device, or answers a call.
+        cancelActiveSpeechSessions("app_backgrounded");
+        super.onPause();
+    }
+
+    @Override
+    protected void onStop() {
+        // onPause normally handles this; retaining the guard covers OEMs that
+        // stop an activity without a useful WebView lifecycle callback.
+        cancelActiveSpeechSessions("app_backgrounded");
+        super.onStop();
+    }
+
     private void dispatchPaymentReturn(Intent intent) {
         if (intent == null || webView == null || !Intent.ACTION_VIEW.equals(intent.getAction())) return;
         Uri uri = intent.getData();
@@ -233,6 +253,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        cancelActiveSpeechSessions("route_changed");
         if (webView == null) {
             super.onBackPressed();
             return;
@@ -254,7 +275,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        destroyHoldSpeechRecognizer();
+        cancelActiveSpeechSessions("activity_destroyed");
         if (connectivityManager != null && networkCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(networkCallback);
@@ -664,6 +685,24 @@ public class MainActivity extends Activity {
                     break;
                 case "cancelHoldSpeech":
                     cancelHoldSpeech(requestId);
+                    break;
+                case "startForegroundPtt":
+                    startForegroundPtt(
+                        requestId,
+                        options.optString("sessionId"),
+                        options.optString("language", Locale.getDefault().toLanguageTag()),
+                        options.optString("prompt", "JisudengChat")
+                    );
+                    break;
+                case "stopForegroundPtt":
+                    stopForegroundPtt(requestId, options.optString("sessionId"));
+                    break;
+                case "cancelForegroundPtt":
+                    cancelForegroundPtt(
+                        requestId,
+                        options.optString("sessionId"),
+                        options.optString("reason", "cancelled")
+                    );
                     break;
                 case "saveImageToGallery":
                     saveImageToGallery(
@@ -1080,7 +1119,8 @@ public class MainActivity extends Activity {
             reject(requestId, "speech recognition is not available");
             return;
         }
-        destroyHoldSpeechRecognizer();
+        cancelForegroundPttSession(null, "replaced");
+        cancelHoldSpeechSession("replaced");
         holdSpeechRequestId = requestId;
         holdSpeechMatches = new ArrayList<>();
         holdSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
@@ -1161,12 +1201,325 @@ public class MainActivity extends Activity {
     }
 
     private void cancelHoldSpeech(String requestId) {
-        String pending = holdSpeechRequestId;
-        destroyHoldSpeechRecognizer();
-        if (pending != null) {
-            resolve(pending, speechPayload(new ArrayList<>(), true));
-        }
+        cancelHoldSpeechSession("cancelled");
         resolve(requestId, new JSONObject());
+    }
+
+    private void cancelActiveSpeechSessions(String reason) {
+        cancelHoldSpeechSession(reason);
+        cancelForegroundPttSession(null, reason);
+    }
+
+    private void cancelHoldSpeechSession(String reason) {
+        String pending = holdSpeechRequestId;
+        if (pending == null) return;
+        destroyHoldSpeechRecognizer();
+        JSONObject payload = speechPayload(new ArrayList<>(), true);
+        try {
+            payload.put("reason", reason == null ? "cancelled" : reason);
+        } catch (JSONException ignored) {
+        }
+        resolve(pending, payload);
+    }
+
+    private void startForegroundPtt(
+        String requestId,
+        String sessionId,
+        String language,
+        String prompt
+    ) {
+        if (!isValidForegroundPttSessionId(sessionId)) {
+            reject(requestId, "invalid foreground PTT session id");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            reject(requestId, "microphone permission denied");
+            return;
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            reject(requestId, "speech recognition is not available");
+            return;
+        }
+
+        cancelForegroundPttSession(null, "replaced");
+        cancelHoldSpeechSession("replaced");
+
+        final String activeSessionId = sessionId;
+        final SpeechRecognizer recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        foregroundPttSessionId = activeSessionId;
+        foregroundPttRecognizer = recognizer;
+        foregroundPttMatches = new ArrayList<>();
+        foregroundPttStopRequested = false;
+
+        recognizer.setRecognitionListener(new RecognitionListener() {
+            @Override
+            public void onReadyForSpeech(Bundle params) {
+                if (!isForegroundPttSessionActive(activeSessionId)) return;
+                emitForegroundPttEvent(
+                    activeSessionId,
+                    "ready",
+                    speechPayload(new ArrayList<>(), false)
+                );
+            }
+
+            @Override
+            public void onBeginningOfSpeech() {
+            }
+
+            @Override
+            public void onRmsChanged(float rmsdB) {
+            }
+
+            @Override
+            public void onBufferReceived(byte[] buffer) {
+            }
+
+            @Override
+            public void onEndOfSpeech() {
+            }
+
+            @Override
+            public void onError(int error) {
+                if (!isForegroundPttSessionActive(activeSessionId)) return;
+                ArrayList<String> matches = new ArrayList<>(foregroundPttMatches);
+                boolean stopped = foregroundPttStopRequested;
+                releaseForegroundPttRecognizer();
+                if (stopped && !matches.isEmpty()) {
+                    emitForegroundPttEvent(
+                        activeSessionId,
+                        "final",
+                        speechPayload(matches, false)
+                    );
+                    return;
+                }
+                emitForegroundPttEvent(
+                    activeSessionId,
+                    "error",
+                    foregroundPttErrorPayload(error, matches)
+                );
+            }
+
+            @Override
+            public void onResults(Bundle results) {
+                if (!isForegroundPttSessionActive(activeSessionId)) return;
+                ArrayList<String> matches = results.getStringArrayList(
+                    SpeechRecognizer.RESULTS_RECOGNITION
+                );
+                if (matches == null) matches = new ArrayList<>();
+                foregroundPttMatches = new ArrayList<>(matches);
+                releaseForegroundPttRecognizer();
+                emitForegroundPttEvent(
+                    activeSessionId,
+                    "final",
+                    speechPayload(matches, false)
+                );
+            }
+
+            @Override
+            public void onPartialResults(Bundle partialResults) {
+                if (!isForegroundPttSessionActive(activeSessionId)) return;
+                ArrayList<String> matches = partialResults.getStringArrayList(
+                    SpeechRecognizer.RESULTS_RECOGNITION
+                );
+                if (matches == null || matches.isEmpty()) return;
+                foregroundPttMatches = new ArrayList<>(matches);
+                emitForegroundPttEvent(
+                    activeSessionId,
+                    "partial",
+                    speechPayload(matches, false)
+                );
+            }
+
+            @Override
+            public void onEvent(int eventType, Bundle params) {
+            }
+        });
+
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language);
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        try {
+            recognizer.startListening(intent);
+            JSONObject payload = new JSONObject();
+            payload.put("sessionId", activeSessionId);
+            payload.put("state", "listening");
+            resolve(requestId, payload);
+        } catch (Exception error) {
+            if (isForegroundPttSessionActive(activeSessionId)) {
+                releaseForegroundPttRecognizer();
+            }
+            reject(requestId, safeErrorMessage(error));
+        }
+    }
+
+    private void stopForegroundPtt(String requestId, String sessionId) {
+        if (!isValidForegroundPttSessionId(sessionId)) {
+            reject(requestId, "invalid foreground PTT session id");
+            return;
+        }
+        if (!isForegroundPttSessionActive(sessionId) || foregroundPttRecognizer == null) {
+            resolve(requestId, foregroundPttCommandPayload(sessionId, false));
+            return;
+        }
+        try {
+            foregroundPttStopRequested = true;
+            foregroundPttRecognizer.stopListening();
+            resolve(requestId, foregroundPttCommandPayload(sessionId, true));
+        } catch (Exception error) {
+            ArrayList<String> matches = new ArrayList<>(foregroundPttMatches);
+            releaseForegroundPttRecognizer();
+            emitForegroundPttEvent(
+                sessionId,
+                "error",
+                foregroundPttErrorPayload(SpeechRecognizer.ERROR_CLIENT, matches)
+            );
+            reject(requestId, safeErrorMessage(error));
+        }
+    }
+
+    private void cancelForegroundPtt(String requestId, String sessionId, String reason) {
+        if (!isValidForegroundPttSessionId(sessionId)) {
+            reject(requestId, "invalid foreground PTT session id");
+            return;
+        }
+        resolve(
+            requestId,
+            foregroundPttCommandPayload(
+                sessionId,
+                cancelForegroundPttSession(sessionId, reason)
+            )
+        );
+    }
+
+    private boolean cancelForegroundPttSession(String requestedSessionId, String reason) {
+        String activeSessionId = foregroundPttSessionId;
+        if (activeSessionId == null) return false;
+        if (requestedSessionId != null && !requestedSessionId.isEmpty() &&
+            !activeSessionId.equals(requestedSessionId)) {
+            return false;
+        }
+        SpeechRecognizer recognizer = foregroundPttRecognizer;
+        foregroundPttRecognizer = null;
+        foregroundPttSessionId = null;
+        foregroundPttMatches = new ArrayList<>();
+        foregroundPttStopRequested = false;
+        if (recognizer != null) {
+            try {
+                recognizer.cancel();
+                recognizer.destroy();
+            } catch (Exception ignored) {
+            }
+        }
+        JSONObject payload = speechPayload(new ArrayList<>(), true);
+        try {
+            payload.put("reason", reason == null || reason.isEmpty() ? "cancelled" : reason);
+        } catch (JSONException ignored) {
+        }
+        emitForegroundPttEvent(activeSessionId, "cancelled", payload);
+        return true;
+    }
+
+    private boolean isForegroundPttSessionActive(String sessionId) {
+        return sessionId != null && sessionId.equals(foregroundPttSessionId);
+    }
+
+    private boolean isValidForegroundPttSessionId(String sessionId) {
+        return sessionId != null &&
+            sessionId.length() > 0 &&
+            sessionId.length() <= 128 &&
+            sessionId.matches("[A-Za-z0-9._:-]+");
+    }
+
+    private void releaseForegroundPttRecognizer() {
+        SpeechRecognizer recognizer = foregroundPttRecognizer;
+        foregroundPttRecognizer = null;
+        foregroundPttSessionId = null;
+        foregroundPttMatches = new ArrayList<>();
+        foregroundPttStopRequested = false;
+        if (recognizer == null) return;
+        try {
+            recognizer.destroy();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private JSONObject foregroundPttCommandPayload(String sessionId, boolean active) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("sessionId", sessionId);
+            payload.put("active", active);
+        } catch (JSONException ignored) {
+        }
+        return payload;
+    }
+
+    private JSONObject foregroundPttErrorPayload(int error, ArrayList<String> matches) {
+        JSONObject payload = speechPayload(matches, false);
+        try {
+            payload.put("errorCode", foregroundPttErrorCode(error));
+            payload.put("errorMessage", foregroundPttErrorMessage(error));
+            payload.put("recoverable", foregroundPttErrorIsRecoverable(error));
+        } catch (JSONException ignored) {
+        }
+        return payload;
+    }
+
+    private String foregroundPttErrorCode(int error) {
+        switch (error) {
+            case SpeechRecognizer.ERROR_AUDIO:
+                return "audio";
+            case SpeechRecognizer.ERROR_CLIENT:
+                return "client";
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
+                return "permission_denied";
+            case SpeechRecognizer.ERROR_NETWORK:
+                return "network";
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
+                return "network_timeout";
+            case SpeechRecognizer.ERROR_NO_MATCH:
+                return "no_match";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
+                return "recognizer_busy";
+            case SpeechRecognizer.ERROR_SERVER:
+                return "server";
+            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
+                return "speech_timeout";
+            default:
+                return "unknown";
+        }
+    }
+
+    private String foregroundPttErrorMessage(int error) {
+        return "speech recognition " + foregroundPttErrorCode(error);
+    }
+
+    private boolean foregroundPttErrorIsRecoverable(int error) {
+        return error == SpeechRecognizer.ERROR_NETWORK ||
+            error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
+            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+            error == SpeechRecognizer.ERROR_SERVER ||
+            error == SpeechRecognizer.ERROR_NO_MATCH ||
+            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT;
+    }
+
+    private void emitForegroundPttEvent(String sessionId, String type, JSONObject payload) {
+        if (webView == null || sessionId == null || type == null) return;
+        try {
+            JSONObject eventPayload = payload == null ? new JSONObject() : payload;
+            eventPayload.put("sessionId", sessionId);
+            eventPayload.put("type", type);
+            String script =
+                "(function(){var callback=window.__jisudengNativeForegroundPttEvent;" +
+                "if(typeof callback!=='function')return;" +
+                "callback(" + JSONObject.quote(sessionId) + "," + JSONObject.quote(type) +
+                ",JSON.parse(" + JSONObject.quote(eventPayload.toString()) + "));})();";
+            WebView activeWebView = webView;
+            activeWebView.post(() -> activeWebView.evaluateJavascript(script, null));
+        } catch (Exception ignored) {
+        }
     }
 
     private JSONObject speechPayload(ArrayList<String> matches, boolean cancelled) {

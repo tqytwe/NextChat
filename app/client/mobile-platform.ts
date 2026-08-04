@@ -182,8 +182,32 @@ export interface MobileAdminCapabilities {
   compliance_path?: string;
 }
 
+export interface MobileProtocolSearchCapability {
+  configured?: boolean;
+  provider?: string;
+  execution_state?: "canonical" | "legacy" | "observe" | "disabled" | string;
+  default_enabled?: boolean;
+  user_opt_in_required?: boolean;
+  result_fields?: string[];
+  client_request_id_header?: string;
+  response_request_id_field?: string;
+}
+
+export interface MobileProtocolOperationGrant {
+  id: string;
+  granted?: boolean;
+  lifecycle?: "canonical" | "legacy" | "observe" | "disabled" | string;
+  risk_level?: string;
+  authorization?: string[];
+  client_request_id_header?: string;
+  idempotency_header?: string;
+  idempotency_mode?: string;
+}
+
 export interface MobileProtocolCapabilities {
   admin?: MobileAdminCapabilities;
+  search?: MobileProtocolSearchCapability;
+  operation_grants?: MobileProtocolOperationGrant[];
 }
 
 export interface MobileProtocol {

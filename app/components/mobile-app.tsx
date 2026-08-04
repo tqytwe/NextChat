@@ -135,7 +135,8 @@ import {
   requestCameraPermission,
   requestMicrophonePermission,
   requestNotificationPermission,
-  cancelHoldSpeechRecognition,
+  cancelForegroundPttSession,
+  notifyForegroundPttRouteChange,
   recognizeSpeech,
   saveImageToAppStorage,
   saveImageToGallery,
@@ -145,9 +146,9 @@ import {
   showNativeNotification,
   isDirectNativeStreamAvailable,
   startDirectNativeStreamRequest,
-  startHoldSpeechRecognition,
+  startForegroundPttSession,
   startNativeDownload,
-  stopHoldSpeechRecognition,
+  stopForegroundPttSession,
   readNativeSharedMaterial,
   loadLoginCredentials,
   saveLoginCredentials,
@@ -157,6 +158,7 @@ import {
 } from "../client/android-native";
 import type {
   NativeAppImage,
+  NativeForegroundPttSession,
   NativeSharedMaterial,
 } from "../client/android-native";
 import {
@@ -171,6 +173,11 @@ import {
   createMobilePlatformClient,
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
+import {
+  formatMobileWebSearchContext,
+  mobileWebSearchCapability,
+  searchMobileWeb,
+} from "../client/mobile-web-search";
 import {
   mobileInstallationId,
   registerMobilePush,
@@ -875,6 +882,8 @@ type MobileAccountSummary = {
 type CheckoutMethod = {
   payment_type?: string;
   display_name?: string;
+  display_name_zh?: string;
+  display_name_en?: string;
   currency?: string;
   fee_rate?: number;
   single_min?: number;
@@ -897,6 +906,8 @@ type CheckoutInfo = {
 type UserCoupon = {
   id: number;
   template_name?: string;
+  template_name_zh?: string;
+  template_name_en?: string;
   status?: string;
   expires_at?: string;
   valid_from?: string;
@@ -2165,7 +2176,7 @@ function imageModelSupportsStyle(model: string) {
 function imageModelSupportsReferences(
   model: ManagedWorkspaceModel | string,
   knownModels: ManagedWorkspaceModel[] = [],
-  allowLegacyFallback = true,
+  _allowLegacyFallback = false,
 ) {
   const workspaceModel =
     typeof model === "string"
@@ -2179,17 +2190,9 @@ function imageModelSupportsReferences(
     );
   }
 
-  if (!allowLegacyFallback) return false;
-
-  // Compatibility only for older servers that do not expose capabilities.
-  const normalized = (typeof model === "string" ? model : modelValue(model))
-    .toLowerCase()
-    .trim();
-  return (
-    /^gpt-image-/.test(normalized) ||
-    /(?:gemini|imagen).*image/.test(normalized) ||
-    /^grok-imagine/.test(normalized)
-  );
+  // Capability data is authoritative. An unknown model fails closed rather
+  // than being guessed from a private alias or a provider name.
+  return false;
 }
 
 function contentKitReferenceLimit(model?: ManagedWorkspaceModel) {
@@ -2209,7 +2212,7 @@ function contentKitModelSupportsSize(
 
 function firstReferenceImageModel(
   models: ManagedWorkspaceModel[],
-  allowLegacyFallback = true,
+  allowLegacyFallback = false,
 ) {
   return models.find((model) =>
     imageModelSupportsReferences(model, [], allowLegacyFallback),
@@ -3744,7 +3747,7 @@ function AndroidLogin() {
       );
       setMessage(text.login.codeSent);
     } catch (err) {
-      setError(err instanceof Error ? err.message : text.errors.networkFailed);
+      setError(localizedMobileErrorMessage(err, text.errors.networkFailed));
     } finally {
       setLocalLoading(false);
     }
@@ -3768,7 +3771,7 @@ function AndroidLogin() {
       setMessage(text.login.forgotSent);
       setMode("reset");
     } catch (err) {
-      setError(err instanceof Error ? err.message : text.errors.networkFailed);
+      setError(localizedMobileErrorMessage(err, text.errors.networkFailed));
     } finally {
       setLocalLoading(false);
     }
@@ -6136,6 +6139,12 @@ function AndroidChat() {
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
   const [skillSheetOpen, setSkillSheetOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [webSearchBusy, setWebSearchBusy] = useState(false);
+  const webSearch = useMemo(
+    () => mobileWebSearchCapability(managed.mobileProtocol),
+    [managed.mobileProtocol],
+  );
   const activeAgent =
     CHAT_AGENT_TEMPLATES.find(
       (item) => item.id === (currentSession?.agentId || draftAgentId),
@@ -6148,6 +6157,7 @@ function AndroidChat() {
   const [listening, setListening] = useState(false);
   const [voiceBarOpen, setVoiceBarOpen] = useState(false);
   const [voiceCancelling, setVoiceCancelling] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
   const [groupSwitching, setGroupSwitching] = useState(false);
   const [chatError, setChatError] = useState("");
   const [quotedMessage, setQuotedMessage] = useState<QuotedChatMessage | null>(
@@ -6161,10 +6171,13 @@ function AndroidChat() {
     useState<ManagedMobileChatSession | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const platformTaskRef = useRef<MobileTask | null>(null);
   const nativeStreamCancelRef = useRef<(() => void) | null>(null);
+  const platformTaskRef = useRef<MobileTask | null>(null);
   const voiceStartYRef = useRef(0);
   const voiceCancelledRef = useRef(false);
+  const voiceReleasedRef = useRef(false);
+  const voicePttSessionRef = useRef<NativeForegroundPttSession | null>(null);
+  const voicePttSessionIdRef = useRef("");
   const listRef = useRef<HTMLDivElement | null>(null);
   const autoFollowRef = useRef(true);
   const lastScrolledSessionRef = useRef("");
@@ -6668,7 +6681,7 @@ function AndroidChat() {
         }),
       );
     } catch (err) {
-      setChatError(err instanceof Error ? err.message : text.errors.saveFailed);
+      setChatError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     } finally {
       if (input) input.value = "";
     }
@@ -6734,28 +6747,79 @@ function AndroidChat() {
   }
 
   async function beginVoiceHold(event: PointerEvent<HTMLButtonElement>) {
-    if (listening) return;
+    if (listening || running) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     voiceStartYRef.current = event.clientY;
     voiceCancelledRef.current = false;
+    voiceReleasedRef.current = false;
     setVoiceCancelling(false);
+    setVoiceTranscript("");
     setListening(true);
     setChatError("");
+    const sessionId = `chat-ptt-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+    voicePttSessionIdRef.current = sessionId;
     try {
-      const resultPromise = startHoldSpeechRecognition(
-        text.dateLocale,
-        text.chat.voicePrompt,
-      );
-      const result = await resultPromise;
-      if (voiceCancelledRef.current || result.cancelled) return;
-      const recognized = (result.text || "").trim();
-      if (!recognized) {
-        throw new Error(text.errors.emptySpeechResult);
+      const session = await startForegroundPttSession({
+        sessionId,
+        language: text.dateLocale,
+        prompt: text.chat.voicePrompt,
+        onEvent: (result) => {
+          if (result.sessionId !== voicePttSessionIdRef.current) return;
+          if (result.type === "partial") {
+            setVoiceTranscript((result.text || "").trim());
+            return;
+          }
+          if (result.type === "final") {
+            const recognized = (result.text || "").trim();
+            if (recognized) {
+              setInput((value) =>
+                [value.trim(), recognized].filter(Boolean).join("\n"),
+              );
+              setVoiceBarOpen(false);
+            } else if (!voiceCancelledRef.current) {
+              setChatError(text.errors.emptySpeechResult);
+            }
+          } else if (result.type === "error" && !voiceCancelledRef.current) {
+            setChatError(
+              result.errorMessage
+                ? localizeManagedMobileError({ message: result.errorMessage })
+                : text.errors.permissionDenied,
+            );
+          }
+          if (
+            result.type === "final" ||
+            result.type === "error" ||
+            result.type === "cancelled"
+          ) {
+            voicePttSessionRef.current?.unsubscribe();
+            voicePttSessionRef.current = null;
+            voicePttSessionIdRef.current = "";
+            setVoiceTranscript("");
+            setListening(false);
+            setVoiceCancelling(false);
+            voiceCancelledRef.current = false;
+            voiceReleasedRef.current = false;
+          }
+        },
+      });
+      if (voicePttSessionIdRef.current !== session.sessionId) {
+        session.unsubscribe();
+        await session.cancel("stale_session").catch(() => {});
+        return;
       }
-      await sendChat(recognized, attachments, true);
-      setVoiceBarOpen(false);
+      voicePttSessionRef.current = session;
+      if (voiceCancelledRef.current) {
+        await cancelForegroundPttSession(session.sessionId, "cancelled");
+      } else if (voiceReleasedRef.current) {
+        await stopForegroundPttSession(session.sessionId);
+      }
     } catch (err) {
-      if (!voiceCancelledRef.current) {
+      if (
+        !voiceCancelledRef.current &&
+        voicePttSessionIdRef.current === sessionId
+      ) {
         setChatError(
           err instanceof Error && err.message
             ? localizeManagedMobileError({ message: err.message })
@@ -6763,9 +6827,13 @@ function AndroidChat() {
         );
       }
     } finally {
-      setListening(false);
-      setVoiceCancelling(false);
-      voiceCancelledRef.current = false;
+      if (!voicePttSessionRef.current) {
+        setListening(false);
+        setVoiceCancelling(false);
+        voicePttSessionIdRef.current = "";
+        voiceCancelledRef.current = false;
+        voiceReleasedRef.current = false;
+      }
     }
   }
 
@@ -6778,12 +6846,22 @@ function AndroidChat() {
 
   function endVoiceHold() {
     if (!listening) return;
+    voiceReleasedRef.current = true;
+    const sessionId = voicePttSessionIdRef.current;
     if (voiceCancelledRef.current) {
-      cancelHoldSpeechRecognition().catch(() => {});
+      if (sessionId) {
+        cancelForegroundPttSession(sessionId, "cancelled").catch(() => {});
+      }
       return;
     }
-    stopHoldSpeechRecognition().catch(() => {});
+    if (sessionId) stopForegroundPttSession(sessionId).catch(() => {});
   }
+
+  useEffect(() => {
+    return () => {
+      notifyForegroundPttRouteChange();
+    };
+  }, [location.pathname]);
 
   function makeGatewayMessages(
     sessionId: string,
@@ -6901,6 +6979,36 @@ function AndroidChat() {
     }
   }
 
+  async function fetchWebSearchContext(query: string) {
+    if (!webSearchEnabled) return "";
+    if (!webSearch.enabled) {
+      throw new Error(text.chat.webSearchUnavailable);
+    }
+    if (!managed.accessToken) {
+      throw new Error(text.errors.loginRequired);
+    }
+    setWebSearchBusy(true);
+    try {
+      const requestId = clientRequestID("mobile-web-search");
+      const result = await searchMobileWeb(
+        managed.backendBaseUrl,
+        managed.accessToken,
+        query,
+        {
+          requestId,
+          locale: text.dateLocale,
+        },
+      );
+      return formatMobileWebSearchContext(result, text.dateLocale);
+    } catch (error) {
+      throw new Error(
+        localizedMobileErrorMessage(error, text.chat.webSearchUnavailable),
+      );
+    } finally {
+      setWebSearchBusy(false);
+    }
+  }
+
   async function sendChat(
     content = input,
     imageUrls = attachments,
@@ -6952,6 +7060,23 @@ function AndroidChat() {
       setChatError(text.errors.noModel);
       return;
     }
+    let webSearchContext = "";
+    if (webSearchEnabled && !retryRequestId) {
+      if (!rawPrompt) {
+        setChatError(text.chat.webSearchQueryRequired);
+        return;
+      }
+      try {
+        webSearchContext = await fetchWebSearchContext(rawPrompt);
+      } catch (error) {
+        setChatError(
+          error instanceof Error && error.message
+            ? error.message
+            : text.chat.webSearchUnavailable,
+        );
+        return;
+      }
+    }
     if (requestGroupId) {
       persistChatPreference(requestGroupId, model);
     }
@@ -6986,6 +7111,7 @@ function AndroidChat() {
       [
         prompt || (materialSummary ? `附件：${materialSummary}` : ""),
         localTextContent,
+        webSearchContext,
       ]
         .filter(Boolean)
         .join("\n\n") || text.chat.imageMessage;
@@ -8067,6 +8193,27 @@ function AndroidChat() {
                   {capturing ? text.chat.capturing : text.chat.camera}
                 </span>
               </button>
+              <button
+                type="button"
+                aria-pressed={webSearchEnabled}
+                disabled={webSearchBusy || !webSearch.enabled}
+                className={clsx({ [styles["active"]]: webSearchEnabled })}
+                onClick={() => setWebSearchEnabled((value) => !value)}
+                title={
+                  webSearch.enabled
+                    ? text.chat.webSearch
+                    : text.chat.webSearchUnavailable
+                }
+              >
+                <PromptIcon />
+                <span>
+                  {webSearchBusy
+                    ? text.chat.webSearchSearching
+                    : webSearchEnabled
+                    ? text.chat.webSearchEnabled
+                    : text.chat.webSearch}
+                </span>
+              </button>
             </div>
           )}
           <div className={styles["composer-row"]}>
@@ -8101,13 +8248,20 @@ function AndroidChat() {
                 onPointerUp={endVoiceHold}
                 onPointerCancel={() => {
                   voiceCancelledRef.current = true;
-                  cancelHoldSpeechRecognition().catch(() => {});
+                  voiceReleasedRef.current = true;
+                  const sessionId = voicePttSessionIdRef.current;
+                  if (sessionId) {
+                    cancelForegroundPttSession(
+                      sessionId,
+                      "pointer_cancel",
+                    ).catch(() => {});
+                  }
                 }}
               >
                 {voiceCancelling
                   ? text.chat.voiceReleaseCancel
                   : listening
-                  ? text.chat.voiceReleaseSend
+                  ? voiceTranscript || text.chat.voiceReleaseSend
                   : text.chat.voiceHoldToTalk}
               </button>
             ) : (
@@ -8128,13 +8282,14 @@ function AndroidChat() {
                 label="chat-send"
                 type="submit"
                 disabled={
-                  !input.trim() &&
-                  attachments.length === 0 &&
-                  !sharedMaterials.some(
-                    (item) =>
-                      item.state === "ready" ||
-                      (item.state === "local" && item.localText?.trim()),
-                  )
+                  webSearchBusy ||
+                  (!input.trim() &&
+                    attachments.length === 0 &&
+                    !sharedMaterials.some(
+                      (item) =>
+                        item.state === "ready" ||
+                        (item.state === "local" && item.localText?.trim()),
+                    ))
                 }
                 active
               >
@@ -8527,7 +8682,7 @@ function AndroidContentKit() {
       );
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : text.errors.saveFailed);
+      setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     } finally {
       input.value = "";
     }
@@ -8647,7 +8802,7 @@ function AndroidContentKit() {
       patchAsset(project.id, asset.id, { taskId: platformTask.id });
       await client.tasks.status(platformTask.id, { status: "running" });
     } catch {
-      // The local project remains usable when optional task history is unavailable.
+      // Optional task history must not prevent the local output from running.
     }
     try {
       const headers: Record<string, string> = {
@@ -8751,8 +8906,10 @@ function AndroidContentKit() {
           .catch(() => {});
       }
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : text.platform.contentKit.failed;
+      const message = localizedMobileErrorMessage(
+        err,
+        text.platform.contentKit.failed,
+      );
       patchAsset(project.id, asset.id, { status: "failed", error: message });
       void hydrateAssetBilling(project.id, asset.id, localTaskId);
       if (platformTask) {
@@ -8807,6 +8964,7 @@ function AndroidContentKit() {
             "Content-Type": "application/json",
             "Idempotency-Key": requestId,
             "X-Request-ID": requestId,
+            "X-Client-Request-ID": requestId,
           },
           body: payload,
         },
@@ -8835,8 +8993,10 @@ function AndroidContentKit() {
     } catch (err) {
       mobileStore.updateContentKit(project.id, {
         copyStatus: "failed",
-        copyError:
-          err instanceof Error ? err.message : text.platform.contentKit.failed,
+        copyError: localizedMobileErrorMessage(
+          err,
+          text.platform.contentKit.failed,
+        ),
       });
     }
   }
@@ -10304,8 +10464,9 @@ function AndroidImageStudio() {
     workspace,
     effectiveImageGroupId,
   );
-  const allowLegacyImageCapabilityFallback =
-    !workspace?.models?.image_capabilities_version;
+  // The backend must declare image capabilities. Never infer edit support from
+  // a model name; older servers therefore show an explicit unsupported state.
+  const allowLegacyImageCapabilityFallback = false;
   const fallbackModel = imageModelOptions[0];
   const [selectedModel, setSelectedModel] = useState(
     String(imagePrefs.model || modelValue(fallbackModel)),
@@ -10331,6 +10492,8 @@ function AndroidImageStudio() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const platformTaskRef = useRef<MobileTask | null>(null);
+  const platformTaskRunIdRef = useRef("");
+  const platformTaskPollRef = useRef<number | null>(null);
   const progressTimerRef = useRef<number | null>(null);
   const gallery = sdStore.draw.filter(
     (item: any) => item.status === "success" && imageResults(item).length > 0,
@@ -10547,7 +10710,7 @@ function AndroidImageStudio() {
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : text.errors.saveFailed);
+      setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     } finally {
       if (input) input.value = "";
     }
@@ -10580,9 +10743,7 @@ function AndroidImageStudio() {
       })
       .catch((err) => {
         setError(
-          err instanceof Error && err.message
-            ? err.message
-            : text.errors.switchGroupFailed,
+          localizedMobileErrorMessage(err, text.errors.switchGroupFailed),
         );
       })
       .finally(() => {
@@ -10692,14 +10853,24 @@ function AndroidImageStudio() {
       state.currentId += 1;
     });
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    updateTask(id, { status: "running", progress: 12 });
+    startProgress(id);
+
+    // Project the local image batch into the mobile task history. This is
+    // deliberately best-effort: the image gateway remains the source of
+    // truth for generation and billing, while the projection enables the
+    // dashboard to show progress and lets the user cancel remotely.
     let projectedTask: MobileTask | null = null;
-    if (!useLocalImageFixture) {
+    const projectedTaskPromise = (async () => {
       try {
         const client = await mobilePlatformClient();
-        projectedTask = await client.tasks.create({
+        const task = await client.tasks.create({
           kind: "image",
           operation: imageOperation,
-          client_request_id: clientRequestID("image"),
+          client_request_id: id,
+          title: promptText.slice(0, 80),
           title_zh: promptText.slice(0, 80),
           model,
           group_id: taskGroupId,
@@ -10707,31 +10878,39 @@ function AndroidImageStudio() {
             size: taskSize,
             quality: taskQuality,
             style: taskStyle,
-            count: taskCount,
+            n: taskCount,
+            reference_count: taskReferences.length,
+            local_task_id: id,
           },
           locale: text.dateLocale,
         });
-        platformTaskRef.current = projectedTask;
-        await client.tasks.status(projectedTask.id, { status: "running" });
-      } catch {
-        projectedTask = null;
-      }
-    }
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const cancellationTimer = projectedTask
-      ? window.setInterval(() => {
+        // Authentication may delay the optional projection until after the
+        // local request has finished. Do not attach a late task to a newer run.
+        if (abortRef.current !== controller) return task;
+        projectedTask = task;
+        platformTaskRef.current = task;
+        platformTaskRunIdRef.current = id;
+        updateTask(id, { platform_task_id: task.id });
+        await client.tasks.status(task.id, { status: "running", progress: 12 });
+        if (abortRef.current !== controller) return task;
+        platformTaskPollRef.current = window.setInterval(() => {
           void mobilePlatformClient()
-            .then((client) => client.tasks.detail(projectedTask!.id))
-            .then((task) => {
-              if (task.status === "cancelled") controller.abort();
+            .then((nextClient) => nextClient.tasks.detail(task.id))
+            .then((remoteTask) => {
+              if (
+                remoteTask.status === "cancelled" &&
+                abortRef.current === controller
+              ) {
+                controller.abort();
+              }
             })
             .catch(() => undefined);
-        }, 2500)
-      : undefined;
-    updateTask(id, { status: "running", progress: 12 });
-    startProgress(id);
+        }, 2500);
+        return task;
+      } catch {
+        return null;
+      }
+    })();
 
     const endpoint =
       imageOperation === "images.edits"
@@ -10856,6 +11035,19 @@ function AndroidImageStudio() {
             12 + Math.floor((requestIndex / taskCount) * 78),
           ),
           result_items: [...resultItems],
+        });
+        void projectedTaskPromise.then(async (task) => {
+          if (!task) return;
+          const client = await mobilePlatformClient().catch(() => null);
+          await client?.tasks
+            .status(task.id, {
+              status: "running",
+              progress: Math.min(
+                96,
+                12 + Math.floor((requestIndex / taskCount) * 78),
+              ),
+            })
+            .catch(() => {});
         });
         try {
           const response = await requestImageText(requestIndex);
@@ -11012,15 +11204,21 @@ function AndroidImageStudio() {
         ),
         error: partialMessage,
       });
-      if (projectedTask) {
+      void projectedTaskPromise.then(async (task) => {
+        if (!task) return;
         const client = await mobilePlatformClient().catch(() => null);
         await client?.tasks
-          .status(projectedTask.id, {
+          .status(task.id, {
             status: partialMessage ? "partial" : "completed",
             progress: 100,
+            artifacts: savedResults.map((url, index) => ({
+              type: "image",
+              id: `${id}-${index + 1}`,
+              url,
+            })),
           })
           .catch(() => {});
-      }
+      });
       if (partialMessage) setError(partialMessage);
       setReferences([]);
       await showNativeNotification(text.image.title, text.image.savedToDevice);
@@ -11032,7 +11230,7 @@ function AndroidImageStudio() {
         : err instanceof ManagedTransportError
         ? err.message
         : err instanceof Error
-        ? describeImageError(err.message, {
+        ? describeImageError(localizedMobileErrorMessage(err, err.message), {
             text,
             selectedModel: model,
             imageModelCount: imageModelOptions.length,
@@ -11044,37 +11242,46 @@ function AndroidImageStudio() {
         progress: aborted ? 0 : 100,
         error: message,
       });
-      if (abortRef.current === controller) setError(message);
-      if (projectedTask) {
+      void projectedTaskPromise.then(async (task) => {
+        if (!task) return;
         const client = await mobilePlatformClient().catch(() => null);
         await client?.tasks
-          .status(projectedTask.id, {
+          .status(task.id, {
             status: aborted ? "cancelled" : "failed",
             error: aborted
               ? undefined
-              : { code: "image_failed", message, retryable: true },
+              : {
+                  code: "image_generation_failed",
+                  message,
+                  retryable: true,
+                },
           })
           .catch(() => {});
-      }
+      });
+      if (abortRef.current === controller) setError(message);
     } finally {
-      if (cancellationTimer) window.clearInterval(cancellationTimer);
+      if (platformTaskPollRef.current) {
+        window.clearInterval(platformTaskPollRef.current);
+        platformTaskPollRef.current = null;
+      }
+      if (platformTaskRunIdRef.current === id) {
+        platformTaskRef.current = null;
+        platformTaskRunIdRef.current = "";
+      }
       if (abortRef.current === controller) {
         stopProgress();
         abortRef.current = null;
-      }
-      if (platformTaskRef.current?.id === projectedTask?.id) {
-        platformTaskRef.current = null;
       }
     }
   }
 
   function cancelTask() {
     abortRef.current?.abort();
-    const projectedTask = platformTaskRef.current;
-    if (projectedTask) {
+    const platformTask = platformTaskRef.current;
+    if (platformTask) {
       void mobilePlatformClient()
         .then((client) =>
-          client.tasks.cancel(projectedTask.id, { reason: "user_cancelled" }),
+          client.tasks.cancel(platformTask.id, { reason: "user_cancelled" }),
         )
         .catch(() => {});
     }
@@ -11156,7 +11363,7 @@ function AndroidImageStudio() {
       setError(text.common.done);
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : text.errors.saveFailed);
+      setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
       return false;
     }
   }
@@ -11860,7 +12067,7 @@ function AndroidGallery() {
         ),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : text.errors.syncFailed);
+      setError(localizedMobileErrorMessage(err, text.errors.syncFailed));
     }
   }
 
@@ -11946,9 +12153,10 @@ function AndroidGallery() {
       });
     } catch (reuseError) {
       setError(
-        reuseError instanceof Error
-          ? reuseError.message
-          : text.platform.materialRefreshFailed,
+        localizedMobileErrorMessage(
+          reuseError,
+          text.platform.materialRefreshFailed,
+        ),
       );
     }
   }
@@ -12002,7 +12210,7 @@ function AndroidGallery() {
       setPreview(null);
       showNotice(text.common.done);
     } catch (err) {
-      setError(err instanceof Error ? err.message : text.errors.saveFailed);
+      setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     }
   }
 
@@ -12637,8 +12845,87 @@ function paymentMethodsFromCheckout(checkout?: CheckoutInfo) {
     .filter((method) => method.available !== false);
 }
 
+function mobileDisplayLocale(text: ManagedMobileText) {
+  return text.dateLocale.toLowerCase().startsWith("zh") ? "cn" : "en";
+}
+
+function localizedApiField(
+  value: Record<string, unknown> | null | undefined,
+  text: ManagedMobileText,
+  defaultFields: string[],
+  fallback = "",
+) {
+  return localizedMobileDisplay(value as any, {
+    locale: mobileDisplayLocale(text),
+    defaultFields,
+    fallback,
+  });
+}
+
+function couponDisplayName(coupon: UserCoupon, text: ManagedMobileText) {
+  return (
+    localizedApiField(coupon as Record<string, unknown>, text, [
+      "template_name",
+      "name",
+    ]) || `#${coupon.id}`
+  );
+}
+
+function planDisplayName(
+  plan: Record<string, unknown>,
+  text: ManagedMobileText,
+) {
+  return localizedApiField(plan, text, ["product_name", "name"]);
+}
+
+function planDescription(
+  plan: Record<string, unknown>,
+  text: ManagedMobileText,
+) {
+  return localizedMobileDisplay(plan as any, {
+    kind: "description",
+    locale: mobileDisplayLocale(text),
+    defaultFields: ["description", "group_name", "target_group_name"],
+  });
+}
+
+function planValidityLabel(
+  plan: Record<string, unknown>,
+  text: ManagedMobileText,
+) {
+  const localized = localizedApiField(plan, text, [
+    "duration",
+    "validity",
+    "duration_label",
+    "validity_label",
+  ]);
+  if (localized) return localized;
+  const days = Number(plan.validity_days);
+  return Number.isFinite(days) && days > 0
+    ? text.account.validityDays(days)
+    : "";
+}
+
+function localizedPlanFeature(feature: unknown, text: ManagedMobileText) {
+  if (typeof feature === "string") return feature;
+  if (feature && typeof feature === "object") {
+    return localizedApiField(feature as Record<string, unknown>, text, [
+      "label",
+      "name",
+      "title",
+      "description",
+    ]);
+  }
+  return "";
+}
+
 function paymentMethodLabel(method: CheckoutMethod, text: ManagedMobileText) {
-  if (method.display_name) return method.display_name;
+  const localizedName = localizedApiField(
+    method as Record<string, unknown>,
+    text,
+    ["display_name"],
+  );
+  if (localizedName) return localizedName;
   const key = (method.payment_type || "").toLowerCase();
   const zh = text.dateLocale.toLowerCase().startsWith("zh");
   const labels: Record<string, string> = zh
@@ -13326,6 +13613,7 @@ function AndroidAccountSettings() {
     return {
       "Idempotency-Key": requestID,
       "X-Request-ID": requestID,
+      "X-Client-Request-ID": requestID,
     };
   }
 
@@ -13500,6 +13788,10 @@ function AndroidAccountSettings() {
         PLAY_WELFARE_TEAM_ENDPOINTS.application,
         {
           method: "POST",
+          headers: {
+            ...playMutationHeaders("play-team-application"),
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({
             team_id: teamApplicationTarget.team_id,
             message: teamApplicationMessage.trim(),
@@ -13532,6 +13824,12 @@ function AndroidAccountSettings() {
         `${PLAY_WELFARE_TEAM_ENDPOINTS.application}/${applicationID}/decision`,
         {
           method: "POST",
+          headers: {
+            ...playMutationHeaders(
+              `play-team-decision-${applicationID}-${decision}`,
+            ),
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({ decision }),
         },
       );
@@ -13560,6 +13858,10 @@ function AndroidAccountSettings() {
         PLAY_WELFARE_TEAM_ENDPOINTS.recruiting,
         {
           method: "PUT",
+          headers: {
+            ...playMutationHeaders("play-team-recruiting"),
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({ recruiting }),
         },
       );
@@ -13583,7 +13885,10 @@ function AndroidAccountSettings() {
       const invite =
         await managedAuthenticatedJsonRequest<PlayWelfareTeamInvite>(
           PLAY_WELFARE_TEAM_ENDPOINTS.inviteRotate,
-          { method: "POST" },
+          {
+            method: "POST",
+            headers: playMutationHeaders("play-team-invite-rotate"),
+          },
         );
       setWelfareData((current) => {
         if (!current?.teamMe?.team) return current;
@@ -13635,7 +13940,10 @@ function AndroidAccountSettings() {
     try {
       await managedAuthenticatedJsonRequest(
         `/api/v1/user/aff/campaigns/${inviteCampaign.campaign.id}/enroll`,
-        { method: "POST" },
+        {
+          method: "POST",
+          headers: playMutationHeaders("play-invite-campaign-enroll"),
+        },
       );
       await refreshInviteGrowth(true);
       setInviteMessage(text.account.inviteGrowthEnrolled);
@@ -13656,6 +13964,10 @@ function AndroidAccountSettings() {
         `/api/v1/user/aff/campaigns/${inviteCampaign.campaign.id}/rewards/${reward.id}/claim`,
         {
           method: "POST",
+          headers: {
+            ...playMutationHeaders(`play-invite-reward-${reward.id}`),
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({
             campaign_version: inviteCampaign.campaign.version,
           }),
@@ -14395,7 +14707,7 @@ function AndroidAccountSettings() {
       );
     } catch (error) {
       setFeedbackError(
-        error instanceof Error ? error.message : text.errors.permissionDenied,
+        localizedMobileErrorMessage(error, text.errors.permissionDenied),
       );
     }
   }
@@ -14507,7 +14819,7 @@ function AndroidAccountSettings() {
       setFeedbackScreenshots([]);
     } catch (error) {
       setFeedbackError(
-        error instanceof Error ? error.message : text.errors.saveFailed,
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
       );
     } finally {
       setFeedbackSubmitting(false);
@@ -14567,8 +14879,10 @@ function AndroidAccountSettings() {
           await refreshCheckoutInfo().catch(() => {});
           return;
         } catch (error) {
-          const message =
-            error instanceof Error ? error.message : text.account.redeemFailed;
+          const message = localizedMobileErrorMessage(
+            error,
+            text.account.redeemFailed,
+          );
           firstError ||= message;
           if (!/404|not found|不存在|未找到|no route|路由/i.test(message)) {
             break;
@@ -14928,7 +15242,7 @@ function AndroidAccountSettings() {
     refreshAccountData().catch((error) => {
       setAccountData({
         loading: false,
-        error: error instanceof Error ? error.message : text.errors.syncFailed,
+        error: localizedMobileErrorMessage(error, text.errors.syncFailed),
       });
     });
     refreshCheckoutInfo().catch(() => {});
@@ -15218,7 +15532,7 @@ function AndroidAccountSettings() {
           )}
           {coupons.map((coupon) => (
             <button key={coupon.id}>
-              <span>{coupon.template_name || `#${coupon.id}`}</span>
+              <span>{couponDisplayName(coupon, text)}</span>
               <strong>
                 {statusTitles[coupon.status || ""] || text.notSynced}
               </strong>
@@ -15303,7 +15617,7 @@ function AndroidAccountSettings() {
                   })}
                   onClick={() => selectPaymentCoupon(coupon.id, "balance")}
                 >
-                  <strong>{coupon.template_name || `#${coupon.id}`}</strong>
+                  <strong>{couponDisplayName(coupon, text)}</strong>
                   <small>
                     {coupon.terms_snapshot?.benefit_value || "-"} ·{" "}
                     {coupon.expires_at
@@ -15420,11 +15734,7 @@ function AndroidAccountSettings() {
           : 0;
       return (
         <AndroidDetailShell
-          title={
-            selectedPlan.product_name ||
-            selectedPlan.name ||
-            text.account.planDetail
-          }
+          title={planDisplayName(selectedPlan, text) || text.account.planDetail}
           subtitle={text.account.confirmPlanPurchase}
           text={text}
           fallback={Path.AccountPlans}
@@ -15442,22 +15752,15 @@ function AndroidAccountSettings() {
             </div>
             <div>
               <span>{text.account.planGroup}</span>
-              <strong>
-                {selectedPlan.group_name ||
-                  selectedPlan.target_group_name ||
-                  selectedPlan.description ||
-                  "-"}
-              </strong>
+              <strong>{planDescription(selectedPlan, text) || "-"}</strong>
             </div>
             <div>
               <span>{text.account.planValidity}</span>
-              <strong>
-                {selectedPlan.validity_days
-                  ? text.account.validityDays(selectedPlan.validity_days)
-                  : selectedPlan.duration || "-"}
-              </strong>
+              <strong>{planValidityLabel(selectedPlan, text) || "-"}</strong>
             </div>
-            {selectedPlan.description && <p>{selectedPlan.description}</p>}
+            {planDescription(selectedPlan, text) && (
+              <p>{planDescription(selectedPlan, text)}</p>
+            )}
             {usage.subscription ? (
               <div className={styles["plan-usage"]}>
                 <span>{text.account.usageProgress}</span>
@@ -15489,9 +15792,14 @@ function AndroidAccountSettings() {
             {Array.isArray(selectedPlan.features) &&
               selectedPlan.features.length > 0 && (
                 <ul>
-                  {selectedPlan.features.map((feature: string) => (
-                    <li key={feature}>{feature}</li>
-                  ))}
+                  {selectedPlan.features
+                    .map((feature: unknown) =>
+                      localizedPlanFeature(feature, text),
+                    )
+                    .filter(Boolean)
+                    .map((feature: string) => (
+                      <li key={feature}>{feature}</li>
+                    ))}
                 </ul>
               )}
           </section>
@@ -15555,7 +15863,7 @@ function AndroidAccountSettings() {
                       )
                     }
                   >
-                    <strong>{coupon.template_name || `#${coupon.id}`}</strong>
+                    <strong>{couponDisplayName(coupon, text)}</strong>
                     <small>
                       {coupon.expires_at
                         ? formatDateTime(coupon.expires_at, text)
@@ -15689,10 +15997,14 @@ function AndroidAccountSettings() {
                     setCreatedOrder(null);
                   }}
                 >
-                  <span>{plan.product_name || plan.name}</span>
+                  <span>
+                    {planDisplayName(plan, text) || text.account.planDetail}
+                  </span>
                   <strong>{formatMoney(plan.price)}</strong>
                   <small>
-                    {plan.group_name || plan.description || plan.validity_days}
+                    {planDescription(plan, text) ||
+                      planValidityLabel(plan, text) ||
+                      "-"}
                   </small>
                   {formatQuota(usage.remaining, usage.unit) ||
                   formatQuota(usage.total, usage.unit) ? (
@@ -15716,7 +16028,15 @@ function AndroidAccountSettings() {
                     </em>
                   ) : Array.isArray(plan.features) &&
                     plan.features.length > 0 ? (
-                    <em>{plan.features.slice(0, 3).join(" · ")}</em>
+                    <em>
+                      {plan.features
+                        .slice(0, 3)
+                        .map((feature: unknown) =>
+                          localizedPlanFeature(feature, text),
+                        )
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </em>
                   ) : (
                     <em>{text.account.actualUsageHint}</em>
                   )}

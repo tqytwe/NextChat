@@ -13,6 +13,7 @@ const {
   finishNativeApp,
   loadLoginCredentials,
   showNativeToast,
+  startForegroundPttSession,
   startDirectNativeStreamRequest,
 } = await import(
   "../app/client/android-native"
@@ -128,6 +129,177 @@ test("native bridge implements a system toast and finish action for double back"
   expect(source).toContain("Toast.makeText(");
   expect(source).toContain('case "finishApp"');
   expect(source).toContain("finishAndRemoveTask()");
+});
+
+test("foreground PTT streams transcript events by session and cancels on route change", async () => {
+  window.history.replaceState(
+    {},
+    "",
+    "/?nativeBridgeToken=launch-secret-123",
+  );
+  const requests: Array<{
+    id: string;
+    method: string;
+    options?: Record<string, unknown>;
+  }> = [];
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const request = JSON.parse(raw) as {
+        id: string;
+        method: string;
+        options?: Record<string, unknown>;
+      };
+      requests.push(request);
+      if (request.method === "requestMicrophonePermission") {
+        window.__jisudengNativeResolve?.(request.id, { granted: true });
+        return;
+      }
+      if (request.method === "startForegroundPtt") {
+        window.__jisudengNativeResolve?.(request.id, {
+          sessionId: request.options?.sessionId,
+          state: "listening",
+        });
+        return;
+      }
+      if (request.method === "cancelForegroundPtt") {
+        const sessionId = String(request.options?.sessionId || "");
+        window.__jisudengNativeForegroundPttEvent?.(sessionId, "cancelled", {
+          reason: String(request.options?.reason || "cancelled"),
+        });
+        window.__jisudengNativeResolve?.(request.id, { active: false });
+      }
+    },
+  };
+
+  const events: Array<{ type: string; text?: string; reason?: string }> = [];
+  await startForegroundPttSession({
+    sessionId: "ptt-session-1",
+    onEvent: (event) => events.push(event),
+  });
+
+  window.__jisudengNativeForegroundPttEvent?.("ptt-session-1", "partial", {
+    text: "draft transcript",
+    matches: ["draft transcript"],
+  });
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(events).toHaveLength(2);
+  expect(events[0]).toMatchObject({
+    sessionId: "ptt-session-1",
+    type: "partial",
+    text: "draft transcript",
+    matches: ["draft transcript"],
+  });
+  expect(events[1]).toMatchObject({
+    sessionId: "ptt-session-1",
+    type: "cancelled",
+    reason: "route_changed",
+  });
+  expect(requests.map((request) => request.method)).toEqual([
+    "requestMicrophonePermission",
+    "startForegroundPtt",
+    "cancelForegroundPtt",
+  ]);
+  expect(requests[2].options).toEqual({
+    sessionId: "ptt-session-1",
+    reason: "route_changed",
+  });
+});
+
+test("foreground PTT forwards final and error callbacks without a message action", async () => {
+  window.history.replaceState(
+    {},
+    "",
+    "/?nativeBridgeToken=launch-secret-123",
+  );
+  const methods: string[] = [];
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const request = JSON.parse(raw) as {
+        id: string;
+        method: string;
+        options?: Record<string, unknown>;
+      };
+      methods.push(request.method);
+      if (request.method === "requestMicrophonePermission") {
+        window.__jisudengNativeResolve?.(request.id, { granted: true });
+        return;
+      }
+      if (request.method === "startForegroundPtt") {
+        window.__jisudengNativeResolve?.(request.id, {
+          sessionId: request.options?.sessionId,
+          state: "listening",
+        });
+      }
+    },
+  };
+
+  const finalEvents: Array<{ type: string; text?: string }> = [];
+  await startForegroundPttSession({
+    sessionId: "ptt-session-final",
+    onEvent: (event) => finalEvents.push(event),
+  });
+  window.__jisudengNativeForegroundPttEvent?.(
+    "ptt-session-final",
+    "final",
+    { text: "final transcript", matches: ["final transcript"] },
+  );
+
+  const errorEvents: Array<{
+    type: string;
+    errorCode?: string;
+    recoverable?: boolean;
+  }> = [];
+  await startForegroundPttSession({
+    sessionId: "ptt-session-error",
+    onEvent: (event) => errorEvents.push(event),
+  });
+  window.__jisudengNativeForegroundPttEvent?.(
+    "ptt-session-error",
+    "error",
+    {
+      errorCode: "network_timeout",
+      errorMessage: "speech recognition network_timeout",
+      recoverable: true,
+    },
+  );
+
+  expect(finalEvents[0]).toMatchObject({
+    sessionId: "ptt-session-final",
+    type: "final",
+    text: "final transcript",
+  });
+  expect(errorEvents[0]).toMatchObject({
+    sessionId: "ptt-session-error",
+    type: "error",
+    errorCode: "network_timeout",
+    recoverable: true,
+  });
+  expect(methods).toEqual([
+    "requestMicrophonePermission",
+    "startForegroundPtt",
+    "requestMicrophonePermission",
+    "startForegroundPtt",
+  ]);
+});
+
+test("foreground PTT native bridge exposes partial, final, error, and lifecycle cleanup", () => {
+  const source = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  expect(source).toContain('case "startForegroundPtt"');
+  expect(source).toContain('case "stopForegroundPtt"');
+  expect(source).toContain('case "cancelForegroundPtt"');
+  expect(source).toContain('"partial",');
+  expect(source).toContain('"final",');
+  expect(source).toContain('"error",');
+  expect(source).toContain('cancelActiveSpeechSessions("app_backgrounded")');
+  expect(source).toContain('cancelActiveSpeechSessions("route_changed")');
 });
 
 test("native app storage retains local project grouping metadata", () => {

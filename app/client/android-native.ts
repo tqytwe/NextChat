@@ -33,6 +33,41 @@ export interface NativeSpeechResult {
   cancelled?: boolean;
 }
 
+/**
+ * Events emitted by the foreground push-to-talk bridge. A PTT session never
+ * sends a chat message; consumers decide when (or whether) to use the final
+ * transcript.
+ */
+export type NativeForegroundPttEventType =
+  | "ready"
+  | "partial"
+  | "final"
+  | "error"
+  | "cancelled";
+
+export interface NativeForegroundPttEvent {
+  sessionId: string;
+  type: NativeForegroundPttEventType;
+  text?: string;
+  matches?: string[];
+  errorCode?: string;
+  errorMessage?: string;
+  recoverable?: boolean;
+  reason?: string;
+}
+
+export interface NativeForegroundPttStartResult {
+  sessionId: string;
+  state: "listening";
+}
+
+export interface NativeForegroundPttSession {
+  sessionId: string;
+  stop(): Promise<void>;
+  cancel(reason?: string): Promise<void>;
+  unsubscribe(): void;
+}
+
 export interface NativeAppImage {
   id?: string;
   fileName: string;
@@ -150,6 +185,16 @@ interface NextChatNativePlugin {
   }): Promise<NativeSpeechResult>;
   stopHoldSpeech?(): Promise<void>;
   cancelHoldSpeech?(): Promise<void>;
+  startForegroundPtt?(options: {
+    sessionId: string;
+    language?: string;
+    prompt?: string;
+  }): Promise<NativeForegroundPttStartResult>;
+  stopForegroundPtt?(options: { sessionId: string }): Promise<void>;
+  cancelForegroundPtt?(options: {
+    sessionId: string;
+    reason?: string;
+  }): Promise<void>;
   saveImageToGallery(options: {
     dataUrl: string;
     fileName?: string;
@@ -226,6 +271,11 @@ declare global {
       },
     ) => void;
     __jisudengNativeBridgeToken?: string;
+    __jisudengNativeForegroundPttEvent?: (
+      sessionId: string,
+      type: NativeForegroundPttEventType,
+      payload?: Partial<NativeForegroundPttEvent>,
+    ) => void;
   }
 }
 
@@ -247,6 +297,84 @@ const pendingNativeStreams = new Map<
     reject: (reason?: unknown) => void;
   }
 >();
+
+type ForegroundPttListener = (event: NativeForegroundPttEvent) => void;
+
+const foregroundPttListeners = new Map<string, Set<ForegroundPttListener>>();
+const foregroundPttSessions = new Set<string>();
+let foregroundPttLifecycleInstalled = false;
+
+const foregroundPttTerminalEvents = new Set<NativeForegroundPttEventType>([
+  "final",
+  "error",
+  "cancelled",
+]);
+
+function createForegroundPttSessionId() {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return `ptt-${crypto.randomUUID()}`;
+  }
+  return `ptt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function removeForegroundPttLifecycleListenersIfIdle() {
+  if (foregroundPttSessions.size || !foregroundPttLifecycleInstalled) return;
+  if (typeof window !== "undefined") {
+    window.removeEventListener("pagehide", handleForegroundPttPageHide);
+    window.removeEventListener("popstate", handleForegroundPttRouteChange);
+    window.removeEventListener("hashchange", handleForegroundPttRouteChange);
+    window.removeEventListener(
+      "jisudeng-native-route-change",
+      handleForegroundPttRouteChange,
+    );
+  }
+  if (typeof document !== "undefined") {
+    document.removeEventListener(
+      "visibilitychange",
+      handleForegroundPttVisibilityChange,
+    );
+  }
+  foregroundPttLifecycleInstalled = false;
+}
+
+function installForegroundPttLifecycleListeners() {
+  if (foregroundPttLifecycleInstalled || typeof window === "undefined") return;
+  window.addEventListener("pagehide", handleForegroundPttPageHide);
+  window.addEventListener("popstate", handleForegroundPttRouteChange);
+  window.addEventListener("hashchange", handleForegroundPttRouteChange);
+  window.addEventListener(
+    "jisudeng-native-route-change",
+    handleForegroundPttRouteChange,
+  );
+  if (typeof document !== "undefined") {
+    document.addEventListener(
+      "visibilitychange",
+      handleForegroundPttVisibilityChange,
+    );
+  }
+  foregroundPttLifecycleInstalled = true;
+}
+
+function handleForegroundPttPageHide() {
+  void cancelAllForegroundPttSessions("page_hidden");
+}
+
+function handleForegroundPttRouteChange() {
+  void cancelAllForegroundPttSessions("route_changed");
+}
+
+function handleForegroundPttVisibilityChange() {
+  if (
+    typeof document === "undefined" ||
+    document.visibilityState !== "hidden"
+  ) {
+    return;
+  }
+  void cancelAllForegroundPttSessions("app_backgrounded");
+}
 
 function getDirectNativeBridge() {
   if (typeof window === "undefined") return undefined;
@@ -300,6 +428,43 @@ function ensureDirectNativeCallbacks() {
             : "stream request failed"),
       ),
     );
+  };
+  window.__jisudengNativeForegroundPttEvent = (sessionId, type, payload) => {
+    const listeners = foregroundPttListeners.get(sessionId);
+    const payloadMatches = payload?.matches;
+    const matches = Array.isArray(payloadMatches)
+      ? payloadMatches.filter(
+          (match): match is string => typeof match === "string",
+        )
+      : undefined;
+    const event: NativeForegroundPttEvent = {
+      sessionId,
+      type,
+      text: typeof payload?.text === "string" ? payload.text : undefined,
+      matches,
+      errorCode:
+        typeof payload?.errorCode === "string" ? payload.errorCode : undefined,
+      errorMessage:
+        typeof payload?.errorMessage === "string"
+          ? payload.errorMessage
+          : undefined,
+      recoverable:
+        typeof payload?.recoverable === "boolean"
+          ? payload.recoverable
+          : undefined,
+      reason: typeof payload?.reason === "string" ? payload.reason : undefined,
+    };
+    for (const listener of listeners ? [...listeners] : []) {
+      try {
+        listener(event);
+      } catch {
+        // A screen-level callback must not prevent terminal native cleanup.
+      }
+    }
+    if (!foregroundPttTerminalEvents.has(type)) return;
+    foregroundPttListeners.delete(sessionId);
+    foregroundPttSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
   };
 }
 
@@ -586,6 +751,125 @@ export async function cancelHoldSpeechRecognition() {
   if (NextChatNative.cancelHoldSpeech) {
     await NextChatNative.cancelHoldSpeech();
   }
+}
+
+/**
+ * Starts a foreground-only push-to-talk session. Transcripts are delivered to
+ * `onEvent`; this bridge deliberately has no send-message or attachment API.
+ */
+export async function startForegroundPttSession(options: {
+  sessionId?: string;
+  language?: string;
+  prompt?: string;
+  onEvent: ForegroundPttListener;
+}): Promise<NativeForegroundPttSession> {
+  if (!isNativeAndroid()) {
+    throw new Error("foreground PTT is only available in the Android app");
+  }
+
+  const sessionId = options.sessionId?.trim() || createForegroundPttSessionId();
+  if (sessionId.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(sessionId)) {
+    throw new Error("foreground PTT session id is invalid");
+  }
+
+  await requestMicrophonePermission();
+  await cancelAllForegroundPttSessions("replaced");
+  ensureDirectNativeCallbacks();
+
+  const listeners = new Set<ForegroundPttListener>([options.onEvent]);
+  foregroundPttListeners.set(sessionId, listeners);
+  foregroundPttSessions.add(sessionId);
+  installForegroundPttLifecycleListeners();
+
+  try {
+    if (!isDirectNativeBridgeAvailable()) {
+      throw new Error("foreground PTT is not available in this Android shell");
+    }
+    const result = await callDirectNative<NativeForegroundPttStartResult>(
+      "startForegroundPtt",
+      {
+        sessionId,
+        language: options.language,
+        prompt: options.prompt,
+      },
+    );
+    if (result.sessionId && result.sessionId !== sessionId) {
+      throw new Error("foreground PTT returned an unexpected session id");
+    }
+  } catch (error) {
+    foregroundPttListeners.delete(sessionId);
+    foregroundPttSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+    throw error;
+  }
+
+  return {
+    sessionId,
+    stop: () => stopForegroundPttSession(sessionId),
+    cancel: (reason?: string) => cancelForegroundPttSession(sessionId, reason),
+    unsubscribe: () => {
+      const current = foregroundPttListeners.get(sessionId);
+      if (!current) return;
+      current.delete(options.onEvent);
+      if (!current.size) foregroundPttListeners.delete(sessionId);
+    },
+  };
+}
+
+export async function stopForegroundPttSession(sessionId: string) {
+  if (!isNativeAndroid() || !sessionId) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("stopForegroundPtt", { sessionId });
+    return;
+  }
+  if (NextChatNative.stopForegroundPtt) {
+    await NextChatNative.stopForegroundPtt({ sessionId });
+  }
+}
+
+export async function cancelForegroundPttSession(
+  sessionId: string,
+  reason = "cancelled",
+) {
+  if (!isNativeAndroid() || !sessionId) return;
+  try {
+    if (isDirectNativeBridgeAvailable()) {
+      await callDirectNative<void>("cancelForegroundPtt", {
+        sessionId,
+        reason,
+      });
+      return;
+    }
+    if (NextChatNative.cancelForegroundPtt) {
+      await NextChatNative.cancelForegroundPtt({ sessionId, reason });
+    }
+  } finally {
+    // Native normally emits `cancelled`. Clear stale local state even if its
+    // WebView was already torn down during a lifecycle transition.
+    foregroundPttListeners.delete(sessionId);
+    foregroundPttSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+  }
+}
+
+export async function cancelAllForegroundPttSessions(reason = "cancelled") {
+  const sessionIds = [...foregroundPttSessions];
+  await Promise.all(
+    sessionIds.map((sessionId) =>
+      cancelForegroundPttSession(sessionId, reason).catch(() => {
+        // Lifecycle cleanup must never hold navigation or backgrounding open.
+      }),
+    ),
+  );
+}
+
+/**
+ * Call this from a screen/router transition that does not update browser
+ * history. Browser `popstate`, hash changes, page hide, and backgrounding are
+ * already observed automatically.
+ */
+export function notifyForegroundPttRouteChange() {
+  void cancelAllForegroundPttSessions("route_changed");
 }
 
 export async function saveImageToGallery(url: string, fileName: string) {

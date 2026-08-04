@@ -25,12 +25,14 @@ export const MOBILE_ADMIN_READ_PATHS = {
   users: "/users",
   paymentDashboard: "/payment/dashboard",
   orders: "/payment/orders",
+  subscriptions: "/subscriptions",
   groups: "/groups",
   modelCatalog: "/model-catalog",
   usage: "/usage",
   cleanupTasks: "/usage/cleanup-tasks",
   withdrawals: "/withdrawals",
   refundRequests: "/funds/refund-requests",
+  mobileFeedback: "/play/mobile-feedback",
   auditLogs: "/audit-logs",
 } as const;
 
@@ -49,8 +51,33 @@ const MOBILE_ADMIN_USER_READ_PATHS = {
   walletReconciliation: "/balance-reconciliation",
 } as const;
 
+/**
+ * Per-record reads are intentionally enumerated instead of accepting a caller
+ * supplied URL. This keeps the APK from becoming a generic administrator
+ * proxy while still exposing the canonical detail routes already maintained
+ * by the backend.
+ */
+export const MOBILE_ADMIN_DETAIL_PATHS = {
+  user: "/users/:id",
+  userUsage: "/users/:id/usage",
+  userWalletHistory: "/users/:id/balance-history",
+  userWalletReconciliation: "/users/:id/balance-reconciliation",
+  userSubscriptions: "/users/:id/subscriptions",
+  order: "/payment/orders/:id",
+  subscription: "/subscriptions/:id",
+  subscriptionProgress: "/subscriptions/:id/progress",
+  group: "/groups/:id",
+  groupStats: "/groups/:id/stats",
+  withdrawal: "/withdrawals/:id",
+  refundRequest: "/funds/refund-requests/:id",
+  mobileFeedback: "/play/mobile-feedback/:id",
+  auditLog: "/audit-logs/:id",
+} as const;
+
 export type MobileAdminReadEndpoint =
   (typeof MOBILE_ADMIN_READ_PATHS)[keyof typeof MOBILE_ADMIN_READ_PATHS];
+export type MobileAdminDetailEndpoint =
+  (typeof MOBILE_ADMIN_DETAIL_PATHS)[keyof typeof MOBILE_ADMIN_DETAIL_PATHS];
 
 export type MobileAdminQueryValue =
   | string
@@ -212,22 +239,39 @@ function appendQuery(path: string, query?: MobileAdminQuery) {
   return text ? `${path}?${text}` : path;
 }
 
+function encodeAdminID(
+  id: number | string,
+  path: string,
+  requestId: string,
+  code: string,
+) {
+  const value = String(id).trim();
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw localAdminError(
+      "A positive administrator record ID is required.",
+      path,
+      requestId,
+      code,
+      "input",
+    );
+  }
+  return encodeURIComponent(value);
+}
+
 function encodeAdminUserID(
   userId: number | string,
   path: string,
   requestId: string,
 ) {
-  const value = String(userId).trim();
-  if (!/^[1-9]\d*$/.test(value)) {
-    throw localAdminError(
-      "A positive administrator user ID is required.",
-      path,
-      requestId,
-      "ADMIN_USER_ID_INVALID",
-      "input",
-    );
-  }
-  return encodeURIComponent(value);
+  return encodeAdminID(userId, path, requestId, "ADMIN_USER_ID_INVALID");
+}
+
+function encodeAdminRecordID(
+  id: number | string,
+  path: string,
+  requestId: string,
+) {
+  return encodeAdminID(id, path, requestId, "ADMIN_RECORD_ID_INVALID");
 }
 
 function requestInit(
@@ -392,6 +436,46 @@ export async function requestMobileAdminRead<T>(
   return { data, requestId };
 }
 
+function resolveMobileAdminDetailPath(
+  endpoint: MobileAdminDetailEndpoint,
+  id: number | string,
+  requestId: string,
+) {
+  const encodedID = encodeAdminRecordID(
+    id,
+    `${CANONICAL_ADMIN_API_BASE_PATH}${endpoint}`,
+    requestId,
+  );
+  return endpoint.replace(":id", encodedID);
+}
+
+/**
+ * Sends a single allowlisted canonical admin detail request. The endpoint is
+ * a closed union so a UI feature cannot turn an ID from server data into an
+ * arbitrary administrator URL.
+ */
+export async function requestMobileAdminDetail<T>(
+  client: MobileAdminClient,
+  endpoint: MobileAdminDetailEndpoint,
+  id: number | string,
+  query?: MobileAdminQuery,
+  options?: MobileAdminRequestOptions,
+): Promise<MobileAdminRequestResult<T>> {
+  const requestId = resolveRequestId(options);
+  const relativePath = resolveMobileAdminDetailPath(endpoint, id, requestId);
+  const path = appendQuery(
+    resolveAdminBasePath(client, relativePath, requestId),
+    query,
+  );
+  const data = await managedJsonRequest<T>(
+    client.baseUrl,
+    path,
+    requestInit("GET", requestId, options),
+    client.accessToken,
+  );
+  return { data, requestId };
+}
+
 /**
  * The compliance endpoint is the only mobile admin mutation available today.
  * Keep it narrowly scoped until privileged business writes have a reviewed
@@ -494,6 +578,50 @@ export function listMobileAdminUsers<T = Record<string, unknown>>(
   );
 }
 
+export function getMobileAdminUser<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  userId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.user,
+    userId,
+    undefined,
+    options,
+  );
+}
+
+export function getMobileAdminUserUsage<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  userId: number | string,
+  query?: MobileAdminQuery,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.userUsage,
+    userId,
+    query,
+    options,
+  );
+}
+
+export function listMobileAdminUserSubscriptions<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  userId: number | string,
+  query?: MobileAdminQuery,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<MobileAdminPage<T>>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.userSubscriptions,
+    userId,
+    query,
+    options,
+  );
+}
+
 /**
  * There is no global `/admin/wallet` route. This canonical payment dashboard
  * is the safe aggregate wallet/settlement overview exposed by the backend.
@@ -579,6 +707,61 @@ export function listMobileAdminOrders<T = Record<string, unknown>>(
   );
 }
 
+export function getMobileAdminOrder<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  orderId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.order,
+    orderId,
+    undefined,
+    options,
+  );
+}
+
+export function listMobileAdminSubscriptions<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  query?: MobileAdminQuery,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminRead<MobileAdminPage<T>>(
+    client,
+    MOBILE_ADMIN_READ_PATHS.subscriptions,
+    query,
+    options,
+  );
+}
+
+export function getMobileAdminSubscription<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  subscriptionId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.subscription,
+    subscriptionId,
+    undefined,
+    options,
+  );
+}
+
+export function getMobileAdminSubscriptionProgress<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  subscriptionId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.subscriptionProgress,
+    subscriptionId,
+    undefined,
+    options,
+  );
+}
+
 export function listMobileAdminGroups<T = Record<string, unknown>>(
   client: MobileAdminClient,
   query?: MobileAdminQuery,
@@ -588,6 +771,34 @@ export function listMobileAdminGroups<T = Record<string, unknown>>(
     client,
     MOBILE_ADMIN_READ_PATHS.groups,
     query,
+    options,
+  );
+}
+
+export function getMobileAdminGroup<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  groupId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.group,
+    groupId,
+    undefined,
+    options,
+  );
+}
+
+export function getMobileAdminGroupStats<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  groupId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.groupStats,
+    groupId,
+    undefined,
     options,
   );
 }
@@ -649,6 +860,20 @@ export function listMobileAdminWithdrawals<T = Record<string, unknown>>(
   );
 }
 
+export function getMobileAdminWithdrawal<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  withdrawalId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.withdrawal,
+    withdrawalId,
+    undefined,
+    options,
+  );
+}
+
 export function listMobileAdminRefundRequests<T = Record<string, unknown>>(
   client: MobileAdminClient,
   query?: MobileAdminQuery,
@@ -662,6 +887,47 @@ export function listMobileAdminRefundRequests<T = Record<string, unknown>>(
   );
 }
 
+export function getMobileAdminRefundRequest<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  refundRequestId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.refundRequest,
+    refundRequestId,
+    undefined,
+    options,
+  );
+}
+
+export function listMobileAdminMobileFeedback<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  query?: MobileAdminQuery,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminRead<MobileAdminPage<T>>(
+    client,
+    MOBILE_ADMIN_READ_PATHS.mobileFeedback,
+    query,
+    options,
+  );
+}
+
+export function getMobileAdminMobileFeedback<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  feedbackId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.mobileFeedback,
+    feedbackId,
+    undefined,
+    options,
+  );
+}
+
 export function listMobileAdminAuditLogs<T = Record<string, unknown>>(
   client: MobileAdminClient,
   query?: MobileAdminQuery,
@@ -671,6 +937,20 @@ export function listMobileAdminAuditLogs<T = Record<string, unknown>>(
     client,
     MOBILE_ADMIN_READ_PATHS.auditLogs,
     query,
+    options,
+  );
+}
+
+export function getMobileAdminAuditLog<T = Record<string, unknown>>(
+  client: MobileAdminClient,
+  auditLogId: number | string,
+  options?: MobileAdminRequestOptions,
+) {
+  return requestMobileAdminDetail<T>(
+    client,
+    MOBILE_ADMIN_DETAIL_PATHS.auditLog,
+    auditLogId,
+    undefined,
     options,
   );
 }
