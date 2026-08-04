@@ -8825,10 +8825,11 @@ function AndroidChat() {
       setQuotedMessage(null);
       return;
     }
-    // Chat is a first-level tab. Keep its behavior aligned with the other
-    // main tabs: the first back press shows the exit hint and never changes
-    // the selected tab or discards the draft session.
-    handleNativeHomeBack(text);
+    // A chat is always entered from the dashboard, a session list, or a
+    // material handoff. Return there before the root screen can handle its
+    // double-back exit gesture. This does not discard the draft or session.
+    lastNativeHomeBackAt = 0;
+    navigateBack(navigate, Path.Home);
   });
 
   return (

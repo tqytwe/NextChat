@@ -537,7 +537,7 @@ describe("mobile app backend alignment", () => {
     expect(switchGroup).toContain("rememberedModel,");
   });
 
-  test("uses a double native back press only for root tabs", () => {
+  test("uses a double native back press only on root screens", () => {
     expect(source).toContain(
       "function handleNativeHomeBack(text: ManagedMobileText)",
     );
@@ -553,11 +553,9 @@ describe("mobile app backend alignment", () => {
       source.indexOf("function AndroidChat()"),
       source.indexOf("function AndroidContentKit()"),
     );
-    expect(chat).toContain("Chat is a first-level tab");
-    expect(chat).toContain("handleNativeHomeBack(text)");
-    expect(chat).not.toContain(
-      'navigate(Path.Home);\n  });\n\n  return (\n    <main className={styles["mobile-app"]}>\n      <section className={styles["chat-screen"]}',
-    );
+    expect(chat).toContain("lastNativeHomeBackAt = 0");
+    expect(chat).toContain("navigateBack(navigate, Path.Home)");
+    expect(chat).not.toContain("handleNativeHomeBack(text)");
 
     const contentKit = source.slice(
       source.indexOf("function AndroidContentKit()"),
