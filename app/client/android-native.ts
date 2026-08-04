@@ -1236,6 +1236,50 @@ export async function listAppImages(ownerUserId: string) {
   return [];
 }
 
+/**
+ * Reads pre-account app images without changing their owner. The current
+ * Android shell exposes this only through its authenticated direct bridge;
+ * a later explicit claim is required before the images enter the gallery.
+ */
+export async function listUnassignedAppImages(ownerUserId: string) {
+  const owner = String(ownerUserId || "").trim();
+  if (!owner || !isNativeAndroid() || !isDirectNativeBridgeAvailable()) {
+    return [] as NativeAppImage[];
+  }
+  const result = await callDirectNative<{ items?: NativeAppImage[] }>(
+    "listUnassignedAppImages",
+    { ownerUserId: owner },
+  );
+  return result.items || [];
+}
+
+/**
+ * Attributes only the files selected in the migration UI to the current
+ * account. Existing account-owned images remain inaccessible to this method.
+ */
+export async function claimUnassignedAppImages(
+  fileNames: string[],
+  ownerUserId: string,
+) {
+  const owner = String(ownerUserId || "").trim();
+  if (!fileNames.length || !owner || !isNativeAndroid()) {
+    return { items: [] as NativeAppImage[], claimed: 0, skipped: 0 };
+  }
+  if (!isDirectNativeBridgeAvailable()) {
+    throw new Error(
+      "legacy image migration is not available in this Android shell",
+    );
+  }
+  return callDirectNative<{
+    items?: NativeAppImage[];
+    claimed?: number;
+    skipped?: number;
+  }>("claimUnassignedAppImages", {
+    fileNames,
+    ownerUserId: owner,
+  });
+}
+
 export async function deleteAppImages(
   fileNames: string[],
   ownerUserId: string,

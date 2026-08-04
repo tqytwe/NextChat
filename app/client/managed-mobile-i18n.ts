@@ -601,6 +601,16 @@ export const MANAGED_MOBILE_TEXT = {
       generate: "生成图片",
       gallery: "本机图库",
       localGalleryHint: "图片只保存在本机，不长期上传服务器",
+      legacyMigrationTitle: "发现旧版本机图片",
+      legacyMigrationHint: (count: number) =>
+        `发现 ${count} 张未归属图片。请确认后移入当前账号，不会自动归属。`,
+      legacyMigrationSelectAll: "全选",
+      legacyMigrationClear: "取消选择",
+      legacyMigrationClaim: (count: number) => `移入当前账号（${count}）`,
+      legacyMigrationConfirm: (count: number) =>
+        `确认将 ${count} 张旧版本机图片移入当前账号吗？不会影响其他账号已归属的图片。`,
+      legacyMigrationDone: (count: number) => `已移入 ${count} 张旧版本机图片`,
+      legacyMigrationFailed: "旧版图片迁移失败，请重试",
       favorites: "收藏",
       products: "产品",
       posters: "海报",
@@ -1797,6 +1807,18 @@ export const MANAGED_MOBILE_TEXT = {
       gallery: "Local gallery",
       localGalleryHint:
         "Images stay on this device and are not retained on the server.",
+      legacyMigrationTitle: "Older local images found",
+      legacyMigrationHint: (count: number) =>
+        `${count} images on this device do not have an account yet. Review and move them into the current account; nothing is claimed automatically.`,
+      legacyMigrationSelectAll: "Select all",
+      legacyMigrationClear: "Clear selection",
+      legacyMigrationClaim: (count: number) => `Move ${count} to this account`,
+      legacyMigrationConfirm: (count: number) =>
+        `Move ${count} older local images into the current account? Images already assigned to another account will not be changed.`,
+      legacyMigrationDone: (count: number) =>
+        `${count} older local images moved to this account`,
+      legacyMigrationFailed:
+        "Could not migrate the older local images. Try again.",
       favorites: "Favorites",
       products: "Products",
       posters: "Posters",

@@ -11,6 +11,8 @@ jest.unstable_mockModule("@capacitor/core", () => ({
 
 const {
   finishNativeApp,
+  claimUnassignedAppImages,
+  listUnassignedAppImages,
   loadLoginCredentials,
   showNativeToast,
   speakNativeText,
@@ -18,9 +20,7 @@ const {
   startForegroundWakeWordSession,
   startDirectNativeStreamRequest,
   stopNativeSpeech,
-} = await import(
-  "../app/client/android-native"
-);
+} = await import("../app/client/android-native");
 
 describe("direct Android bridge authentication", () => {
   afterEach(() => {
@@ -134,7 +134,7 @@ test("native bridge implements a system toast and finish action for double back"
   expect(source).toContain("finishAndRemoveTask()");
 });
 
-test("native image storage requires an owner and never claims legacy files", () => {
+test("native image storage requires an owner and exposes only explicit legacy claims", () => {
   const source = readFileSync(
     resolve(
       process.cwd(),
@@ -157,22 +157,89 @@ test("native image storage requires an owner and never claims legacy files", () 
     expect(implementation).toContain(
       'metadata.put("ownerUserId", requestedOwner)',
     );
-    expect(implementation).toContain('requestedOwner.equals(owner)');
+    expect(implementation).toContain("requestedOwner.equals(owner)");
     expect(implementation).toContain(
       'requestedOwner.equals(imageMetadata.optString("ownerUserId", ""))',
     );
     expect(implementation).not.toContain(
       'metadata.put("ownerUserId", ownerUserId)',
     );
+    expect(implementation).not.toContain(
+      "if (owner.isEmpty() && ownerUserId != null && !ownerUserId.isEmpty())",
+    );
   }
+  expect(source).toContain('case "listUnassignedAppImages"');
+  expect(source).toContain('case "claimUnassignedAppImages"');
+  expect(source).toContain("claimUnassignedAppImages(");
+  expect(source).toContain("new AtomicFile(metadataFile(imageFile))");
+  expect(source).toContain("metadataFile.finishWrite(out)");
+  expect(source).toContain(
+    'if (!metadata.optString("ownerUserId", "").trim().isEmpty())',
+  );
+  expect(plugin).not.toContain('case "claimUnassignedAppImages"');
+});
+
+test("legacy image migration sends selected files to the direct bridge only", async () => {
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
+  const requests: Array<{
+    id: string;
+    method: string;
+    options?: Record<string, unknown>;
+  }> = [];
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const request = JSON.parse(raw) as {
+        id: string;
+        method: string;
+        options?: Record<string, unknown>;
+      };
+      requests.push(request);
+      if (request.method === "listUnassignedAppImages") {
+        window.__jisudengNativeResolve?.(request.id, {
+          items: [
+            {
+              fileName: "legacy-image.png",
+              localUrl:
+                "https://localhost/__jisudeng_app_images/legacy-image.png",
+            },
+          ],
+        });
+        return;
+      }
+      if (request.method === "claimUnassignedAppImages") {
+        window.__jisudengNativeResolve?.(request.id, {
+          claimed: 1,
+          skipped: 0,
+          items: [],
+        });
+      }
+    },
+  };
+
+  await expect(listUnassignedAppImages("101")).resolves.toHaveLength(1);
+  await expect(
+    claimUnassignedAppImages(["legacy-image.png"], "101"),
+  ).resolves.toMatchObject({ claimed: 1, skipped: 0 });
+
+  expect(requests).toEqual([
+    expect.objectContaining({
+      method: "listUnassignedAppImages",
+      bridgeToken: "launch-secret-123",
+      options: { ownerUserId: "101" },
+    }),
+    expect.objectContaining({
+      method: "claimUnassignedAppImages",
+      bridgeToken: "launch-secret-123",
+      options: {
+        ownerUserId: "101",
+        fileNames: ["legacy-image.png"],
+      },
+    }),
+  ]);
 });
 
 test("foreground PTT streams transcript events by session and cancels on route change", async () => {
-  window.history.replaceState(
-    {},
-    "",
-    "/?nativeBridgeToken=launch-secret-123",
-  );
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
   const requests: Array<{
     id: string;
     method: string;
@@ -244,11 +311,7 @@ test("foreground PTT streams transcript events by session and cancels on route c
 });
 
 test("foreground PTT forwards final and error callbacks without a message action", async () => {
-  window.history.replaceState(
-    {},
-    "",
-    "/?nativeBridgeToken=launch-secret-123",
-  );
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
   const methods: string[] = [];
   window.JisudengNativeBridge = {
     request(raw) {
@@ -276,11 +339,10 @@ test("foreground PTT forwards final and error callbacks without a message action
     sessionId: "ptt-session-final",
     onEvent: (event) => finalEvents.push(event),
   });
-  window.__jisudengNativeForegroundPttEvent?.(
-    "ptt-session-final",
-    "final",
-    { text: "final transcript", matches: ["final transcript"] },
-  );
+  window.__jisudengNativeForegroundPttEvent?.("ptt-session-final", "final", {
+    text: "final transcript",
+    matches: ["final transcript"],
+  });
 
   const errorEvents: Array<{
     type: string;
@@ -291,15 +353,11 @@ test("foreground PTT forwards final and error callbacks without a message action
     sessionId: "ptt-session-error",
     onEvent: (event) => errorEvents.push(event),
   });
-  window.__jisudengNativeForegroundPttEvent?.(
-    "ptt-session-error",
-    "error",
-    {
-      errorCode: "network_timeout",
-      errorMessage: "speech recognition network_timeout",
-      recoverable: true,
-    },
-  );
+  window.__jisudengNativeForegroundPttEvent?.("ptt-session-error", "error", {
+    errorCode: "network_timeout",
+    errorMessage: "speech recognition network_timeout",
+    recoverable: true,
+  });
 
   expect(finalEvents[0]).toMatchObject({
     sessionId: "ptt-session-final",
@@ -339,11 +397,7 @@ test("foreground PTT native bridge exposes partial, final, error, and lifecycle 
 });
 
 test("foreground wake word stays in the native bridge and releases after a match", async () => {
-  window.history.replaceState(
-    {},
-    "",
-    "/?nativeBridgeToken=launch-secret-123",
-  );
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
   const requests: Array<{
     id: string;
     method: string;
@@ -469,5 +523,7 @@ test("native app storage retains local project grouping metadata", () => {
       expect(source).toContain(`metadata.put(\"${field}\"`);
     },
   );
-  expect(source).toContain('payload.put("localUrl", LOCAL_ORIGIN + APP_IMAGE_ROUTE');
+  expect(source).toContain(
+    'payload.put("localUrl", LOCAL_ORIGIN + APP_IMAGE_ROUTE',
+  );
 });

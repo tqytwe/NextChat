@@ -35,6 +35,7 @@ import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.util.AtomicFile;
 import android.util.Base64;
 import android.util.Log;
 import android.security.keystore.KeyGenParameterSpec;
@@ -67,9 +68,11 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.crypto.Cipher;
@@ -806,6 +809,19 @@ public class MainActivity extends Activity {
                     break;
                 case "listAppImages":
                     listAppImages(requestId, options.optString("ownerUserId", ""));
+                    break;
+                case "listUnassignedAppImages":
+                    listUnassignedAppImages(
+                        requestId,
+                        options.optString("ownerUserId", "")
+                    );
+                    break;
+                case "claimUnassignedAppImages":
+                    claimUnassignedAppImages(
+                        requestId,
+                        options.optString("ownerUserId", ""),
+                        options.optJSONArray("fileNames")
+                    );
                     break;
                 case "deleteAppImages":
                     deleteAppImages(
@@ -2070,6 +2086,111 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Returns only pre-account local images. This method is deliberately read-only:
+     * a user must opt in before any image is attributed to the current account.
+     */
+    private void listUnassignedAppImages(String requestId, String ownerUserId) {
+        JSONObject payload = new JSONObject();
+        JSONArray items = new JSONArray();
+        try {
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                reject(requestId, "image owner is required");
+                return;
+            }
+            File[] files = getAppImageDir().listFiles();
+            if (files != null) {
+                ArrayList<File> images = new ArrayList<>();
+                for (File file : files) {
+                    if (file.isFile() && isImageFile(file.getName())) {
+                        images.add(file);
+                    }
+                }
+                Collections.sort(
+                    images,
+                    (left, right) -> Long.compare(right.lastModified(), left.lastModified())
+                );
+                for (File file : images) {
+                    JSONObject metadata = readImageMetadata(file);
+                    String owner = metadata.optString("ownerUserId", "").trim();
+                    if (owner.isEmpty()) {
+                        items.put(appImagePayload(file, metadata));
+                    }
+                }
+            }
+            payload.put("items", items);
+            resolve(requestId, payload);
+        } catch (Exception error) {
+            reject(requestId, error.getMessage());
+        }
+    }
+
+    /**
+     * Claims a caller-selected set of pre-account images for one signed-in account.
+     * Existing owners are never overwritten, and every requested path is confined to
+     * the app image directory before its metadata is changed.
+     */
+    private void claimUnassignedAppImages(
+        String requestId,
+        String ownerUserId,
+        JSONArray fileNames
+    ) {
+        JSONObject payload = new JSONObject();
+        JSONArray items = new JSONArray();
+        int skipped = 0;
+        try {
+            String requestedOwner = ownerUserId == null ? "" : ownerUserId.trim();
+            if (requestedOwner.isEmpty()) {
+                reject(requestId, "image owner is required");
+                return;
+            }
+            if (fileNames == null || fileNames.length() == 0) {
+                reject(requestId, "at least one unassigned image is required");
+                return;
+            }
+
+            File dir = getAppImageDir();
+            String root = dir.getCanonicalPath() + File.separator;
+            Set<String> requestedFiles = new HashSet<>();
+            for (int index = 0; index < fileNames.length(); index += 1) {
+                String rawFileName = fileNames.optString(index, "").trim();
+                if (rawFileName.isEmpty()) {
+                    skipped += 1;
+                    continue;
+                }
+                String fileName = safeFileName(rawFileName);
+                if (!requestedFiles.add(fileName)) {
+                    continue;
+                }
+                File file = new File(dir, fileName);
+                if (
+                    !file.getCanonicalPath().startsWith(root) ||
+                    !file.isFile() ||
+                    !isImageFile(file.getName())
+                ) {
+                    skipped += 1;
+                    continue;
+                }
+                JSONObject metadata = readImageMetadata(file);
+                if (!metadata.optString("ownerUserId", "").trim().isEmpty()) {
+                    skipped += 1;
+                    continue;
+                }
+                metadata.put("fileName", file.getName());
+                metadata.put("ownerUserId", requestedOwner);
+                writeImageMetadata(file, metadata);
+                items.put(appImagePayload(file, metadata));
+            }
+            payload.put("items", items);
+            payload.put("claimed", items.length());
+            payload.put("skipped", skipped);
+            resolve(requestId, payload);
+        } catch (Exception error) {
+            reject(requestId, error.getMessage());
+        }
+    }
+
     private void deleteAppImages(String requestId, String ownerUserId, JSONArray fileNames) {
         JSONObject payload = new JSONObject();
         int deleted = 0;
@@ -3042,8 +3163,17 @@ public class MainActivity extends Activity {
     }
 
     private void writeImageMetadata(File imageFile, JSONObject metadata) throws IOException {
-        try (FileOutputStream out = new FileOutputStream(metadataFile(imageFile))) {
+        AtomicFile metadataFile = new AtomicFile(metadataFile(imageFile));
+        FileOutputStream out = null;
+        try {
+            out = metadataFile.startWrite();
             out.write(metadata.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            metadataFile.finishWrite(out);
+        } catch (IOException error) {
+            if (out != null) {
+                metadataFile.failWrite(out);
+            }
+            throw error;
         }
     }
 

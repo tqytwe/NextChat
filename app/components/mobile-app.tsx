@@ -126,8 +126,10 @@ import {
   getNativeE2EFixtureFlags,
   installDownloadedApk,
   captureImage,
+  claimUnassignedAppImages,
   deleteAppImages,
   listAppImages,
+  listUnassignedAppImages,
   openAppSettings,
   openExternalUrl,
   requestGalleryPermissions,
@@ -12508,6 +12510,14 @@ function AndroidGallery() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [nativeImages, setNativeImages] = useState<NativeAppImage[]>([]);
+  const [unassignedImages, setUnassignedImages] = useState<NativeAppImage[]>(
+    [],
+  );
+  const [selectedUnassignedFileNames, setSelectedUnassignedFileNames] =
+    useState<string[]>([]);
+  const [unassignedImagesLoading, setUnassignedImagesLoading] = useState(false);
+  const [unassignedImagesClaiming, setUnassignedImagesClaiming] =
+    useState(false);
   const [localMaterials, setLocalMaterials] = useState<LocalMaterial[]>([]);
   const [localMaterialsLoading, setLocalMaterialsLoading] = useState(false);
   const localMaterialFileRef = useRef<HTMLInputElement | null>(null);
@@ -12535,7 +12545,10 @@ function AndroidGallery() {
     [gallery, filter, preferences],
   );
   const activeAccountId = String(
-    managed.user?.id || managed.session?.user_id || "",
+    managed.user?.id ||
+      managed.session?.user_id ||
+      managed.workspace?.user?.id ||
+      "",
   );
 
   function showNotice(message: string) {
@@ -12547,13 +12560,41 @@ function AndroidGallery() {
 
   async function refreshNativeImages() {
     try {
-      setNativeImages(
-        await listAppImages(
-          String(managed.user?.id || managed.session?.user_id || ""),
+      setNativeImages(await listAppImages(activeAccountId));
+    } catch (err) {
+      setError(localizedMobileErrorMessage(err, text.errors.syncFailed));
+    }
+  }
+
+  async function refreshUnassignedImages(ownerUserId = activeAccountId) {
+    const owner = String(ownerUserId || "").trim();
+    if (!owner) {
+      setUnassignedImages([]);
+      setSelectedUnassignedFileNames([]);
+      return;
+    }
+    setUnassignedImagesLoading(true);
+    try {
+      const items = await listUnassignedAppImages(owner);
+      const currentOwner = String(
+        useManagedNextChatStore.getState().user?.id ||
+          useManagedNextChatStore.getState().session?.user_id ||
+          useManagedNextChatStore.getState().workspace?.user?.id ||
+          "",
+      );
+      if (currentOwner !== owner) return;
+      setUnassignedImages(items);
+      setSelectedUnassignedFileNames((selected) =>
+        selected.filter((fileName) =>
+          items.some((item) => item.fileName === fileName),
         ),
       );
     } catch (err) {
-      setError(localizedMobileErrorMessage(err, text.errors.syncFailed));
+      setError(
+        localizedMobileErrorMessage(err, text.image.legacyMigrationFailed),
+      );
+    } finally {
+      setUnassignedImagesLoading(false);
     }
   }
 
@@ -12654,6 +12695,13 @@ function AndroidGallery() {
   }, [sdStore.currentId, activeAccountId]);
 
   useEffect(() => {
+    void refreshUnassignedImages(activeAccountId);
+    // The native request itself is scoped to this account and stale results are
+    // discarded before rendering after an account change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAccountId]);
+
+  useEffect(() => {
     return () => {
       if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     };
@@ -12663,6 +12711,42 @@ function AndroidGallery() {
     setSelectedIds((items) =>
       items.includes(id) ? items.filter((item) => item !== id) : [...items, id],
     );
+  }
+
+  function toggleUnassignedImage(fileName: string) {
+    setSelectedUnassignedFileNames((items) =>
+      items.includes(fileName)
+        ? items.filter((item) => item !== fileName)
+        : [...items, fileName],
+    );
+  }
+
+  async function claimSelectedUnassignedImages() {
+    const fileNames = selectedUnassignedFileNames.filter((fileName) =>
+      unassignedImages.some((item) => item.fileName === fileName),
+    );
+    if (!fileNames.length || !activeAccountId) return;
+    if (!window.confirm(text.image.legacyMigrationConfirm(fileNames.length))) {
+      return;
+    }
+    setUnassignedImagesClaiming(true);
+    setError("");
+    try {
+      const result = await claimUnassignedAppImages(fileNames, activeAccountId);
+      const claimed = Number(result.claimed ?? result.items?.length ?? 0);
+      if (claimed <= 0) {
+        throw new Error(text.image.legacyMigrationFailed);
+      }
+      setSelectedUnassignedFileNames([]);
+      await Promise.all([refreshNativeImages(), refreshUnassignedImages()]);
+      showNotice(text.image.legacyMigrationDone(claimed));
+    } catch (err) {
+      setError(
+        localizedMobileErrorMessage(err, text.image.legacyMigrationFailed),
+      );
+    } finally {
+      setUnassignedImagesClaiming(false);
+    }
   }
 
   async function deleteItems(ids: string[]) {
@@ -12842,6 +12926,88 @@ function AndroidGallery() {
         </div>
         <em>{text.shortCount(gallery.length + localMaterials.length)}</em>
       </section>
+
+      {activeAccountId && unassignedImages.length > 0 && (
+        <section
+          className={clsx(styles["section"], styles["legacy-image-migration"])}
+          aria-label="legacy-image-migration"
+        >
+          <div className={styles["section-head"]}>
+            <div>
+              <h2>{text.image.legacyMigrationTitle}</h2>
+              <span>
+                {text.image.legacyMigrationHint(unassignedImages.length)}
+              </span>
+            </div>
+          </div>
+          <div className={styles["legacy-image-actions"]}>
+            <button
+              type="button"
+              disabled={unassignedImagesLoading || unassignedImagesClaiming}
+              onClick={() =>
+                setSelectedUnassignedFileNames(
+                  unassignedImages.map((item) => item.fileName),
+                )
+              }
+            >
+              {text.image.legacyMigrationSelectAll}
+            </button>
+            <button
+              type="button"
+              disabled={
+                unassignedImagesLoading ||
+                unassignedImagesClaiming ||
+                !selectedUnassignedFileNames.length
+              }
+              onClick={() => setSelectedUnassignedFileNames([])}
+            >
+              {text.image.legacyMigrationClear}
+            </button>
+            <button
+              type="button"
+              disabled={
+                unassignedImagesLoading ||
+                unassignedImagesClaiming ||
+                !selectedUnassignedFileNames.length
+              }
+              onClick={claimSelectedUnassignedImages}
+            >
+              {text.image.legacyMigrationClaim(
+                selectedUnassignedFileNames.length,
+              )}
+            </button>
+          </div>
+          <div className={styles["legacy-image-list"]}>
+            {unassignedImages.map((image, index) => {
+              const selected = selectedUnassignedFileNames.includes(
+                image.fileName,
+              );
+              return (
+                <label
+                  key={image.fileName}
+                  className={clsx(styles["legacy-image-item"], {
+                    [styles["selected"]]: selected,
+                  })}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    disabled={
+                      unassignedImagesLoading || unassignedImagesClaiming
+                    }
+                    onChange={() => toggleUnassignedImage(image.fileName)}
+                    aria-label={`legacy-image-item-${index + 1}`}
+                  />
+                  <img
+                    src={image.localUrl}
+                    alt={image.label || image.fileName}
+                  />
+                </label>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className={styles["section"]}>
         <div className={styles["section-head"]}>
