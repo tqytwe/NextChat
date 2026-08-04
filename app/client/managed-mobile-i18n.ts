@@ -420,6 +420,8 @@ export const MANAGED_MOBILE_TEXT = {
       voiceReleaseCancel: "松手取消",
       voiceConversation: "语音对话",
       voiceConversationHint: "转写后自动发送，并朗读模型回复",
+      continuousVoice: "连续语音对话",
+      continuousVoiceHint: "模型朗读完成后自动进入下一轮前台收音",
       voiceConversationEnabled: "语音对话已开启",
       voiceConversationDisabled: "语音对话已关闭",
       wakeWord: "唤醒词",
@@ -962,7 +964,11 @@ export const MANAGED_MOBILE_TEXT = {
         nextPage: "下一页",
         page: (current: number, total: number) => `第 ${current} / ${total} 页`,
         protectedActionHint:
-          "敏感修改和资金操作必须在网页管理后台完成二次验证；移动端不会直接执行。",
+          "移动端只开放服务端已声明、且受管理员二次验证保护的资金状态操作。",
+        approve: "批准",
+        reject: "拒绝",
+        markPaid: "标记已支付",
+        actionFailed: "操作未完成，请先验证二次验证码后重试",
         stepUp: "管理员二次验证",
         stepUpHint:
           "输入动态验证码后，服务端会授予短时敏感操作验证窗口。移动端此版本仅提供查询。",
@@ -981,7 +987,7 @@ export const MANAGED_MOBILE_TEXT = {
         complianceUnavailable: "未能读取管理员合规状态，请刷新后重试",
         compliancePhraseRequired: "请完整输入确认语后再确认",
         readonlyHint:
-          "移动端仅展示后端已开放的只读数据；资金、配置和用户修改请在网页管理后台完成。",
+          "移动端展示服务端授权的数据，并支持已声明且受二次验证保护的资金操作。",
         status: "状态",
         total: "总数",
         viewUser: "查看余额明细",
@@ -1611,6 +1617,9 @@ export const MANAGED_MOBILE_TEXT = {
       voiceConversation: "Voice conversation",
       voiceConversationHint:
         "Send the transcript automatically and read the reply aloud",
+      continuousVoice: "Continuous voice turns",
+      continuousVoiceHint:
+        "Start the next foreground listening turn after the reply finishes",
       voiceConversationEnabled: "Voice conversation enabled",
       voiceConversationDisabled: "Voice conversation disabled",
       wakeWord: "Wake word",
@@ -2196,7 +2205,12 @@ export const MANAGED_MOBILE_TEXT = {
         nextPage: "Next",
         page: (current: number, total: number) => `Page ${current} of ${total}`,
         protectedActionHint:
-          "Sensitive changes and fund operations require step-up verification in the web admin console. Mobile will not execute them directly.",
+          "Mobile exposes only server-declared fund transitions protected by administrator step-up verification.",
+        approve: "Approve",
+        reject: "Reject",
+        markPaid: "Mark paid",
+        actionFailed:
+          "The action did not complete. Verify step-up and try again.",
         stepUp: "Administrator step-up verification",
         stepUpHint:
           "Enter your one-time code to establish the server-side short-lived sensitive-operation window. This mobile release is read-only.",
@@ -2220,7 +2234,7 @@ export const MANAGED_MOBILE_TEXT = {
         compliancePhraseRequired:
           "Enter the full acknowledgement phrase before confirming",
         readonlyHint:
-          "Mobile shows only server-approved read data. Complete fund, configuration, and user changes in the web admin console.",
+          "Mobile shows server-authorized data and supports only declared fund transitions protected by step-up verification.",
         status: "Status",
         total: "Total",
         viewUser: "View balance details",
