@@ -56,6 +56,30 @@ const DEFAULT_MANAGED_STATE = {
   loading: false,
 };
 
+/**
+ * Authentication/session data belongs in Android Keystore.  The IndexedDB
+ * store keeps only the fixed backend origin, so a transient error or a prior
+ * account's workspace cannot reappear after an upgrade or app restart.
+ */
+export function managedPersistedState(input: {
+  backendBaseUrl?: unknown;
+  _hasHydrated?: unknown;
+  _persistenceBlocked?: unknown;
+  [key: string]: unknown;
+}) {
+  return {
+    backendBaseUrl: normalizeManagedBaseUrl(
+      typeof input.backendBaseUrl === "string"
+        ? input.backendBaseUrl
+        : DEFAULT_MANAGED_BACKEND_BASE_URL,
+    ),
+    // indexedDBStorage only writes a hydrated, unblocked snapshot. Keep the
+    // two persistence sentinels while omitting all account/session payload.
+    _hasHydrated: input._hasHydrated === true,
+    _persistenceBlocked: input._persistenceBlocked === true,
+  };
+}
+
 type ManagedLoginResult = {
   requires2FA: boolean;
 };
@@ -565,22 +589,17 @@ export const useManagedNextChatStore = createPersistStore<
   },
   {
     name: StoreKey.ManagedNextChat,
-    version: 3,
-    partialize: (state: any) => {
-      const {
-        accessToken: _accessToken,
-        refreshToken: _refreshToken,
-        accessTokenExpiresAt: _accessTokenExpiresAt,
-        session: _session,
-        imageSession: _imageSession,
-        mobileProtocol: _mobileProtocol,
-        ...persisted
-      } = state;
-      return persisted;
-    },
-    migrate: (persistedState: any, _persistedVersion: number) => ({
+    version: 4,
+    partialize: ((state: any) => managedPersistedState(state)) as any,
+    migrationBackup: (persistedState: unknown) =>
+      managedPersistedState(
+        persistedState && typeof persistedState === "object"
+          ? (persistedState as Record<string, unknown>)
+          : {},
+      ),
+    migrate: ((persistedState: any, _persistedVersion: number) => ({
       ...DEFAULT_MANAGED_STATE,
-      ...(persistedState || {}),
-    }),
+      ...managedPersistedState(persistedState || {}),
+    })) as any,
   },
 );

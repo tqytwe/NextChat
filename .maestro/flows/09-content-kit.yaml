@@ -9,7 +9,7 @@ tags:
     visible: "dashboard-default-group"
     timeout: 15000
 - tapOn: "open-content-kit"
-- tapOn: "New kit"
+- tapOn: "New project|新建项目"
 - tapOn: "content-kit-product"
 - inputText: "maestro promotion product"
 - tapOn: "content-kit-selling-points"

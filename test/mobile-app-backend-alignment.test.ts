@@ -90,6 +90,25 @@ describe("mobile app backend alignment", () => {
     expect(chat).toContain('state: canSendLocally ? "local" : "failed"');
   });
 
+  test("correlates and keys feedback multipart retries without duplicating a submission", () => {
+    const feedback = source.slice(
+      source.indexOf("async function managedFormDataRequest"),
+      source.indexOf("async function managedGatewayRequestText"),
+    );
+    expect(feedback).toContain('clientRequestID("multipart")');
+    expect(feedback).toContain('"X-Client-Request-ID": requestId');
+    expect(feedback).toContain('"Idempotency-Key": idempotencyKey');
+
+    const account = source.slice(
+      source.indexOf("async function submitFeedback()"),
+      source.indexOf("async function redeemCode()"),
+    );
+    expect(account).toContain('clientRequestID("feedback")');
+    expect(account).toContain("feedbackRequestOptions");
+    expect(account).toContain('"/api/v1/mobile/support/tickets"');
+    expect(account).toContain('"/api/v1/play/mobile-feedback"');
+  });
+
   test("uses planned single-image outputs and a bounded local content-kit queue", () => {
     const kit = source.slice(
       source.indexOf("function AndroidContentKit()"),
@@ -126,7 +145,7 @@ describe("mobile app backend alignment", () => {
     expect(kit).toContain("createNextRun(selectedProject)");
     expect(kit).toContain("content-kit-preview-modal");
     expect(kit).toContain("toggleAssetTag");
-    expect(kit).toContain("deleteAppImages(localFileNames)");
+    expect(kit).toContain("deleteAppImages(localFileNames, activeAccountId)");
     expect(kit).toContain("shareImages(");
     expect(kit).toContain("client_request_id=${encodeURIComponent(");
     expect(kit).toContain("item.request_id === `client:${requestId}`");
@@ -217,6 +236,22 @@ describe("mobile app backend alignment", () => {
     expect(switchGroup).toContain("await managed.switchGroup(groupID)");
   });
 
+  test("clears only the active account on logout", () => {
+    const signOut = source.slice(
+      source.indexOf("async function signOut(clearAll: boolean)"),
+      source.indexOf("const downloadPollRef", source.indexOf("async function signOut(clearAll: boolean)")),
+    );
+    expect(signOut).toContain("listAppImages(activeAccountId)");
+    expect(signOut).toContain("deleteAppImages(fileNames, activeAccountId)");
+    expect(signOut).toContain("clearLocalMaterials(activeAccountId)");
+    expect(signOut).toContain("clearAccountScopedLocalStorage(activeAccountId)");
+    expect(signOut).toContain("mobileStore.clearActiveAccount()");
+    expect(signOut).toContain("sdStore.clearActiveAccount()");
+    expect(signOut).not.toContain("localStorage.clear()");
+    expect(signOut).not.toContain("indexedDBStorage.clear()");
+    expect(signOut).not.toContain("clearAllAccounts()");
+  });
+
   test("derives administrator access from the server session capability", () => {
     const managedStore = readFileSync(
       resolve(process.cwd(), "app/store/managed.ts"),
@@ -228,7 +263,27 @@ describe("mobile app backend alignment", () => {
     expect(managedStore).toContain("getMobileSessionStatus");
     expect(managedStore).toContain("void get().refreshMobileSessionStatus()");
     expect(managedStore).toContain("set({ mobileProtocol: null })");
-    expect(managedStore).toContain("mobileProtocol: _mobileProtocol");
+    expect(managedStore).toContain(
+      "partialize: ((state: any) => managedPersistedState(state)) as any",
+    );
+    expect(managedStore).toContain("backendBaseUrl: normalizeManagedBaseUrl(");
+
+    const managedGate = source.slice(
+      source.indexOf("function AndroidManagedGateContent"),
+    );
+    expect(managedGate).toContain(
+      "const restored = await managed.restoreSecureSession();",
+    );
+    expect(managedGate).toContain("!current.workspace");
+    expect(managedGate).toContain(
+      "bootstrap({ silent: Boolean(current.workspace) })",
+    );
+    expect(managedGate).toContain("!latest.workspace");
+    expect(managedGate).toContain(
+      "bootstrap({ silent: Boolean(latest.workspace) })",
+    );
+    expect(source).toContain("function VoiceConversationSheet");
+    expect(source).toContain("replace(/```[\\s\\S]*?```/g, \"\")");
 
     const accountAdminRoute = source.slice(
       source.indexOf("if (route === Path.AccountAdmin)"),

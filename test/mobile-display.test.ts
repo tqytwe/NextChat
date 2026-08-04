@@ -32,6 +32,52 @@ describe("mobile dynamic display localization", () => {
     ).toBe("gpt-image-private-alias");
   });
 
+  test("uses locale variants for API-specific display fields before defaults", () => {
+    const paymentMethod = {
+      display_name_zh: "微信支付",
+      display_name_en: "WeChat Pay",
+      display_name: "Weixin",
+    };
+    const coupon = {
+      template_name_zh: "新用户券",
+      template_name_en: "New user coupon",
+      template_name: "Coupon",
+    };
+
+    expect(
+      localizedMobileDisplay(paymentMethod, {
+        locale: "cn",
+        defaultFields: ["display_name"],
+      }),
+    ).toBe("微信支付");
+    expect(
+      localizedMobileDisplay(coupon, {
+        locale: "en",
+        defaultFields: ["template_name"],
+      }),
+    ).toBe("New user coupon");
+  });
+
+  test("resolves dynamic plan fields returned as direct locale objects", () => {
+    const plan = {
+      duration: { zh: "30 天", en: "30 days" },
+      duration_zh: "30 天",
+      duration_en: "30 days",
+    };
+    expect(
+      localizedMobileDisplay(plan, {
+        locale: "cn",
+        defaultFields: ["duration"],
+      }),
+    ).toBe("30 天");
+    expect(
+      localizedMobileDisplay(plan, {
+        locale: "en",
+        defaultFields: ["duration"],
+      }),
+    ).toBe("30 days");
+  });
+
   test("maps coupon and plan error codes before showing an upstream message", () => {
     expect(
       localizeManagedMobileError({

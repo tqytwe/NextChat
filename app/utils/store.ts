@@ -83,12 +83,26 @@ export function createPersistStore<T extends object, M>(
     set: SetStoreState<T & MakeUpdater<T>>,
     get: () => T & MakeUpdater<T>,
   ) => M,
-  persistOptions: SecondParam<typeof persist<T & M & MakeUpdater<T>>>,
+  persistOptions: SecondParam<typeof persist<T & M & MakeUpdater<T>>> & {
+    /**
+     * Return the non-sensitive portion of a legacy snapshot before it is
+     * written to the migration backup key. Stores that move credentials out
+     * of browser storage must use this hook; other stores retain the complete
+     * backup for recovery.
+     */
+    migrationBackup?: (
+      persistedState: unknown,
+      persistedVersion: number,
+    ) => unknown;
+  },
 ) {
   persistOptions.storage = createJSONStorage(() => indexedDBStorage);
   const configuredVersion = Number(persistOptions.version || 0);
   const originalMigrate = persistOptions.migrate;
-  persistOptions.migrate = (persistedState: unknown, persistedVersion: number) => {
+  persistOptions.migrate = (
+    persistedState: unknown,
+    persistedVersion: number,
+  ) => {
     assertSupportedPersistenceSchema(
       persistOptions.name,
       persistedVersion,
@@ -96,9 +110,15 @@ export function createPersistStore<T extends object, M>(
       Boolean(originalMigrate),
     );
     if (!originalMigrate) return persistedState as any;
-    const backupKey = `${persistOptions.name}:backup:v${persistedVersion}:${Date.now()}`;
+    const backupKey = `${
+      persistOptions.name
+    }:backup:v${persistedVersion}:${Date.now()}`;
+    const backupState =
+      typeof persistOptions.migrationBackup === "function"
+        ? persistOptions.migrationBackup(persistedState, persistedVersion)
+        : persistedState;
     const snapshot = JSON.stringify({
-      state: persistedState,
+      state: backupState,
       version: persistedVersion,
     });
     return indexedDBStorage

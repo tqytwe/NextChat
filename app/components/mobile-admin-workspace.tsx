@@ -8,23 +8,37 @@ import {
   type FormEvent,
 } from "react";
 import styles from "./mobile-app.module.scss";
-import { localizedMobileDisplay } from "../client/mobile-display";
 import {
   acceptMobileAdminCompliance,
   getMobileAdminComplianceStatus,
   getMobileAdminDashboardSnapshot,
+  getMobileAdminAuditLog,
+  getMobileAdminGroup,
+  getMobileAdminGroupStats,
+  getMobileAdminMobileFeedback,
+  getMobileAdminOrder,
   getMobileAdminPaymentDashboard,
+  getMobileAdminRefundRequest,
+  getMobileAdminSubscription,
+  getMobileAdminSubscriptionProgress,
+  getMobileAdminUser,
+  getMobileAdminUserUsage,
   getMobileAdminUserWalletHistory,
   getMobileAdminUserWalletReconciliation,
+  getMobileAdminWithdrawal,
   listMobileAdminAuditLogs,
   listMobileAdminGroups,
   listMobileAdminModelCatalog,
+  listMobileAdminMobileFeedback,
   listMobileAdminOrders,
   listMobileAdminRefundRequests,
+  listMobileAdminSubscriptions,
   listMobileAdminUsage,
   listMobileAdminUsageCleanupTasks,
+  listMobileAdminUserSubscriptions,
   listMobileAdminUsers,
   listMobileAdminWithdrawals,
+  mobileAdminErrorCategory,
   mobileAdminErrorCode,
   mobileAdminErrorMetadata,
   mobileAdminRequestId,
@@ -35,6 +49,10 @@ import type {
   MobileAdminComplianceStatus,
   MobileAdminPage,
 } from "../client/mobile-admin";
+import {
+  formatManagedMobileError,
+  localizeManagedMobileError,
+} from "../client/managed-mobile-i18n";
 import type { ManagedMobileText } from "../client/managed-mobile-i18n";
 import { openExternalUrl } from "../client/android-native";
 import { isMobileAdminComplianceAvailable } from "../client/mobile-capabilities";
@@ -50,18 +68,64 @@ type AdminData = {
   models?: unknown[];
   usage?: MobileAdminPage<AdminRecord>;
   cleanup?: MobileAdminPage<AdminRecord>;
+  tickets?: MobileAdminPage<AdminRecord>;
   orders?: MobileAdminPage<AdminRecord>;
+  subscriptions?: MobileAdminPage<AdminRecord>;
   withdrawals?: MobileAdminPage<AdminRecord>;
   refunds?: MobileAdminPage<AdminRecord>;
   audit?: MobileAdminPage<AdminRecord>;
 };
 
-type SelectedUser = {
-  user: AdminRecord;
-  history?: unknown;
-  reconciliation?: unknown;
+type AdminPageKey =
+  | "users"
+  | "groups"
+  | "usage"
+  | "cleanup"
+  | "tickets"
+  | "orders"
+  | "subscriptions"
+  | "withdrawals"
+  | "refunds"
+  | "audit";
+
+type AdminDetailKind =
+  | "user"
+  | "order"
+  | "subscription"
+  | "group"
+  | "withdrawal"
+  | "refund"
+  | "ticket"
+  | "audit"
+  | "model"
+  | "usage"
+  | "cleanup";
+
+type AdminDetailSection = {
+  title: string;
+  data: unknown;
+};
+
+type SelectedAdminDetail = {
+  kind: AdminDetailKind;
+  title: string;
+  source: AdminRecord;
+  sections: AdminDetailSection[];
   loading: boolean;
   error?: string;
+};
+
+const INITIAL_PAGES: Record<AdminPageKey, number> = {
+  users: 1,
+  groups: 1,
+  usage: 1,
+  cleanup: 1,
+  tickets: 1,
+  orders: 1,
+  subscriptions: 1,
+  withdrawals: 1,
+  refunds: 1,
+  audit: 1,
 };
 
 const VIEWS: AdminView[] = [
@@ -142,6 +206,48 @@ function stringField(value: Record<string, unknown> | undefined, key: string) {
   return typeof field === "string" ? field.trim() : "";
 }
 
+function numericErrorField(error: unknown, key: string) {
+  if (!error || typeof error !== "object") return undefined;
+  const value = Number((error as Record<string, unknown>)[key]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function stringErrorField(error: unknown, key: string) {
+  if (!error || typeof error !== "object") return "";
+  const value = (error as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** Keep administrator failures diagnosable without surfacing server-default text. */
+export function formatMobileAdminWorkspaceError(
+  error: unknown,
+  fallback: string,
+) {
+  const status = numericErrorField(error, "status");
+  const path = stringErrorField(error, "path");
+  const code = mobileAdminErrorCode(error);
+  const category = mobileAdminErrorCategory(error);
+  const requestId = mobileAdminRequestId(error);
+  const rawMessage =
+    error instanceof Error && error.message.trim()
+      ? error.message
+      : localizeManagedMobileError({
+          message: fallback,
+          status,
+          path,
+          code,
+        });
+
+  return formatManagedMobileError({
+    message: rawMessage,
+    status,
+    path,
+    code,
+    category,
+    requestId,
+  });
+}
+
 function requiredComplianceFromError(error: unknown) {
   if (
     mobileAdminErrorCode(error).toUpperCase() !==
@@ -206,16 +312,6 @@ function fieldLabel(key: string, text: ManagedMobileText) {
   return key.replace(/_/g, " ");
 }
 
-function displayName(user: AdminRecord, text: ManagedMobileText) {
-  const localized = localizedMobileDisplay(user, {
-    fallback: String(first(user, ["email", "username", "name", "id"]) || "-"),
-    locale: text.dateLocale.startsWith("zh") ? "cn" : "en",
-  });
-  return (
-    localized || String(first(user, ["email", "username", "name", "id"]) || "-")
-  );
-}
-
 function fieldEntries(value: unknown, text: ManagedMobileText, limit = 6) {
   return Object.entries(record(value))
     .filter(([, item]) => item !== null && item !== undefined && item !== "")
@@ -227,6 +323,155 @@ function fieldEntries(value: unknown, text: ManagedMobileText, limit = 6) {
       key: fieldLabel(key, text),
       value: formatValue(item, text),
     }));
+}
+
+function recordID(value: AdminRecord) {
+  const id = first(value, ["id", "user_id", "feedback_id", "order_id"]);
+  const normalized = String(id).trim();
+  return /^[1-9]\d*$/.test(normalized) ? normalized : "";
+}
+
+function recordTitle(value: AdminRecord, fallback: string) {
+  return String(
+    first(value, [
+      "title",
+      "name",
+      "email",
+      "out_trade_no",
+      "model_name",
+      "model",
+      "action",
+      "id",
+    ]) || fallback,
+  );
+}
+
+const SENSITIVE_ADMIN_FIELD =
+  /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|password|secret|credential|private[_-]?key|payout|bank[_-]?(?:account|number)|card[_-]?number|withdrawal[_-]?(?:address|account)|(?:crypto|wallet)[_-]?(?:address|account)|recipient|beneficiary)/i;
+
+function safeAdminDetail(value: unknown, key = ""): unknown {
+  if (SENSITIVE_ADMIN_FIELD.test(key)) return "[protected]";
+  if (Array.isArray(value)) return value.map((item) => safeAdminDetail(item));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([entryKey, item]) => [
+      entryKey,
+      safeAdminDetail(item, entryKey),
+    ]),
+  );
+}
+
+function detailEntries(value: unknown, text: ManagedMobileText) {
+  return Object.entries(record(safeAdminDetail(value)))
+    .filter(([, item]) => item !== null && item !== undefined && item !== "")
+    .map(([key, item]) => ({
+      key: fieldLabel(key, text),
+      value:
+        typeof item === "object"
+          ? JSON.stringify(item, null, 2)
+          : formatValue(item, text),
+    }));
+}
+
+function AdminPageControls(props: {
+  page: MobileAdminPage<AdminRecord>;
+  text: ManagedMobileText;
+  loading: boolean;
+  onPage: (nextPage: number) => void;
+}) {
+  const labels = props.text.account.adminWorkspace;
+  const currentPage = Math.max(1, props.page.page || 1);
+  const totalPages = Math.max(1, props.page.pages || 1);
+
+  if (totalPages <= 1) return null;
+  return (
+    <div className={styles["admin-page-controls"]}>
+      <button
+        type="button"
+        disabled={props.loading || currentPage <= 1}
+        onClick={() => props.onPage(currentPage - 1)}
+      >
+        {labels.previousPage}
+      </button>
+      <span>{labels.page(currentPage, totalPages)}</span>
+      <button
+        type="button"
+        disabled={props.loading || currentPage >= totalPages}
+        onClick={() => props.onPage(currentPage + 1)}
+      >
+        {labels.nextPage}
+      </button>
+    </div>
+  );
+}
+
+function AdminDetailSheet(props: {
+  detail: SelectedAdminDetail;
+  text: ManagedMobileText;
+  onClose: () => void;
+}) {
+  const labels = props.text.account.adminWorkspace;
+  return (
+    <div
+      className={styles["admin-detail-backdrop"]}
+      role="presentation"
+      onMouseDown={props.onClose}
+    >
+      <section
+        className={styles["admin-detail-sheet"]}
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.detail.title}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className={styles["admin-detail-header"]}>
+          <div>
+            <span>{labels.details}</span>
+            <h2>{props.detail.title}</h2>
+          </div>
+          <button type="button" onClick={props.onClose}>
+            {labels.closeDetails}
+          </button>
+        </div>
+        {props.detail.loading && (
+          <p className={styles["empty-copy"]}>{labels.loading}</p>
+        )}
+        {props.detail.error && (
+          <div className={styles["form-error"]}>{props.detail.error}</div>
+        )}
+        {!props.detail.loading && !props.detail.error && (
+          <div className={styles["admin-detail-content"]}>
+            {props.detail.sections.map((section) => {
+              const fields = detailEntries(section.data, props.text);
+              return (
+                <section
+                  className={styles["admin-detail-section"]}
+                  key={section.title}
+                >
+                  <h3>{section.title}</h3>
+                  {fields.length ? (
+                    <dl>
+                      {fields.map((field) => (
+                        <div key={field.key}>
+                          <dt>{field.key}</dt>
+                          <dd>{field.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  ) : (
+                    <p className={styles["empty-copy"]}>{labels.empty}</p>
+                  )}
+                </section>
+              );
+            })}
+            <p className={styles["admin-protected-hint"]}>
+              {labels.protectedActionHint}
+            </p>
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 function AdminCard(props: { title: string; value: string; detail?: string }) {
@@ -245,6 +490,9 @@ function AdminList(props: {
   text: ManagedMobileText;
   empty: string;
   onSelect?: (item: AdminRecord) => void;
+  page?: MobileAdminPage<AdminRecord>;
+  loading?: boolean;
+  onPage?: (nextPage: number) => void;
 }) {
   return (
     <section className={styles["section"]}>
@@ -300,6 +548,14 @@ function AdminList(props: {
       ) : (
         <p className={styles["empty-copy"]}>{props.empty}</p>
       )}
+      {props.page && props.onPage && (
+        <AdminPageControls
+          page={props.page}
+          text={props.text}
+          loading={Boolean(props.loading)}
+          onPage={props.onPage}
+        />
+      )}
     </section>
   );
 }
@@ -325,7 +581,10 @@ export function MobileAdminWorkspace(props: {
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpMessage, setStepUpMessage] = useState("");
   const [stepUpBusy, setStepUpBusy] = useState(false);
-  const [selectedUser, setSelectedUser] = useState<SelectedUser | null>(null);
+  const [pages, setPages] =
+    useState<Record<AdminPageKey, number>>(INITIAL_PAGES);
+  const [selectedDetail, setSelectedDetail] =
+    useState<SelectedAdminDetail | null>(null);
 
   const client = useMemo(() => props.client, [props.client]);
   const complianceSupported = isMobileAdminComplianceAvailable(
@@ -356,7 +615,7 @@ export function MobileAdminWorkspace(props: {
       } catch (caught) {
         if (signal?.aborted) return null;
         setCompliance(null);
-        setError(caught instanceof Error ? caught.message : labels.unavailable);
+        setError(formatMobileAdminWorkspaceError(caught, labels.unavailable));
         setRequestId(mobileAdminRequestId(caught));
         return null;
       } finally {
@@ -391,16 +650,20 @@ export function MobileAdminWorkspace(props: {
         } else if (nextView === "users") {
           const result = await listMobileAdminUsers<AdminRecord>(
             client,
-            { page: 1, page_size: 20, search: appliedSearch },
+            {
+              page: pages.users,
+              page_size: 20,
+              search: appliedSearch,
+            },
             { signal, locale: props.text.dateLocale },
           );
           setData((current) => ({ ...current, users: result.data }));
           setRequestId(result.requestId);
         } else if (nextView === "operations") {
-          const [groups, models, usage, cleanup] = await Promise.all([
+          const [groups, models, usage, cleanup, tickets] = await Promise.all([
             listMobileAdminGroups<AdminRecord>(
               client,
-              { page: 1, page_size: 20 },
+              { page: pages.groups, page_size: 20 },
               { signal, locale: props.text.dateLocale },
             ),
             listMobileAdminModelCatalog<AdminRecord>(client, undefined, {
@@ -409,12 +672,17 @@ export function MobileAdminWorkspace(props: {
             }),
             listMobileAdminUsage<AdminRecord>(
               client,
-              { page: 1, page_size: 20 },
+              { page: pages.usage, page_size: 20 },
               { signal, locale: props.text.dateLocale },
             ),
             listMobileAdminUsageCleanupTasks<AdminRecord>(
               client,
-              { page: 1, page_size: 20 },
+              { page: pages.cleanup, page_size: 20 },
+              { signal, locale: props.text.dateLocale },
+            ),
+            listMobileAdminMobileFeedback<AdminRecord>(
+              client,
+              { page: pages.tickets, page_size: 20 },
               { signal, locale: props.text.dateLocale },
             ),
           ]);
@@ -424,41 +692,55 @@ export function MobileAdminWorkspace(props: {
             models: array(models.data).map(record),
             usage: usage.data,
             cleanup: cleanup.data,
+            tickets: tickets.data,
           }));
           setRequestId(
-            cleanup.requestId || usage.requestId || groups.requestId,
+            tickets.requestId ||
+              cleanup.requestId ||
+              usage.requestId ||
+              groups.requestId,
           );
         } else if (nextView === "funds") {
-          const [orders, withdrawals, refunds] = await Promise.all([
-            listMobileAdminOrders<AdminRecord>(
-              client,
-              { page: 1, page_size: 20 },
-              { signal, locale: props.text.dateLocale },
-            ),
-            listMobileAdminWithdrawals<AdminRecord>(
-              client,
-              { page: 1, page_size: 20 },
-              { signal, locale: props.text.dateLocale },
-            ),
-            listMobileAdminRefundRequests<AdminRecord>(
-              client,
-              { page: 1, page_size: 20 },
-              { signal, locale: props.text.dateLocale },
-            ),
-          ]);
+          const [orders, subscriptions, withdrawals, refunds] =
+            await Promise.all([
+              listMobileAdminOrders<AdminRecord>(
+                client,
+                { page: pages.orders, page_size: 20 },
+                { signal, locale: props.text.dateLocale },
+              ),
+              listMobileAdminSubscriptions<AdminRecord>(
+                client,
+                { page: pages.subscriptions, page_size: 20 },
+                { signal, locale: props.text.dateLocale },
+              ),
+              listMobileAdminWithdrawals<AdminRecord>(
+                client,
+                { page: pages.withdrawals, page_size: 20 },
+                { signal, locale: props.text.dateLocale },
+              ),
+              listMobileAdminRefundRequests<AdminRecord>(
+                client,
+                { page: pages.refunds, page_size: 20 },
+                { signal, locale: props.text.dateLocale },
+              ),
+            ]);
           setData((current) => ({
             ...current,
             orders: orders.data,
+            subscriptions: subscriptions.data,
             withdrawals: withdrawals.data,
             refunds: refunds.data,
           }));
           setRequestId(
-            refunds.requestId || withdrawals.requestId || orders.requestId,
+            refunds.requestId ||
+              withdrawals.requestId ||
+              subscriptions.requestId ||
+              orders.requestId,
           );
         } else {
           const result = await listMobileAdminAuditLogs<AdminRecord>(
             client,
-            { page: 1, page_size: 30 },
+            { page: pages.audit, page_size: 30 },
             { signal, locale: props.text.dateLocale },
           );
           setData((current) => ({ ...current, audit: result.data }));
@@ -472,9 +754,7 @@ export function MobileAdminWorkspace(props: {
           setError("");
           void refreshCompliance();
         } else {
-          setError(
-            caught instanceof Error ? caught.message : labels.unavailable,
-          );
+          setError(formatMobileAdminWorkspaceError(caught, labels.unavailable));
         }
         setRequestId(mobileAdminRequestId(caught));
       } finally {
@@ -486,6 +766,7 @@ export function MobileAdminWorkspace(props: {
       client,
       complianceSupported,
       labels.unavailable,
+      pages,
       props.text.dateLocale,
       refreshCompliance,
     ],
@@ -524,7 +805,7 @@ export function MobileAdminWorkspace(props: {
       setRequestId(result.requestId);
     } catch (caught) {
       setStepUpMessage(
-        caught instanceof Error ? caught.message : labels.stepUpFailed,
+        formatMobileAdminWorkspaceError(caught, labels.stepUpFailed),
       );
       setRequestId(mobileAdminRequestId(caught));
     } finally {
@@ -532,42 +813,132 @@ export function MobileAdminWorkspace(props: {
     }
   }
 
-  async function inspectUser(user: AdminRecord) {
-    const userId = first(user, ["id", "user_id"]);
-    if (!userId) return;
-    setSelectedUser({ user, loading: true });
+  async function inspectRecord(kind: AdminDetailKind, source: AdminRecord) {
+    const title = recordTitle(source, labels.details);
+    const selected: SelectedAdminDetail = {
+      kind,
+      title,
+      source,
+      sections: [{ title: labels.sourceRecord, data: source }],
+      loading: true,
+    };
+    setSelectedDetail(selected);
+
+    const id = recordID(source);
+    if (!id || ["model", "usage", "cleanup"].includes(kind)) {
+      setSelectedDetail({ ...selected, loading: false });
+      return;
+    }
+
+    const options = { locale: props.text.dateLocale };
     try {
-      const [history, reconciliation] = await Promise.all([
-        getMobileAdminUserWalletHistory(
-          client,
-          String(userId),
-          { page: 1, page_size: 20 },
-          { locale: props.text.dateLocale },
-        ),
-        getMobileAdminUserWalletReconciliation(client, String(userId), {
-          locale: props.text.dateLocale,
-        }),
-      ]);
-      setSelectedUser({
-        user,
-        history: history.data,
-        reconciliation: reconciliation.data,
-        loading: false,
-      });
-      setRequestId(reconciliation.requestId || history.requestId);
+      let sections: AdminDetailSection[] = [];
+      let nextRequestId = "";
+
+      if (kind === "user") {
+        const [user, usage, history, reconciliation, subscriptions] =
+          await Promise.all([
+            getMobileAdminUser(client, id, options),
+            getMobileAdminUserUsage(client, id, { period: "month" }, options),
+            getMobileAdminUserWalletHistory(
+              client,
+              id,
+              { page: 1, page_size: 20 },
+              options,
+            ),
+            getMobileAdminUserWalletReconciliation(client, id, options),
+            listMobileAdminUserSubscriptions(
+              client,
+              id,
+              { page: 1, page_size: 20 },
+              options,
+            ),
+          ]);
+        sections = [
+          { title: labels.userDetails, data: user.data },
+          { title: labels.usage, data: usage.data },
+          { title: labels.reconciliation, data: reconciliation.data },
+          { title: labels.balanceHistory, data: history.data },
+          { title: labels.subscriptions, data: subscriptions.data },
+        ];
+        nextRequestId =
+          subscriptions.requestId ||
+          reconciliation.requestId ||
+          history.requestId ||
+          usage.requestId ||
+          user.requestId;
+      } else if (kind === "order") {
+        const order = await getMobileAdminOrder(client, id, options);
+        sections = [{ title: labels.orderDetails, data: order.data }];
+        nextRequestId = order.requestId;
+        const subscriptionID = String(
+          first(record(order.data), ["subscription_id"]),
+        ).trim();
+        if (/^[1-9]\d*$/.test(subscriptionID)) {
+          const [subscription, progress] = await Promise.all([
+            getMobileAdminSubscription(client, subscriptionID, options),
+            getMobileAdminSubscriptionProgress(client, subscriptionID, options),
+          ]);
+          sections.push(
+            { title: labels.subscriptions, data: subscription.data },
+            { title: labels.subscriptionProgress, data: progress.data },
+          );
+          nextRequestId =
+            progress.requestId || subscription.requestId || nextRequestId;
+        }
+      } else if (kind === "subscription") {
+        const [subscription, progress] = await Promise.all([
+          getMobileAdminSubscription(client, id, options),
+          getMobileAdminSubscriptionProgress(client, id, options),
+        ]);
+        sections = [
+          { title: labels.subscriptionDetails, data: subscription.data },
+          { title: labels.subscriptionProgress, data: progress.data },
+        ];
+        nextRequestId = progress.requestId || subscription.requestId;
+      } else if (kind === "group") {
+        const [group, stats] = await Promise.all([
+          getMobileAdminGroup(client, id, options),
+          getMobileAdminGroupStats(client, id, options),
+        ]);
+        sections = [
+          { title: labels.groupDetails, data: group.data },
+          { title: labels.groupStats, data: stats.data },
+        ];
+        nextRequestId = stats.requestId || group.requestId;
+      } else if (kind === "withdrawal") {
+        const withdrawal = await getMobileAdminWithdrawal(client, id, options);
+        sections = [{ title: labels.withdrawalDetails, data: withdrawal.data }];
+        nextRequestId = withdrawal.requestId;
+      } else if (kind === "refund") {
+        const refund = await getMobileAdminRefundRequest(client, id, options);
+        sections = [{ title: labels.refundDetails, data: refund.data }];
+        nextRequestId = refund.requestId;
+      } else if (kind === "ticket") {
+        const ticket = await getMobileAdminMobileFeedback(client, id, options);
+        sections = [{ title: labels.ticketDetails, data: ticket.data }];
+        nextRequestId = ticket.requestId;
+      } else if (kind === "audit") {
+        const audit = await getMobileAdminAuditLog(client, id, options);
+        sections = [{ title: labels.auditDetails, data: audit.data }];
+        nextRequestId = audit.requestId;
+      }
+
+      setSelectedDetail({ ...selected, sections, loading: false });
+      setRequestId(nextRequestId);
     } catch (caught) {
       const requiredCompliance = requiredComplianceFromError(caught);
       if (requiredCompliance && complianceSupported) {
         setCompliance(requiredCompliance);
-        setSelectedUser(null);
+        setSelectedDetail(null);
         void refreshCompliance();
         setRequestId(mobileAdminRequestId(caught));
         return;
       }
-      setSelectedUser({
-        user,
+      setSelectedDetail({
+        ...selected,
         loading: false,
-        error: caught instanceof Error ? caught.message : labels.unavailable,
+        error: formatMobileAdminWorkspaceError(caught, labels.unavailable),
       });
       setRequestId(mobileAdminRequestId(caught));
     }
@@ -620,9 +991,10 @@ export function MobileAdminWorkspace(props: {
       setComplianceMessage(
         code === "ADMIN_COMPLIANCE_INVALID_PHRASE"
           ? labels.compliancePhraseRequired
-          : caught instanceof Error
-          ? caught.message
-          : labels.complianceUnavailable,
+          : formatMobileAdminWorkspaceError(
+              caught,
+              labels.complianceUnavailable,
+            ),
       );
       setRequestId(mobileAdminRequestId(caught));
     } finally {
@@ -642,6 +1014,13 @@ export function MobileAdminWorkspace(props: {
     }
   }
 
+  function changePage(key: AdminPageKey, nextPage: number) {
+    if (!Number.isInteger(nextPage) || nextPage < 1) return;
+    setPages((current) =>
+      current[key] === nextPage ? current : { ...current, [key]: nextPage },
+    );
+  }
+
   function submitUserSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextSearch = search.trim();
@@ -649,6 +1028,7 @@ export function MobileAdminWorkspace(props: {
       void loadView("users");
       return;
     }
+    setPages((current) => ({ ...current, users: 1 }));
     setAppliedSearch(nextSearch);
   }
 
@@ -870,40 +1250,11 @@ export function MobileAdminWorkspace(props: {
             items={users.items}
             text={props.text}
             empty={labels.noUsers}
-            onSelect={(user) => void inspectUser(user)}
+            onSelect={(user) => void inspectRecord("user", user)}
+            page={users}
+            loading={loading}
+            onPage={(nextPage) => changePage("users", nextPage)}
           />
-          {selectedUser && (
-            <section className={styles["section"]}>
-              <div className={styles["section-head"]}>
-                <h2>{displayName(selectedUser.user, props.text)}</h2>
-                <button type="button" onClick={() => setSelectedUser(null)}>
-                  {labels.closeUser}
-                </button>
-              </div>
-              {selectedUser.loading && (
-                <p className={styles["empty-copy"]}>{labels.loading}</p>
-              )}
-              {selectedUser.error && (
-                <div className={styles["form-error"]}>{selectedUser.error}</div>
-              )}
-              {!selectedUser.loading && !selectedUser.error && (
-                <>
-                  <AdminList
-                    title={labels.reconciliation}
-                    items={[selectedUser.reconciliation]}
-                    text={props.text}
-                    empty={labels.empty}
-                  />
-                  <AdminList
-                    title={labels.balanceHistory}
-                    items={array(selectedUser.history)}
-                    text={props.text}
-                    empty={labels.empty}
-                  />
-                </>
-              )}
-            </section>
-          )}
         </>
       )}
 
@@ -914,24 +1265,47 @@ export function MobileAdminWorkspace(props: {
             items={data.groups?.items || []}
             text={props.text}
             empty={labels.empty}
+            onSelect={(group) => void inspectRecord("group", group)}
+            page={data.groups}
+            loading={loading}
+            onPage={(nextPage) => changePage("groups", nextPage)}
           />
           <AdminList
             title={labels.models}
             items={data.models || []}
             text={props.text}
             empty={labels.empty}
+            onSelect={(model) => void inspectRecord("model", model)}
           />
           <AdminList
             title={labels.usage}
             items={data.usage?.items || []}
             text={props.text}
             empty={labels.empty}
+            onSelect={(usage) => void inspectRecord("usage", usage)}
+            page={data.usage}
+            loading={loading}
+            onPage={(nextPage) => changePage("usage", nextPage)}
           />
           <AdminList
             title={labels.cleanup}
             items={data.cleanup?.items || []}
             text={props.text}
             empty={labels.empty}
+            onSelect={(task) => void inspectRecord("cleanup", task)}
+            page={data.cleanup}
+            loading={loading}
+            onPage={(nextPage) => changePage("cleanup", nextPage)}
+          />
+          <AdminList
+            title={labels.tickets}
+            items={data.tickets?.items || []}
+            text={props.text}
+            empty={labels.empty}
+            onSelect={(ticket) => void inspectRecord("ticket", ticket)}
+            page={data.tickets}
+            loading={loading}
+            onPage={(nextPage) => changePage("tickets", nextPage)}
           />
         </>
       )}
@@ -943,18 +1317,44 @@ export function MobileAdminWorkspace(props: {
             items={data.orders?.items || []}
             text={props.text}
             empty={labels.empty}
+            onSelect={(order) => void inspectRecord("order", order)}
+            page={data.orders}
+            loading={loading}
+            onPage={(nextPage) => changePage("orders", nextPage)}
+          />
+          <AdminList
+            title={labels.subscriptions}
+            items={data.subscriptions?.items || []}
+            text={props.text}
+            empty={labels.empty}
+            onSelect={(subscription) =>
+              void inspectRecord("subscription", subscription)
+            }
+            page={data.subscriptions}
+            loading={loading}
+            onPage={(nextPage) => changePage("subscriptions", nextPage)}
           />
           <AdminList
             title={labels.withdrawals}
             items={data.withdrawals?.items || []}
             text={props.text}
             empty={labels.empty}
+            onSelect={(withdrawal) =>
+              void inspectRecord("withdrawal", withdrawal)
+            }
+            page={data.withdrawals}
+            loading={loading}
+            onPage={(nextPage) => changePage("withdrawals", nextPage)}
           />
           <AdminList
             title={labels.refunds}
             items={data.refunds?.items || []}
             text={props.text}
             empty={labels.empty}
+            onSelect={(refund) => void inspectRecord("refund", refund)}
+            page={data.refunds}
+            loading={loading}
+            onPage={(nextPage) => changePage("refunds", nextPage)}
           />
         </>
       )}
@@ -965,6 +1365,18 @@ export function MobileAdminWorkspace(props: {
           items={data.audit?.items || []}
           text={props.text}
           empty={labels.empty}
+          onSelect={(audit) => void inspectRecord("audit", audit)}
+          page={data.audit}
+          loading={loading}
+          onPage={(nextPage) => changePage("audit", nextPage)}
+        />
+      )}
+
+      {selectedDetail && (
+        <AdminDetailSheet
+          detail={selectedDetail}
+          text={props.text}
+          onClose={() => setSelectedDetail(null)}
         />
       )}
 

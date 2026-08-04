@@ -25,7 +25,7 @@ describe("persisted mobile schema safety", () => {
 
   test("accepts an older schema only when the store supplies a migration", () => {
     expect(() =>
-      assertSupportedPersistenceSchema("nextchat-managed-store", 2, 3, true),
+      assertSupportedPersistenceSchema("nextchat-managed-store", 3, 4, true),
     ).not.toThrow();
   });
 

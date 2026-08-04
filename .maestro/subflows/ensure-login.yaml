@@ -1,5 +1,8 @@
 appId: com.jisudeng.chat
 ---
+- extendedWaitUntil:
+    visible: "login-email|dashboard-default-group|app-tab-chat|app-tab-image|app-tab-account"
+    timeout: 180000
 - runFlow:
     when:
       visible: "login-email"

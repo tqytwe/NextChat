@@ -33,6 +33,78 @@ export interface NativeSpeechResult {
   cancelled?: boolean;
 }
 
+/**
+ * Events emitted by the foreground push-to-talk bridge. A PTT session never
+ * sends a chat message; consumers decide when (or whether) to use the final
+ * transcript.
+ */
+export type NativeForegroundPttEventType =
+  | "ready"
+  | "partial"
+  | "final"
+  | "error"
+  | "cancelled";
+
+export interface NativeForegroundPttEvent {
+  sessionId: string;
+  type: NativeForegroundPttEventType;
+  text?: string;
+  matches?: string[];
+  errorCode?: string;
+  errorMessage?: string;
+  recoverable?: boolean;
+  reason?: string;
+}
+
+export interface NativeForegroundPttStartResult {
+  sessionId: string;
+  state: "listening";
+}
+
+export interface NativeForegroundPttSession {
+  sessionId: string;
+  stop(): Promise<void>;
+  cancel(reason?: string): Promise<void>;
+  unsubscribe(): void;
+}
+
+/**
+ * Foreground-only wake-word events. The Android shell stops the recognizer
+ * whenever its activity is backgrounded; this bridge must never be used for a
+ * hidden microphone session.
+ */
+export type NativeWakeWordEventType =
+  | "ready"
+  | "partial"
+  | "matched"
+  | "error"
+  | "stopped";
+
+export interface NativeWakeWordEvent {
+  sessionId: string;
+  type: NativeWakeWordEventType;
+  transcript?: string;
+  phrase?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  recoverable?: boolean;
+  reason?: string;
+}
+
+export interface NativeWakeWordSession {
+  sessionId: string;
+  stop(reason?: string): Promise<void>;
+  unsubscribe(): void;
+}
+
+export type NativeSpeechEventType = "started" | "done" | "error" | "stopped";
+
+export interface NativeSpeechEvent {
+  utteranceId: string;
+  type: NativeSpeechEventType;
+  message?: string;
+}
+
 export interface NativeAppImage {
   id?: string;
   fileName: string;
@@ -150,6 +222,16 @@ interface NextChatNativePlugin {
   }): Promise<NativeSpeechResult>;
   stopHoldSpeech?(): Promise<void>;
   cancelHoldSpeech?(): Promise<void>;
+  startForegroundPtt?(options: {
+    sessionId: string;
+    language?: string;
+    prompt?: string;
+  }): Promise<NativeForegroundPttStartResult>;
+  stopForegroundPtt?(options: { sessionId: string }): Promise<void>;
+  cancelForegroundPtt?(options: {
+    sessionId: string;
+    reason?: string;
+  }): Promise<void>;
   saveImageToGallery(options: {
     dataUrl: string;
     fileName?: string;
@@ -169,10 +251,11 @@ interface NextChatNativePlugin {
     collectionId?: string;
   }): Promise<NativeAppImage>;
   listAppImages?(options?: {
-    ownerUserId?: string;
+    ownerUserId: string;
   }): Promise<{ items?: NativeAppImage[] }>;
   deleteAppImages?(options: {
     fileNames: string[];
+    ownerUserId: string;
   }): Promise<{ deleted?: number }>;
   shareImage(options: {
     dataUrl: string;
@@ -226,6 +309,21 @@ declare global {
       },
     ) => void;
     __jisudengNativeBridgeToken?: string;
+    __jisudengNativeForegroundPttEvent?: (
+      sessionId: string,
+      type: NativeForegroundPttEventType,
+      payload?: Partial<NativeForegroundPttEvent>,
+    ) => void;
+    __jisudengNativeWakeWordEvent?: (
+      sessionId: string,
+      type: NativeWakeWordEventType,
+      payload?: Partial<NativeWakeWordEvent>,
+    ) => void;
+    __jisudengNativeSpeechEvent?: (
+      utteranceId: string,
+      type: NativeSpeechEventType,
+      payload?: Partial<NativeSpeechEvent>,
+    ) => void;
   }
 }
 
@@ -247,6 +345,95 @@ const pendingNativeStreams = new Map<
     reject: (reason?: unknown) => void;
   }
 >();
+
+type ForegroundPttListener = (event: NativeForegroundPttEvent) => void;
+type WakeWordListener = (event: NativeWakeWordEvent) => void;
+type NativeSpeechListener = (event: NativeSpeechEvent) => void;
+
+const foregroundPttListeners = new Map<string, Set<ForegroundPttListener>>();
+const foregroundPttSessions = new Set<string>();
+const wakeWordListeners = new Map<string, Set<WakeWordListener>>();
+const wakeWordSessions = new Set<string>();
+const nativeSpeechListeners = new Map<string, Set<NativeSpeechListener>>();
+let foregroundPttLifecycleInstalled = false;
+
+const foregroundPttTerminalEvents = new Set<NativeForegroundPttEventType>([
+  "final",
+  "error",
+  "cancelled",
+]);
+
+function createForegroundPttSessionId() {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return `ptt-${crypto.randomUUID()}`;
+  }
+  return `ptt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function removeForegroundPttLifecycleListenersIfIdle() {
+  if (
+    foregroundPttSessions.size ||
+    wakeWordSessions.size ||
+    !foregroundPttLifecycleInstalled
+  ) {
+    return;
+  }
+  if (typeof window !== "undefined") {
+    window.removeEventListener("pagehide", handleForegroundPttPageHide);
+    window.removeEventListener("popstate", handleForegroundPttRouteChange);
+    window.removeEventListener("hashchange", handleForegroundPttRouteChange);
+    window.removeEventListener(
+      "jisudeng-native-route-change",
+      handleForegroundPttRouteChange,
+    );
+  }
+  if (typeof document !== "undefined") {
+    document.removeEventListener(
+      "visibilitychange",
+      handleForegroundPttVisibilityChange,
+    );
+  }
+  foregroundPttLifecycleInstalled = false;
+}
+
+function installForegroundPttLifecycleListeners() {
+  if (foregroundPttLifecycleInstalled || typeof window === "undefined") return;
+  window.addEventListener("pagehide", handleForegroundPttPageHide);
+  window.addEventListener("popstate", handleForegroundPttRouteChange);
+  window.addEventListener("hashchange", handleForegroundPttRouteChange);
+  window.addEventListener(
+    "jisudeng-native-route-change",
+    handleForegroundPttRouteChange,
+  );
+  if (typeof document !== "undefined") {
+    document.addEventListener(
+      "visibilitychange",
+      handleForegroundPttVisibilityChange,
+    );
+  }
+  foregroundPttLifecycleInstalled = true;
+}
+
+function handleForegroundPttPageHide() {
+  void cancelAllForegroundVoiceSessions("page_hidden");
+}
+
+function handleForegroundPttRouteChange() {
+  void cancelAllForegroundVoiceSessions("route_changed");
+}
+
+function handleForegroundPttVisibilityChange() {
+  if (
+    typeof document === "undefined" ||
+    document.visibilityState !== "hidden"
+  ) {
+    return;
+  }
+  void cancelAllForegroundVoiceSessions("app_backgrounded");
+}
 
 function getDirectNativeBridge() {
   if (typeof window === "undefined") return undefined;
@@ -300,6 +487,96 @@ function ensureDirectNativeCallbacks() {
             : "stream request failed"),
       ),
     );
+  };
+  window.__jisudengNativeForegroundPttEvent = (sessionId, type, payload) => {
+    const listeners = foregroundPttListeners.get(sessionId);
+    const payloadMatches = payload?.matches;
+    const matches = Array.isArray(payloadMatches)
+      ? payloadMatches.filter(
+          (match): match is string => typeof match === "string",
+        )
+      : undefined;
+    const event: NativeForegroundPttEvent = {
+      sessionId,
+      type,
+      text: typeof payload?.text === "string" ? payload.text : undefined,
+      matches,
+      errorCode:
+        typeof payload?.errorCode === "string" ? payload.errorCode : undefined,
+      errorMessage:
+        typeof payload?.errorMessage === "string"
+          ? payload.errorMessage
+          : undefined,
+      recoverable:
+        typeof payload?.recoverable === "boolean"
+          ? payload.recoverable
+          : undefined,
+      reason: typeof payload?.reason === "string" ? payload.reason : undefined,
+    };
+    for (const listener of listeners ? [...listeners] : []) {
+      try {
+        listener(event);
+      } catch {
+        // A screen-level callback must not prevent terminal native cleanup.
+      }
+    }
+    if (!foregroundPttTerminalEvents.has(type)) return;
+    foregroundPttListeners.delete(sessionId);
+    foregroundPttSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+  };
+  window.__jisudengNativeWakeWordEvent = (sessionId, type, payload) => {
+    const listeners = wakeWordListeners.get(sessionId);
+    const event: NativeWakeWordEvent = {
+      sessionId,
+      type,
+      transcript:
+        typeof payload?.transcript === "string"
+          ? payload.transcript
+          : undefined,
+      phrase: typeof payload?.phrase === "string" ? payload.phrase : undefined,
+      errorCode:
+        typeof payload?.errorCode === "string" ? payload.errorCode : undefined,
+      errorMessage:
+        typeof payload?.errorMessage === "string"
+          ? payload.errorMessage
+          : undefined,
+      recoverable:
+        typeof payload?.recoverable === "boolean"
+          ? payload.recoverable
+          : undefined,
+      reason: typeof payload?.reason === "string" ? payload.reason : undefined,
+    };
+    for (const listener of listeners ? [...listeners] : []) {
+      try {
+        listener(event);
+      } catch {
+        // A screen-level callback must not leave the native recognizer active.
+      }
+    }
+    if (type !== "matched" && type !== "error" && type !== "stopped") return;
+    wakeWordListeners.delete(sessionId);
+    wakeWordSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+  };
+  window.__jisudengNativeSpeechEvent = (utteranceId, type, payload) => {
+    const listeners = nativeSpeechListeners.get(utteranceId);
+    const event: NativeSpeechEvent = {
+      utteranceId,
+      type,
+      message:
+        typeof payload?.message === "string" ? payload.message : undefined,
+    };
+    for (const listener of listeners ? [...listeners] : []) {
+      try {
+        listener(event);
+      } catch {
+        // A visual callback must not retain a completed native utterance.
+      }
+    }
+    if (type === "done" || type === "error" || type === "stopped") {
+      nativeSpeechListeners.delete(utteranceId);
+    }
   };
 }
 
@@ -588,6 +865,291 @@ export async function cancelHoldSpeechRecognition() {
   }
 }
 
+/**
+ * Starts a foreground-only push-to-talk session. Transcripts are delivered to
+ * `onEvent`; this bridge deliberately has no send-message or attachment API.
+ */
+export async function startForegroundPttSession(options: {
+  sessionId?: string;
+  language?: string;
+  prompt?: string;
+  onEvent: ForegroundPttListener;
+}): Promise<NativeForegroundPttSession> {
+  if (!isNativeAndroid()) {
+    throw new Error("foreground PTT is only available in the Android app");
+  }
+
+  const sessionId = options.sessionId?.trim() || createForegroundPttSessionId();
+  if (sessionId.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(sessionId)) {
+    throw new Error("foreground PTT session id is invalid");
+  }
+
+  await requestMicrophonePermission();
+  await cancelAllForegroundPttSessions("replaced");
+  ensureDirectNativeCallbacks();
+
+  const listeners = new Set<ForegroundPttListener>([options.onEvent]);
+  foregroundPttListeners.set(sessionId, listeners);
+  foregroundPttSessions.add(sessionId);
+  installForegroundPttLifecycleListeners();
+
+  try {
+    if (!isDirectNativeBridgeAvailable()) {
+      throw new Error("foreground PTT is not available in this Android shell");
+    }
+    const result = await callDirectNative<NativeForegroundPttStartResult>(
+      "startForegroundPtt",
+      {
+        sessionId,
+        language: options.language,
+        prompt: options.prompt,
+      },
+    );
+    if (result.sessionId && result.sessionId !== sessionId) {
+      throw new Error("foreground PTT returned an unexpected session id");
+    }
+  } catch (error) {
+    foregroundPttListeners.delete(sessionId);
+    foregroundPttSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+    throw error;
+  }
+
+  return {
+    sessionId,
+    stop: () => stopForegroundPttSession(sessionId),
+    cancel: (reason?: string) => cancelForegroundPttSession(sessionId, reason),
+    unsubscribe: () => {
+      const current = foregroundPttListeners.get(sessionId);
+      if (!current) return;
+      current.delete(options.onEvent);
+      if (!current.size) foregroundPttListeners.delete(sessionId);
+    },
+  };
+}
+
+export async function stopForegroundPttSession(sessionId: string) {
+  if (!isNativeAndroid() || !sessionId) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("stopForegroundPtt", { sessionId });
+    return;
+  }
+  if (NextChatNative.stopForegroundPtt) {
+    await NextChatNative.stopForegroundPtt({ sessionId });
+  }
+}
+
+export async function cancelForegroundPttSession(
+  sessionId: string,
+  reason = "cancelled",
+) {
+  if (!isNativeAndroid() || !sessionId) return;
+  try {
+    if (isDirectNativeBridgeAvailable()) {
+      await callDirectNative<void>("cancelForegroundPtt", {
+        sessionId,
+        reason,
+      });
+      return;
+    }
+    if (NextChatNative.cancelForegroundPtt) {
+      await NextChatNative.cancelForegroundPtt({ sessionId, reason });
+    }
+  } finally {
+    // Native normally emits `cancelled`. Clear stale local state even if its
+    // WebView was already torn down during a lifecycle transition.
+    foregroundPttListeners.delete(sessionId);
+    foregroundPttSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+  }
+}
+
+export async function cancelAllForegroundPttSessions(reason = "cancelled") {
+  const sessionIds = [...foregroundPttSessions];
+  await Promise.all(
+    sessionIds.map((sessionId) =>
+      cancelForegroundPttSession(sessionId, reason).catch(() => {
+        // Lifecycle cleanup must never hold navigation or backgrounding open.
+      }),
+    ),
+  );
+}
+
+function createWakeWordSessionId() {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return `wake-${crypto.randomUUID()}`;
+  }
+  return `wake-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createNativeSpeechUtteranceId() {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return `tts-${crypto.randomUUID()}`;
+  }
+  return `tts-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * Starts recognition only while the Android activity is foregrounded. A wake
+ * match ends this session before the caller starts a normal PTT turn, so the
+ * microphone is never owned by two recognizers at once.
+ */
+export async function startForegroundWakeWordSession(options: {
+  sessionId?: string;
+  phrase: string;
+  language?: string;
+  onEvent: WakeWordListener;
+}): Promise<NativeWakeWordSession> {
+  if (!isNativeAndroid()) {
+    throw new Error("wake word is only available in the Android app");
+  }
+  const phrase = options.phrase.trim();
+  if (!phrase || phrase.length > 64) {
+    throw new Error("wake word must contain 1 to 64 characters");
+  }
+  const sessionId = options.sessionId?.trim() || createWakeWordSessionId();
+  if (sessionId.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(sessionId)) {
+    throw new Error("wake word session id is invalid");
+  }
+
+  await requestMicrophonePermission();
+  await cancelAllForegroundWakeWordSessions("replaced");
+  await cancelAllForegroundPttSessions("replaced");
+  ensureDirectNativeCallbacks();
+
+  const listeners = new Set<WakeWordListener>([options.onEvent]);
+  wakeWordListeners.set(sessionId, listeners);
+  wakeWordSessions.add(sessionId);
+  installForegroundPttLifecycleListeners();
+
+  try {
+    if (!isDirectNativeBridgeAvailable()) {
+      throw new Error("wake word is not available in this Android shell");
+    }
+    const result = await callDirectNative<{ sessionId?: string }>(
+      "startWakeWord",
+      {
+        sessionId,
+        phrase,
+        language: options.language,
+      },
+    );
+    if (result.sessionId && result.sessionId !== sessionId) {
+      throw new Error("wake word returned an unexpected session id");
+    }
+  } catch (error) {
+    wakeWordListeners.delete(sessionId);
+    wakeWordSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+    throw error;
+  }
+
+  return {
+    sessionId,
+    stop: (reason?: string) => stopForegroundWakeWordSession(sessionId, reason),
+    unsubscribe: () => {
+      const current = wakeWordListeners.get(sessionId);
+      if (!current) return;
+      current.delete(options.onEvent);
+      if (!current.size) wakeWordListeners.delete(sessionId);
+    },
+  };
+}
+
+export async function stopForegroundWakeWordSession(
+  sessionId: string,
+  reason = "cancelled",
+) {
+  if (!isNativeAndroid() || !sessionId) return;
+  try {
+    if (isDirectNativeBridgeAvailable()) {
+      await callDirectNative<void>("stopWakeWord", { sessionId, reason });
+    }
+  } finally {
+    wakeWordListeners.delete(sessionId);
+    wakeWordSessions.delete(sessionId);
+    removeForegroundPttLifecycleListenersIfIdle();
+  }
+}
+
+export async function cancelAllForegroundWakeWordSessions(
+  reason = "cancelled",
+) {
+  const sessionIds = [...wakeWordSessions];
+  await Promise.all(
+    sessionIds.map((sessionId) =>
+      stopForegroundWakeWordSession(sessionId, reason).catch(() => {
+        // Route and background cleanup must never block the UI thread.
+      }),
+    ),
+  );
+}
+
+export async function cancelAllForegroundVoiceSessions(reason = "cancelled") {
+  await Promise.all([
+    cancelAllForegroundPttSessions(reason),
+    cancelAllForegroundWakeWordSessions(reason),
+  ]);
+}
+
+export async function speakNativeText(options: {
+  text: string;
+  language?: string;
+  rate?: number;
+  onEvent?: NativeSpeechListener;
+}) {
+  const text = options.text.trim();
+  if (!text || !isNativeAndroid()) return;
+  if (!isDirectNativeBridgeAvailable()) {
+    throw new Error("text to speech is not available in this Android shell");
+  }
+  // The listener has to exist before native TTS starts. Very short utterances
+  // can finish before the request response reaches the WebView.
+  const utteranceId = createNativeSpeechUtteranceId();
+  if (options.onEvent) {
+    nativeSpeechListeners.set(utteranceId, new Set([options.onEvent]));
+  }
+  try {
+    const result = await callDirectNative<{ utteranceId?: string }>(
+      "speakText",
+      {
+        text: text.slice(0, 3800),
+        language: options.language,
+        rate: Math.min(2, Math.max(0.5, Number(options.rate) || 1)),
+        utteranceId,
+      },
+    );
+    const returnedUtteranceId = String(result?.utteranceId || "");
+    if (returnedUtteranceId && returnedUtteranceId !== utteranceId) {
+      throw new Error("text to speech returned an unexpected utterance id");
+    }
+    return utteranceId;
+  } catch (error) {
+    nativeSpeechListeners.delete(utteranceId);
+    throw error;
+  }
+}
+
+export async function stopNativeSpeech() {
+  if (!isNativeAndroid() || !isDirectNativeBridgeAvailable()) return;
+  await callDirectNative<void>("stopSpeaking");
+}
+
+/**
+ * Call this from a screen/router transition that does not update browser
+ * history. Browser `popstate`, hash changes, page hide, and backgrounding are
+ * already observed automatically.
+ */
+export function notifyForegroundPttRouteChange() {
+  void cancelAllForegroundVoiceSessions("route_changed");
+}
+
 export async function saveImageToGallery(url: string, fileName: string) {
   const dataUrl = await imageUrlToDataUrl(url);
   if (isNativeAndroid()) {
@@ -656,32 +1218,83 @@ export async function saveImageToAppStorage(
   };
 }
 
-export async function listAppImages(ownerUserId = "") {
+export async function listAppImages(ownerUserId: string) {
+  const owner = String(ownerUserId || "").trim();
+  if (!owner) return [] as NativeAppImage[];
   if (!isNativeAndroid()) return [] as NativeAppImage[];
   if (isDirectNativeBridgeAvailable()) {
     const result = await callDirectNative<{ items?: NativeAppImage[] }>(
       "listAppImages",
-      { ownerUserId },
+      { ownerUserId: owner },
     );
     return result.items || [];
   }
   if (NextChatNative.listAppImages) {
-    const result = await NextChatNative.listAppImages({ ownerUserId });
+    const result = await NextChatNative.listAppImages({ ownerUserId: owner });
     return result.items || [];
   }
   return [];
 }
 
-export async function deleteAppImages(fileNames: string[]) {
-  if (!fileNames.length) return { deleted: 0 };
+/**
+ * Reads pre-account app images without changing their owner. The current
+ * Android shell exposes this only through its authenticated direct bridge;
+ * a later explicit claim is required before the images enter the gallery.
+ */
+export async function listUnassignedAppImages(ownerUserId: string) {
+  const owner = String(ownerUserId || "").trim();
+  if (!owner || !isNativeAndroid() || !isDirectNativeBridgeAvailable()) {
+    return [] as NativeAppImage[];
+  }
+  const result = await callDirectNative<{ items?: NativeAppImage[] }>(
+    "listUnassignedAppImages",
+    { ownerUserId: owner },
+  );
+  return result.items || [];
+}
+
+/**
+ * Attributes only the files selected in the migration UI to the current
+ * account. Existing account-owned images remain inaccessible to this method.
+ */
+export async function claimUnassignedAppImages(
+  fileNames: string[],
+  ownerUserId: string,
+) {
+  const owner = String(ownerUserId || "").trim();
+  if (!fileNames.length || !owner || !isNativeAndroid()) {
+    return { items: [] as NativeAppImage[], claimed: 0, skipped: 0 };
+  }
+  if (!isDirectNativeBridgeAvailable()) {
+    throw new Error(
+      "legacy image migration is not available in this Android shell",
+    );
+  }
+  return callDirectNative<{
+    items?: NativeAppImage[];
+    claimed?: number;
+    skipped?: number;
+  }>("claimUnassignedAppImages", {
+    fileNames,
+    ownerUserId: owner,
+  });
+}
+
+export async function deleteAppImages(
+  fileNames: string[],
+  ownerUserId: string,
+) {
+  const owner = String(ownerUserId || "").trim();
+  if (!fileNames.length || !owner) return { deleted: 0 };
   if (isNativeAndroid()) {
     if (isDirectNativeBridgeAvailable()) {
       return callDirectNative<{ deleted?: number }>("deleteAppImages", {
         fileNames,
+        ownerUserId: owner,
       });
     }
     if (NextChatNative.deleteAppImages) {
-      return NextChatNative.deleteAppImages({ fileNames });
+      return NextChatNative.deleteAppImages({ fileNames, ownerUserId: owner });
     }
   }
   return { deleted: 0 };

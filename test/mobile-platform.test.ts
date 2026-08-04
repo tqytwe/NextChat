@@ -128,6 +128,13 @@ describe("mobile platform client", () => {
     const headers = managedRequestText.mock.calls[0][3] as Headers;
     expect(headers.get("Authorization")).toBe(`Bearer ${accessToken}`);
     expect(headers.has("Content-Type")).toBe(false);
+    expect(headers.get("X-Client-Request-ID")).toMatch(/^mobile-asset-/);
+    expect(headers.get("Idempotency-Key")).toBe(
+      headers.get("X-Client-Request-ID"),
+    );
+    expect(headers.get("X-Request-ID")).toBe(
+      headers.get("X-Client-Request-ID"),
+    );
   });
 
   test("wraps skill, support, and device operations in a bound client", async () => {
