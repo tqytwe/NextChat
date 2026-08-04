@@ -1,19 +1,19 @@
 {
   "platform": "android",
-  "version": "2.0.84",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.84-284",
+  "version": "2.0.85",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.85-285",
   "size": "7.2 MB",
-  "sha256": "efdc3955673db71ef691d6f154cc15ff9756d39f196f710e4921bf3a1a9ebb2d",
+  "sha256": "7c0e8181f3cec03fef01a2cfbe29b078472f94c2e1d31020ef0f1d5893aa067d",
   "minAndroidVersion": "6.0",
   "releaseDate": "2026-08-04",
   "notes": [
     "修复覆盖安装迁移、保留本机项目和图片、模型偏好与管理员工作台回归"
   ],
-  "versionCode": 284,
-  "bytes": 7530970,
+  "versionCode": 285,
+  "bytes": 7532534,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "2.0.84",
-  "sourceCommit": "3f6ef4a077e299ef6f0b8bafd047ce089ec1f696",
-  "builtFromCommit": "3f6ef4a077e299ef6f0b8bafd047ce089ec1f696"
+  "latestVersion": "2.0.85",
+  "sourceCommit": "8cc57e4103184b60304929dd129f7344ead6d952",
+  "builtFromCommit": "8cc57e4103184b60304929dd129f7344ead6d952"
 }
