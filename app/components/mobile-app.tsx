@@ -3099,8 +3099,11 @@ async function managedFormDataRequest<T>(
   path: string,
   body: FormData,
   text: ManagedMobileText,
+  options?: { requestId?: string; idempotencyKey?: string },
 ) {
   return requestWithManagedAuth(async ({ baseUrl, accessToken }) => {
+    const requestId = options?.requestId || clientRequestID("multipart");
+    const idempotencyKey = options?.idempotencyKey || requestId;
     const response = await managedRequestText(
       baseUrl,
       path,
@@ -3112,6 +3115,9 @@ async function managedFormDataRequest<T>(
         Accept: "application/json",
         "Accept-Language": text.dateLocale,
         Authorization: `Bearer ${accessToken}`,
+        "X-Request-ID": requestId,
+        "X-Client-Request-ID": requestId,
+        "Idempotency-Key": idempotencyKey,
       }),
     );
     const bodyText = response.text;
@@ -14793,11 +14799,20 @@ function AndroidAccountSettings() {
         );
       });
       let result: any;
+      // Reuse the same keys when the canonical support route falls back to
+      // its legacy compatibility route. Native transport retries are then
+      // traceable and the backend can deduplicate the approved submission.
+      const feedbackRequestId = clientRequestID("feedback");
+      const feedbackRequestOptions = {
+        requestId: feedbackRequestId,
+        idempotencyKey: feedbackRequestId,
+      };
       try {
         result = await managedFormDataRequest<any>(
           "/api/v1/mobile/support/tickets",
           form,
           text,
+          feedbackRequestOptions,
         );
       } catch (error) {
         if (
@@ -14808,6 +14823,7 @@ function AndroidAccountSettings() {
             "/api/v1/play/mobile-feedback",
             form,
             text,
+            feedbackRequestOptions,
           );
         } else {
           throw error;

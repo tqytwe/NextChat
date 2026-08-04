@@ -164,6 +164,31 @@ export interface MobileProtocolEndpoint {
   description?: string;
   replacement?: string;
   remove_after?: string;
+  operation_id?: string;
+  risk_level?: string;
+  request?: MobileProtocolEndpointRequest;
+  lifecycle?: MobileProtocolEndpointLifecycle;
+}
+
+export interface MobileProtocolEndpointRequest {
+  client_request_id_header?: string;
+  idempotency_header?: string;
+  idempotency_mode?: string;
+}
+
+export interface MobileProtocolEndpointLifecycle {
+  state?: "canonical" | "legacy" | "observe" | "disabled" | string;
+  declared_in_contract?: string;
+  new_capabilities_allowed?: boolean;
+}
+
+export interface MobileProtocolLifecycle {
+  registry_version?: number;
+  contract_version?: string;
+  states?: string[];
+  client_request_id_header?: string;
+  idempotency_header?: string;
+  missing_key_policy?: string;
 }
 
 /**
@@ -191,6 +216,9 @@ export interface MobileProtocolSearchCapability {
   result_fields?: string[];
   client_request_id_header?: string;
   response_request_id_field?: string;
+  max_query_runes?: number;
+  max_results?: number;
+  timeout_ms?: number;
 }
 
 export interface MobileProtocolOperationGrant {
@@ -212,6 +240,7 @@ export interface MobileProtocolCapabilities {
 
 export interface MobileProtocol {
   version: number;
+  contract_version?: string;
   generated_at: string;
   session: {
     authenticated?: boolean;
@@ -225,6 +254,7 @@ export interface MobileProtocol {
   task_statuses: MobileTaskStatus[];
   terminal_statuses: MobileTaskStatus[];
   endpoints: MobileProtocolEndpoint[];
+  lifecycle?: MobileProtocolLifecycle;
   capabilities?: MobileProtocolCapabilities;
   privacy?: Record<string, unknown>;
 }
@@ -799,6 +829,23 @@ export async function uploadMobileAssetFormData(
   const path = mobileApiPath("/assets");
   const headers = new Headers(options?.headers);
   headers.set("Accept", "application/json");
+  // Multipart uploads are side-effecting. Always attach a stable request key
+  // so a native transport can safely correlate/replay the request when the
+  // connection drops after the server has accepted the bytes. The server
+  // remains the authority for deduplication and may reject conflicting keys.
+  const requestId =
+    headers.get("X-Client-Request-ID") ||
+    headers.get("Idempotency-Key") ||
+    `mobile-asset-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  if (!headers.has("X-Client-Request-ID")) {
+    headers.set("X-Client-Request-ID", requestId);
+  }
+  if (!headers.has("Idempotency-Key")) {
+    headers.set("Idempotency-Key", requestId);
+  }
+  if (!headers.has("X-Request-ID")) {
+    headers.set("X-Request-ID", requestId);
+  }
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }

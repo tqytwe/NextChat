@@ -18,11 +18,14 @@ jest.unstable_mockModule("@capacitor/core", () => ({
   registerPlugin: jest.fn(() => ({})),
 }));
 
-const { MobileAdminWorkspace } = await import(
+const { MobileAdminWorkspace, formatMobileAdminWorkspaceError } = await import(
   "../app/components/mobile-admin-workspace"
 );
 const { getManagedMobileText } = await import(
   "../app/client/managed-mobile-i18n"
+);
+const { ManagedApiError, ManagedTransportError } = await import(
+  "../app/client/managed-nextchat"
 );
 
 const client = {
@@ -143,5 +146,35 @@ describe("mobile administrator workspace", () => {
         expect.objectContaining({ method: "GET" }),
       );
     });
+  });
+
+  test("localizes administrator errors while retaining HTTP, category, and request ID", () => {
+    const apiError = new ManagedApiError(
+      "cloudflare bad gateway",
+      502,
+      "/api/v1/admin/payment/orders",
+      "UPSTREAM_UNAVAILABLE",
+      "admin-workspace-502",
+      "http",
+    );
+    const apiMessage = formatMobileAdminWorkspaceError(
+      apiError,
+      "Administrator data is unavailable",
+    );
+    expect(apiMessage).toContain("HTTP 502, http, request admin-workspace-502");
+    expect(apiMessage).not.toContain("cloudflare bad gateway");
+
+    const networkError = new ManagedTransportError(
+      "Failed to fetch",
+      "network",
+      "/api/v1/admin/users",
+      "admin-workspace-network",
+    );
+    expect(
+      formatMobileAdminWorkspaceError(
+        networkError,
+        "Administrator data is unavailable",
+      ),
+    ).toContain("HTTP unavailable, network, request admin-workspace-network");
   });
 });

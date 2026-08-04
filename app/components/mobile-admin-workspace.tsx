@@ -38,6 +38,7 @@ import {
   listMobileAdminUserSubscriptions,
   listMobileAdminUsers,
   listMobileAdminWithdrawals,
+  mobileAdminErrorCategory,
   mobileAdminErrorCode,
   mobileAdminErrorMetadata,
   mobileAdminRequestId,
@@ -48,6 +49,10 @@ import type {
   MobileAdminComplianceStatus,
   MobileAdminPage,
 } from "../client/mobile-admin";
+import {
+  formatManagedMobileError,
+  localizeManagedMobileError,
+} from "../client/managed-mobile-i18n";
 import type { ManagedMobileText } from "../client/managed-mobile-i18n";
 import { openExternalUrl } from "../client/android-native";
 import { isMobileAdminComplianceAvailable } from "../client/mobile-capabilities";
@@ -199,6 +204,48 @@ function array(value: unknown): unknown[] {
 function stringField(value: Record<string, unknown> | undefined, key: string) {
   const field = value?.[key];
   return typeof field === "string" ? field.trim() : "";
+}
+
+function numericErrorField(error: unknown, key: string) {
+  if (!error || typeof error !== "object") return undefined;
+  const value = Number((error as Record<string, unknown>)[key]);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function stringErrorField(error: unknown, key: string) {
+  if (!error || typeof error !== "object") return "";
+  const value = (error as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** Keep administrator failures diagnosable without surfacing server-default text. */
+export function formatMobileAdminWorkspaceError(
+  error: unknown,
+  fallback: string,
+) {
+  const status = numericErrorField(error, "status");
+  const path = stringErrorField(error, "path");
+  const code = mobileAdminErrorCode(error);
+  const category = mobileAdminErrorCategory(error);
+  const requestId = mobileAdminRequestId(error);
+  const rawMessage =
+    error instanceof Error && error.message.trim()
+      ? error.message
+      : localizeManagedMobileError({
+          message: fallback,
+          status,
+          path,
+          code,
+        });
+
+  return formatManagedMobileError({
+    message: rawMessage,
+    status,
+    path,
+    code,
+    category,
+    requestId,
+  });
 }
 
 function requiredComplianceFromError(error: unknown) {
@@ -568,7 +615,7 @@ export function MobileAdminWorkspace(props: {
       } catch (caught) {
         if (signal?.aborted) return null;
         setCompliance(null);
-        setError(caught instanceof Error ? caught.message : labels.unavailable);
+        setError(formatMobileAdminWorkspaceError(caught, labels.unavailable));
         setRequestId(mobileAdminRequestId(caught));
         return null;
       } finally {
@@ -707,9 +754,7 @@ export function MobileAdminWorkspace(props: {
           setError("");
           void refreshCompliance();
         } else {
-          setError(
-            caught instanceof Error ? caught.message : labels.unavailable,
-          );
+          setError(formatMobileAdminWorkspaceError(caught, labels.unavailable));
         }
         setRequestId(mobileAdminRequestId(caught));
       } finally {
@@ -760,7 +805,7 @@ export function MobileAdminWorkspace(props: {
       setRequestId(result.requestId);
     } catch (caught) {
       setStepUpMessage(
-        caught instanceof Error ? caught.message : labels.stepUpFailed,
+        formatMobileAdminWorkspaceError(caught, labels.stepUpFailed),
       );
       setRequestId(mobileAdminRequestId(caught));
     } finally {
@@ -893,7 +938,7 @@ export function MobileAdminWorkspace(props: {
       setSelectedDetail({
         ...selected,
         loading: false,
-        error: caught instanceof Error ? caught.message : labels.unavailable,
+        error: formatMobileAdminWorkspaceError(caught, labels.unavailable),
       });
       setRequestId(mobileAdminRequestId(caught));
     }
@@ -946,9 +991,10 @@ export function MobileAdminWorkspace(props: {
       setComplianceMessage(
         code === "ADMIN_COMPLIANCE_INVALID_PHRASE"
           ? labels.compliancePhraseRequired
-          : caught instanceof Error
-          ? caught.message
-          : labels.complianceUnavailable,
+          : formatMobileAdminWorkspaceError(
+              caught,
+              labels.complianceUnavailable,
+            ),
       );
       setRequestId(mobileAdminRequestId(caught));
     } finally {

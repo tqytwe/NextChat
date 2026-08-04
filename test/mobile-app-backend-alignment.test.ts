@@ -90,6 +90,25 @@ describe("mobile app backend alignment", () => {
     expect(chat).toContain('state: canSendLocally ? "local" : "failed"');
   });
 
+  test("correlates and keys feedback multipart retries without duplicating a submission", () => {
+    const feedback = source.slice(
+      source.indexOf("async function managedFormDataRequest"),
+      source.indexOf("async function managedGatewayRequestText"),
+    );
+    expect(feedback).toContain('clientRequestID("multipart")');
+    expect(feedback).toContain('"X-Client-Request-ID": requestId');
+    expect(feedback).toContain('"Idempotency-Key": idempotencyKey');
+
+    const account = source.slice(
+      source.indexOf("async function submitFeedback()"),
+      source.indexOf("async function redeemCode()"),
+    );
+    expect(account).toContain('clientRequestID("feedback")');
+    expect(account).toContain("feedbackRequestOptions");
+    expect(account).toContain('"/api/v1/mobile/support/tickets"');
+    expect(account).toContain('"/api/v1/play/mobile-feedback"');
+  });
+
   test("uses planned single-image outputs and a bounded local content-kit queue", () => {
     const kit = source.slice(
       source.indexOf("function AndroidContentKit()"),

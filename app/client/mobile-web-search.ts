@@ -9,6 +9,7 @@ export interface MobileWebSearchSource {
   title: string;
   url: string;
   snippet?: string;
+  page_age?: string;
   published_at?: string;
 }
 
@@ -56,6 +57,7 @@ function normalizeSource(value: unknown): MobileWebSearchSource | null {
     snippet: String(item.snippet || item.text || item.description || "")
       .trim()
       .slice(0, 1200),
+    page_age: String(item.page_age || item.pageAge || "").trim(),
     published_at: String(item.published_at || item.publishedDate || "").trim(),
   };
 }
