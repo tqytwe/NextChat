@@ -40,6 +40,7 @@ const releaseArtifactPaths = new Set([
   "public/downloads/android-version.json",
   "public/downloads/jisudengchat-android.apk",
 ]);
+const canonicalApkPath = "/downloads/jisudengchat-android.apk";
 
 function gitOutput(args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf-8" }).trim();
@@ -104,6 +105,27 @@ function normalizeVersionCode(value, source) {
     throw new Error(`${source} versionCode is outside the safe integer range`);
   }
   return versionCode;
+}
+
+function releaseCacheKey(version, versionCode, sha256) {
+  const hash = String(sha256 || "")
+    .trim()
+    .toLowerCase();
+  return `${version}-${versionCode}${hash ? `-${hash}` : ""}`;
+}
+
+function buildCanonicalApkUrl(cacheKey) {
+  return `${canonicalApkPath}?v=${encodeURIComponent(cacheKey)}`;
+}
+
+function isReleaseCacheKey(value, release) {
+  const raw = String(value || "").trim();
+  const prefix = `${release.version}-${release.versionCode}`;
+  return (
+    raw === prefix ||
+    (raw.startsWith(`${prefix}-`) &&
+      /^[0-9a-f]{64}$/i.test(raw.slice(prefix.length + 1)))
+  );
 }
 
 function readApkReleaseVersion() {
@@ -396,10 +418,26 @@ function assertEmbeddedAndroidBuildMatchesApk(apkRelease) {
     "Embedded Android web build config",
   );
 
-  const expectedCanonicalUrl = `/downloads/jisudengchat-android.apk?v=${apkRelease.version}-${apkRelease.versionCode}`;
-  if (String(config.androidApkUrl || "") !== expectedCanonicalUrl) {
+  let embeddedUrl;
+  try {
+    embeddedUrl = new URL(
+      String(config.androidApkUrl || ""),
+      "https://android-release.invalid",
+    );
+  } catch {
+    embeddedUrl = null;
+  }
+  const embeddedCacheKey = embeddedUrl?.searchParams.get("v") || "";
+  if (
+    !embeddedUrl ||
+    embeddedUrl.origin !== "https://android-release.invalid" ||
+    embeddedUrl.pathname !== canonicalApkPath ||
+    [...embeddedUrl.searchParams.keys()].length !== 1 ||
+    !isReleaseCacheKey(embeddedCacheKey, apkRelease) ||
+    embeddedUrl.hash
+  ) {
     throw new Error(
-      `Embedded Android APK URL must be the relative canonical URL ${expectedCanonicalUrl}`,
+      `Embedded Android APK URL must be a relative canonical URL for ${apkRelease.version}-${apkRelease.versionCode}`,
     );
   }
 }
@@ -546,9 +584,9 @@ if (previousVersionCode && apkRelease.versionCode <= previousVersionCode) {
 
 const apk = readFileSync(apkSource);
 const sha256 = createHash("sha256").update(apk).digest("hex");
-const canonicalApkUrl = `/downloads/jisudengchat-android.apk?v=${encodeURIComponent(
-  `${apkRelease.version}-${apkRelease.versionCode}`,
-)}`;
+const canonicalApkUrl = buildCanonicalApkUrl(
+  releaseCacheKey(apkRelease.version, apkRelease.versionCode, sha256),
+);
 const envNotes = parseNotes(
   process.env.ANDROID_RELEASE_NOTES ||
     process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES,

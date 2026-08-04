@@ -198,7 +198,8 @@ describe("Android release package version gate", () => {
       version: "2.0.66",
       latestVersion: "2.0.66",
       versionCode: 266,
-      apkUrl: "/downloads/jisudengchat-android.apk?v=2.0.66-266",
+      apkUrl:
+        "/downloads/jisudengchat-android.apk?v=2.0.66-266-90ad4c76a531bcd5e5d188e3c2d5670d77e311ad7b844d93374259cc33c3a2cc",
       builtFromCommit: expect.any(String),
       signingCertificateSha256: releaseSigningCertificateSha256,
     });
@@ -232,7 +233,8 @@ describe("Android release package version gate", () => {
       version: "2.0.66",
       latestVersion: "2.0.66",
       versionCode: 266,
-      apkUrl: "/downloads/jisudengchat-android.apk?v=2.0.66-266",
+      apkUrl:
+        "/downloads/jisudengchat-android.apk?v=2.0.66-266-90ad4c76a531bcd5e5d188e3c2d5670d77e311ad7b844d93374259cc33c3a2cc",
     });
     git(fixture.root, ["add", "public/downloads/android-version.json"]);
     git(fixture.root, ["commit", "--quiet", "-m", "publish 266"]);
@@ -325,7 +327,7 @@ describe("Android release package version gate", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(
-      "Embedded Android APK URL must be the relative canonical URL",
+      "Embedded Android APK URL must be a relative canonical URL",
     );
   });
 

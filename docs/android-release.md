@@ -44,9 +44,12 @@ the following agree on both version name and version code:
 - the Android metadata embedded in `assets/public/index.html`
   (`androidReleaseVersion` and `androidVersionCode`).
 
-It also requires the embedded APK URL to use the canonical cache key
-`?v=<versionName>-<versionCode>`. This makes a stale web-resource Android
-version a release-time error rather than a user-visible version mismatch.
+The published manifest uses a content-addressed cache key
+`?v=<versionName>-<versionCode>-<sha256>`. The SHA-256 is calculated from the
+signed APK, so replacing an artifact can never reuse a Cloudflare/browser cache
+entry. Older embedded bundles may still advertise the legacy
+`?v=<versionName>-<versionCode>` fallback; it is accepted only for that same
+release and the update/download pages always prefer the manifest URL.
 
 The APK must not bundle `assets/public/downloads/android-version.json` or an APK
 copy. Those are downloadable release artifacts, not application resources. The
