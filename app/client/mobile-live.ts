@@ -27,6 +27,7 @@ export interface StartMobileLiveSessionInput {
   requestId: string;
   instructions?: string;
   voice?: string;
+  transcriptionModel?: string;
   signal?: AbortSignal;
   onState?: (state: MobileLiveState, detail?: string) => void;
   onTranscript?: (event: MobileLiveTranscriptEvent) => void;
@@ -57,19 +58,26 @@ export function isMobileLiveWebRTCAvailable() {
   );
 }
 
+// Default Realtime transcription model. Kept as the fallback so an unset
+// preference reproduces the previous hardcoded behaviour exactly.
+export const DEFAULT_LIVE_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+
 export function mobileLiveSessionPayload(input: {
   model: string;
   locale: string;
   instructions?: string;
   voice?: string;
+  transcriptionModel?: string;
 }) {
   const language = input.locale.toLowerCase().startsWith("zh") ? "zh" : "en";
   const instructions = input.instructions?.trim();
   const voice = input.voice?.trim();
+  const transcriptionModel =
+    input.transcriptionModel?.trim() || DEFAULT_LIVE_TRANSCRIPTION_MODEL;
   return {
     model: input.model.trim(),
     modalities: ["audio", "text"],
-    input_audio_transcription: { model: "gpt-4o-mini-transcribe", language },
+    input_audio_transcription: { model: transcriptionModel, language },
     turn_detection: { type: "server_vad" },
     ...(instructions ? { instructions } : {}),
     ...(voice ? { voice } : {}),
@@ -238,6 +246,7 @@ export async function startMobileLiveSession(
         locale: input.locale,
         instructions: input.instructions,
         voice: input.voice,
+        transcriptionModel: input.transcriptionModel,
       });
       events.send(JSON.stringify({ type: "session.update", session }));
     };
@@ -278,6 +287,7 @@ export async function startMobileLiveSession(
             locale: input.locale,
             instructions: input.instructions,
             voice: input.voice,
+            transcriptionModel: input.transcriptionModel,
           }),
         }),
         signal: input.signal,

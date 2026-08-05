@@ -163,6 +163,58 @@ describe("native play welfare team competition", () => {
     expect(data.quizToday).toEqual({ enabled: true, questions: [] });
   });
 
+  test("loads the daily arena board, settlement summary, and viewer standing", async () => {
+    const calls: string[] = [];
+    const request: PlayWelfareRequest = async (path) => {
+      calls.push(path);
+      if (path === PLAY_WELFARE_ENDPOINTS.arenaDailyRewardSummary) {
+        return {
+          enabled: true,
+          recent: {
+            paid_today: true,
+            winners_count: 1,
+            total_amount: 0.5,
+            winners: [{ rank: 1, display_name: "15***@qq.com", token_sum: 7, amount: 0.5 }],
+          },
+          current: {
+            rows: [{ rank: 1, display_name: "15***@qq.com", token_sum: 3, estimated_reward: 0.5 }],
+          },
+        } as never;
+      }
+      if (path === PLAY_WELFARE_ENDPOINTS.arenaDailyCurrent) {
+        return { enabled: true, rank: 2, estimated_reward: 0.2 } as never;
+      }
+      return { path } as never;
+    };
+
+    const data = await loadPlayWelfareData(request);
+
+    expect(calls).toContain(PLAY_WELFARE_ENDPOINTS.arenaDailyRewardSummary);
+    expect(calls).toContain(PLAY_WELFARE_ENDPOINTS.arenaDailyCurrent);
+    expect(data.arenaDailyRewardSummary?.current?.rows[0]?.estimated_reward).toBe(0.5);
+    expect(data.arenaDailyRewardSummary?.recent?.paid_today).toBe(true);
+    expect(data.arenaDailyCurrent?.rank).toBe(2);
+    expect(data.unavailable).toEqual([]);
+  });
+
+  test("keeps healthy arena data visible when the daily board endpoint fails", async () => {
+    const request: PlayWelfareRequest = async (path) => {
+      if (path === PLAY_WELFARE_ENDPOINTS.arenaDailyRewardSummary) {
+        throw new Error("daily board not deployed");
+      }
+      if (path === PLAY_WELFARE_ENDPOINTS.arenaMonthlyOverview) {
+        return { enabled: true, rows: [] } as never;
+      }
+      return { path } as never;
+    };
+
+    const data = await loadPlayWelfareData(request);
+
+    expect(data.unavailable).toContain("arenaDailyRewardSummary");
+    expect(data.unavailable).not.toContain("arenaMonthlyOverview");
+    expect(data.arenaMonthlyOverview).toEqual({ enabled: true, rows: [] });
+  });
+
   test("keeps reward mutations on the existing idempotent play routes", () => {
     expect(PLAY_WELFARE_REWARD_ENDPOINTS).toEqual({
       checkin: "/api/v1/play/checkin",

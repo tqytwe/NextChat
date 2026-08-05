@@ -196,6 +196,11 @@ import {
 } from "../client/mobile-live";
 import type { MobileLiveSession, MobileLiveState } from "../client/mobile-live";
 import {
+  isChatModel,
+  isImageModel,
+  isTranscriptionModel,
+} from "../client/mobile-model-kind";
+import {
   inferLocalChatAttachmentMimeType,
   isLocalChatImage,
   isLocalChatText,
@@ -1145,6 +1150,9 @@ type MobileVoiceConversationPreferences = {
   wakeWordEnabled: boolean;
   wakeWordPhrase: string;
   ttsRate: number;
+  // Empty string = keep the server/default behaviour (no change vs. before).
+  liveTranscriptionModel: string;
+  liveVoice: string;
 };
 
 type ActiveMobileLiveConversation = {
@@ -1162,7 +1170,22 @@ const DEFAULT_VOICE_CONVERSATION_PREFERENCES: MobileVoiceConversationPreferences
     wakeWordEnabled: false,
     wakeWordPhrase: "极速蹬",
     ttsRate: 1,
+    liveTranscriptionModel: "",
+    liveVoice: "",
   };
+
+// Realtime voices are upstream session parameters, not catalog models, so they
+// come from a curated list plus a custom-entry fallback (not the group models).
+const LIVE_VOICE_OPTIONS = [
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse",
+] as const;
 
 type LocalizedString = {
   cn: string;
@@ -2158,41 +2181,6 @@ function modelLabel(model?: ManagedWorkspaceModel) {
   return model?.display_name || model?.name || model?.id || "";
 }
 
-function isImageModel(model: ManagedWorkspaceModel) {
-  const text = [
-    model.id,
-    model.name,
-    model.display_name,
-    model.use_case,
-    model.channel,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  if (/(video|audio|embedding|rerank|speech|tts|stt)/.test(text)) return false;
-  return /(gpt-image|image-preview|image|dall|flux|sdxl|stable-diffusion|imagen|recraft|midjourney|grok-imagine|绘图|生图|画图|图片|图像|海报)/.test(
-    text,
-  );
-}
-
-function isVideoModel(model: ManagedWorkspaceModel) {
-  const text = [
-    model.id,
-    model.name,
-    model.display_name,
-    model.use_case,
-    model.channel,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return /(video|影片|视频)/.test(text);
-}
-
-function isChatModel(model: ManagedWorkspaceModel) {
-  return !isImageModel(model) && !isVideoModel(model);
-}
-
 function currentChatModels(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
@@ -2204,6 +2192,16 @@ function chatModelsForGroup(
   groupID?: number,
 ) {
   return modelsForGroup(workspace, groupID).filter(isChatModel);
+}
+
+function transcriptionModelsForGroup(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+  groupID?: number,
+) {
+  return modelsForGroup(workspace, groupID)
+    .filter(isTranscriptionModel)
+    .map(modelValue)
+    .filter(Boolean);
 }
 
 function currentImageModels(
@@ -2514,6 +2512,13 @@ function readVoiceConversationPreferences(): MobileVoiceConversationPreferences 
     wakeWordPhrase:
       phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
     ttsRate: Math.min(2, Math.max(0.5, Number(stored.ttsRate) || 1)),
+    // Missing on legacy stored blobs → empty string → default behaviour.
+    liveTranscriptionModel: String(stored.liveTranscriptionModel || "")
+      .trim()
+      .slice(0, 128),
+    liveVoice: String(stored.liveVoice || "")
+      .trim()
+      .slice(0, 64),
   };
 }
 
@@ -5085,7 +5090,24 @@ function VoiceConversationSheet(props: {
   onStopSpeaking: () => void;
   onStartLive: () => void;
   onStopLive: () => void;
+  transcriptionModels: string[];
 }) {
+  // Custom-entry mode lets a user type a model/voice not in the curated list.
+  // Seeded from a stored value that isn't one of the known options.
+  const [asrCustom, setAsrCustom] = useState(
+    () =>
+      Boolean(props.preferences.liveTranscriptionModel) &&
+      !props.transcriptionModels.includes(
+        props.preferences.liveTranscriptionModel,
+      ),
+  );
+  const [voiceCustom, setVoiceCustom] = useState(
+    () =>
+      Boolean(props.preferences.liveVoice) &&
+      !LIVE_VOICE_OPTIONS.includes(
+        props.preferences.liveVoice as (typeof LIVE_VOICE_OPTIONS)[number],
+      ),
+  );
   if (!props.open) return null;
   const update = (patch: Partial<MobileVoiceConversationPreferences>) => {
     const next = { ...props.preferences, ...patch };
@@ -5093,6 +5115,13 @@ function VoiceConversationSheet(props: {
     props.onChange(next);
   };
   const rateLabel = `${Number(props.preferences.ttsRate || 1).toFixed(1)}x`;
+  const CUSTOM_OPTION = "__custom__";
+  const asrSelectValue = asrCustom
+    ? CUSTOM_OPTION
+    : props.preferences.liveTranscriptionModel;
+  const voiceSelectValue = voiceCustom
+    ? CUSTOM_OPTION
+    : props.preferences.liveVoice;
 
   return (
     <div className={styles["sheet-mask"]} onClick={props.onClose}>
@@ -5241,6 +5270,94 @@ function VoiceConversationSheet(props: {
               }
             />
           </label>
+
+          <label
+            className={clsx(styles["voice-settings-field"], {
+              [styles["disabled"]]: !props.preferences.enabled,
+            })}
+          >
+            <span>{props.text.chat.liveTranscriptionModel}</span>
+            <select
+              disabled={!props.preferences.enabled}
+              value={asrSelectValue}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                if (value === CUSTOM_OPTION) {
+                  setAsrCustom(true);
+                  return;
+                }
+                setAsrCustom(false);
+                update({ liveTranscriptionModel: value });
+              }}
+            >
+              <option value="">{props.text.chat.liveModelDefault}</option>
+              {props.transcriptionModels.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+              <option value={CUSTOM_OPTION}>
+                {props.text.chat.liveModelCustom}
+              </option>
+            </select>
+          </label>
+          {props.preferences.enabled && asrCustom && (
+            <label className={styles["voice-settings-field"]}>
+              <span>{props.text.chat.liveModelCustom}</span>
+              <input
+                value={props.preferences.liveTranscriptionModel}
+                maxLength={128}
+                placeholder={props.text.chat.liveModelCustomPlaceholder}
+                onChange={(event) =>
+                  update({ liveTranscriptionModel: event.currentTarget.value })
+                }
+              />
+            </label>
+          )}
+
+          <label
+            className={clsx(styles["voice-settings-field"], {
+              [styles["disabled"]]: !props.preferences.enabled,
+            })}
+          >
+            <span>{props.text.chat.liveVoiceName}</span>
+            <select
+              disabled={!props.preferences.enabled}
+              value={voiceSelectValue}
+              onChange={(event) => {
+                const value = event.currentTarget.value;
+                if (value === CUSTOM_OPTION) {
+                  setVoiceCustom(true);
+                  return;
+                }
+                setVoiceCustom(false);
+                update({ liveVoice: value });
+              }}
+            >
+              <option value="">{props.text.chat.liveModelDefault}</option>
+              {LIVE_VOICE_OPTIONS.map((voice) => (
+                <option key={voice} value={voice}>
+                  {voice}
+                </option>
+              ))}
+              <option value={CUSTOM_OPTION}>
+                {props.text.chat.liveModelCustom}
+              </option>
+            </select>
+          </label>
+          {props.preferences.enabled && voiceCustom && (
+            <label className={styles["voice-settings-field"]}>
+              <span>{props.text.chat.liveModelCustom}</span>
+              <input
+                value={props.preferences.liveVoice}
+                maxLength={64}
+                placeholder={props.text.chat.liveVoiceCustomPlaceholder}
+                onChange={(event) =>
+                  update({ liveVoice: event.currentTarget.value })
+                }
+              />
+            </label>
+          )}
 
           {(props.listening || props.speaking) && (
             <div className={styles["voice-settings-state"]}>
@@ -7104,6 +7221,12 @@ function AndroidChat() {
         ),
         continuous: Boolean(next.enabled && next.continuous),
         ttsRate: Math.min(2, Math.max(0.5, Number(next.ttsRate) || 1)),
+        liveTranscriptionModel: String(next.liveTranscriptionModel || "")
+          .trim()
+          .slice(0, 128),
+        liveVoice: String(next.liveVoice || "")
+          .trim()
+          .slice(0, 64),
       };
       writeStoredJSON(VOICE_CONVERSATION_STORAGE_KEY, normalized);
       return normalized;
@@ -7195,6 +7318,9 @@ function AndroidChat() {
         instructions: text.dateLocale.toLowerCase().startsWith("zh")
           ? "使用自然、简洁的中文对话。"
           : "Use natural, concise conversation.",
+        // Empty preference → undefined → mobile-live keeps its prior defaults.
+        transcriptionModel: voicePreferences.liveTranscriptionModel || undefined,
+        voice: voicePreferences.liveVoice || undefined,
         signal: controller.signal,
         onState: (state, detail) => {
           if (controller.signal.aborted) return;
@@ -9279,6 +9405,10 @@ function AndroidChat() {
           speaking={voiceSpeaking}
           liveState={liveVoiceState}
           liveAvailable={liveVoiceAvailable}
+          transcriptionModels={transcriptionModelsForGroup(
+            workspace,
+            effectiveChatGroupId,
+          )}
           onClose={() => setVoiceSettingsOpen(false)}
           onChange={(next) => updateVoicePreferences(() => next)}
           onStopSpeaking={() => void stopVoiceSpeaking()}
@@ -17891,6 +18021,10 @@ function AndroidAccountSettings() {
     const arenaOverview = welfareData?.arenaMonthlyOverview;
     const arenaRows = arenaOverview?.rows || [];
     const latestArenaHistory = arenaOverview?.history?.[0];
+    const arenaDailySummary = welfareData?.arenaDailyRewardSummary;
+    const arenaDailyRows = arenaDailySummary?.current?.rows || [];
+    const arenaDailyRecent = arenaDailySummary?.recent;
+    const arenaDailyCurrent = welfareData?.arenaDailyCurrent;
     const inviteQualified = inviteCampaign?.qualified_count || 0;
     const inviteRank = inviteCampaign?.ranking?.rank;
     const checkinStatus = welfareData?.checkinStatus;
@@ -18779,6 +18913,93 @@ function AndroidAccountSettings() {
                         <small>{latestArenaHistory.period?.name || ""}</small>
                       </span>
                       <em>{formatMoney(winner.reward_amount)}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoRewards}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareArenaDailyLeaderboard}</h2>
+                <span>{arenaDailyCurrent?.period?.name || ""}</span>
+              </div>
+              {arenaDailyCurrent &&
+              (arenaDailyCurrent.rank || arenaDailyCurrent.estimated_reward) ? (
+                <div className={styles["meta-list"]}>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaDailyCurrentRank}</span>
+                    <strong>
+                      {arenaDailyCurrent.rank
+                        ? `#${arenaDailyCurrent.rank}`
+                        : text.account.inviteGrowthNotRanked}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaTokensToPrev}</span>
+                    <strong>
+                      {arenaDailyCurrent.tokens_to_prev_rank || 0}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaDailyEstimatedReward}</span>
+                    <strong>
+                      {formatMoney(arenaDailyCurrent.estimated_reward)}
+                    </strong>
+                  </div>
+                </div>
+              ) : null}
+              {arenaDailyRows.length ? (
+                <div className={styles["welfare-rank-list"]}>
+                  {arenaDailyRows.map((row) => (
+                    <div key={`${row.rank}-${row.display_name}`}>
+                      <strong>#{row.rank}</strong>
+                      <span>
+                        <b>{row.display_name}</b>
+                        <small>
+                          {text.account.welfareScore}: {row.token_sum}
+                        </small>
+                      </span>
+                      <em>{formatMoney(row.estimated_reward)}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoLeaderboard}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareArenaDailyRewards}</h2>
+                <span>
+                  {arenaDailyRecent
+                    ? `${text.account.welfareRewardsIssued}: ${formatMoney(
+                        arenaDailyRecent.total_amount,
+                      )} · ${
+                        arenaDailyRecent.paid_today
+                          ? text.account.welfareArenaDailyPaid
+                          : text.account.welfareArenaDailyPayoutPending
+                      }`
+                    : text.notSynced}
+                </span>
+              </div>
+              {arenaDailyRecent?.winners?.length ? (
+                <div className={styles["welfare-rank-list"]}>
+                  {arenaDailyRecent.winners.slice(0, 10).map((winner) => (
+                    <div key={`${winner.rank}-${winner.display_name}`}>
+                      <strong>#{winner.rank}</strong>
+                      <span>
+                        <b>{winner.display_name}</b>
+                        <small>{arenaDailyRecent.period?.name || ""}</small>
+                      </span>
+                      <em>{formatMoney(winner.amount)}</em>
                     </div>
                   ))}
                 </div>
