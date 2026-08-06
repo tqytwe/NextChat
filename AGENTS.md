@@ -1,7 +1,18 @@
 # 极速蹬 NextChat Managed 开发约束
 
-本仓库当前生产集成分支是 `feat/sub2api-managed-20260720`。修改任何可见界面、
-样式、图标、托管状态或交互前，必须先完整读取：
+本仓库当前 Managed Web 生产分支是 `feat/sub2api-managed-20260720`。`main` 是
+Fork 参考线并包含独立 Android/移动端开发，不是 Managed Web 生产分支，也不是
+官方上游镜像。官方上游、精确基准、同步、CI、部署、回滚和分支生命周期以：
+
+- `docs/UPSTREAM_SYNC_PLAYBOOK.md`
+- `DEPLOYMENT.md`
+
+为准。Managed Web 工作只修改 `tqytwe/NextChat`；除非用户另行明确授权，不修改
+`tqytwe/sub2api`，不纳入 Android、Capacitor、Gradle、APK 或原生移动端功能。
+依赖安装、测试、类型检查和构建只通过 GitHub Actions 执行，不在用户本地电脑编译。
+短期开发分支完成 PR 合并、CI、部署和 ancestry 验证后必须删除。
+
+修改任何可见界面、样式、图标、托管状态或交互前，必须先完整读取：
 
 - `docs/MANAGED_UI_DESIGN_SYSTEM.md`
 - `docs/SUB2API_MANAGED_MODE.md`
@@ -15,7 +26,9 @@
 4. 检查桌面、移动、短屏、浅色、深色、键盘焦点和 reduced-motion。
 5. 新增 `docs/visual-reviews/YYYY-MM-DD-<slug>.md`，记录当前与修改后画面、
    状态、视口和聊天核心无回归证据；只读 JSX/SCSS 不算完成视觉检查。
-6. 运行 `yarn design:check`、相关测试、`yarn test:ci` 和 `yarn build`。
+6. 推送短期分支，由 GitHub Actions 运行 `yarn design:check`、相关测试、
+   `yarn test:ci` 和 `yarn build`；不得在用户本地电脑执行这些编译/测试命令。
+7. PR 合入生产分支并确认 CI、部署 SHA、健康状态和适用验收后，立即删除短期分支。
 
 ## Managed 范围
 

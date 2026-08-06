@@ -1,3 +1,12 @@
+> [!IMPORTANT]
+> This fork's Sub2API Managed Web production source is
+> `tqytwe/NextChat:feat/sub2api-managed-20260720`. Do not deploy `main` for the
+> Managed product. Android/mobile development is an independent product line and
+> is excluded from Managed Web upstream synchronization. The exact official
+> baseline is `ChatGPTNextWeb/NextChat@706a18b` (`v2.16.1-54-g706a18b`). See
+> [DEPLOYMENT.md](./DEPLOYMENT.md) and
+> [docs/UPSTREAM_SYNC_PLAYBOOK.md](./docs/UPSTREAM_SYNC_PLAYBOOK.md).
+
 <div align="center">
 
 <a href='https://nextchat.club'>

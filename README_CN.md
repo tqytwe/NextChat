@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> 本 Fork 的 Sub2API Managed Web 生产代码来自
+> `tqytwe/NextChat:feat/sub2api-managed-20260720`，禁止将 `main` 用作 Managed
+> 生产部署。Android/移动端是独立产品线，不纳入 Managed Web 上游同步。精确官方
+> 基准为 `ChatGPTNextWeb/NextChat@706a18b`（`v2.16.1-54-g706a18b`）。开发、
+> GitHub CI、部署、回滚和分支清理规则见 [DEPLOYMENT.md](./DEPLOYMENT.md) 与
+> [上游同步手册](./docs/UPSTREAM_SYNC_PLAYBOOK.md)。
+
 <div align="center">
 
 <a href='#企业版'>
