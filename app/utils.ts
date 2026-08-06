@@ -280,6 +280,10 @@ export function getMessageImages(message: RequestMessage): string[] {
   return urls;
 }
 
+export function hasMessageImages(messages: RequestMessage[]) {
+  return messages.some((message) => getMessageImages(message).length > 0);
+}
+
 export function isVisionModel(model: string) {
   const visionModels = useAccessStore.getState().visionModels;
   const envVisionModels = visionModels?.split(",").map((m) => m.trim());

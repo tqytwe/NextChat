@@ -40,6 +40,7 @@ import { getClientConfig } from "@/app/config/client";
 import { withBasePath } from "@/app/utils/api-path";
 import {
   getMessageTextContent,
+  hasMessageImages,
   isVisionModel,
   isDalle3 as _isDalle3,
   getTimeoutMSByModel,
@@ -218,9 +219,10 @@ export class ChatGPTApi implements LLMApi {
       };
     } else {
       const visionModel = isVisionModel(options.config.model);
+      const preserveImageContent = hasMessageImages(options.messages);
       const messages: ChatOptions["messages"] = [];
       for (const v of options.messages) {
-        const content = visionModel
+        const content = preserveImageContent
           ? await preProcessImageContent(v.content)
           : getMessageTextContent(v);
         if (!(isO1OrO3 && v.role === "system"))

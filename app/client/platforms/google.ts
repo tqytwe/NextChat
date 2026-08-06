@@ -21,7 +21,7 @@ import { GEMINI_BASE_URL } from "@/app/constant";
 import {
   getMessageTextContent,
   getMessageImages,
-  isVisionModel,
+  hasMessageImages,
   getTimeoutMSByModel,
 } from "@/app/utils";
 import { preProcessImageContent } from "@/app/utils/chat";
@@ -91,6 +91,7 @@ export class GeminiProApi implements LLMApi {
   async chat(options: ChatOptions): Promise<void> {
     const apiClient = this;
     let multimodal = false;
+    const preserveImageContent = hasMessageImages(options.messages);
 
     // try get base64image from local cache image_url
     const _messages: ChatOptions["messages"] = [];
@@ -100,7 +101,7 @@ export class GeminiProApi implements LLMApi {
     }
     const messages = _messages.map((v) => {
       let parts: any[] = [{ text: getMessageTextContent(v) }];
-      if (isVisionModel(options.config.model)) {
+      if (preserveImageContent) {
         const images = getMessageImages(v);
         if (images.length > 0) {
           multimodal = true;

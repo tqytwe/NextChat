@@ -25,7 +25,7 @@ import {
   getMessageTextContent,
   getMessageTextContentWithoutThinking,
   getTimeoutMSByModel,
-  isVisionModel,
+  hasMessageImages,
 } from "@/app/utils";
 import { fetch } from "@/app/utils/stream";
 
@@ -102,12 +102,12 @@ export class QwenApi implements LLMApi {
       },
     };
 
-    const visionModel = isVisionModel(options.config.model);
+    const preserveImageContent = hasMessageImages(options.messages);
 
     const messages: ChatOptions["messages"] = [];
     for (const v of options.messages) {
       const content = (
-        visionModel
+        preserveImageContent
           ? await preProcessImageContentForAlibabaDashScope(v.content)
           : v.role === "assistant"
           ? getMessageTextContentWithoutThinking(v)
