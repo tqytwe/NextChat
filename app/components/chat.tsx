@@ -566,6 +566,7 @@ export function ChatActions(props: {
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [showGroupSelector, setShowGroupSelector] = useState(false);
   const [showPluginSelector, setShowPluginSelector] = useState(false);
+  // design-governance-allow: visual-evidence - preserve image uploads for managed model compatibility without changing layout
   const showUploadImage = true;
 
   const [showSizeSelector, setShowSizeSelector] = useState(false);
