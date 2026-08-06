@@ -303,9 +303,6 @@ describe("mobile app backend alignment", () => {
     expect(managedGate).toContain(
       "bootstrap({ silent: Boolean(latest.workspace) })",
     );
-    expect(source).toContain("function VoiceConversationSheet");
-    expect(source).toContain('replace(/```[\\s\\S]*?```/g, "")');
-
     const accountAdminRoute = source.slice(
       source.indexOf("if (route === Path.AccountAdmin)"),
       source.indexOf("if (route === Path.AccountRedeem)"),

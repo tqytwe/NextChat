@@ -140,7 +140,6 @@ import {
   requestMicrophonePermission,
   requestNotificationPermission,
   cancelForegroundPttSession,
-  cancelAllForegroundWakeWordSessions,
   notifyForegroundPttRouteChange,
   recognizeSpeech,
   saveImageToAppStorage,
@@ -152,11 +151,8 @@ import {
   isDirectNativeStreamAvailable,
   startDirectNativeStreamRequest,
   startForegroundPttSession,
-  startForegroundWakeWordSession,
   startNativeDownload,
-  speakNativeText,
   stopForegroundPttSession,
-  stopNativeSpeech,
   readNativeSharedMaterial,
   loadLoginCredentials,
   saveLoginCredentials,
@@ -168,7 +164,6 @@ import type {
   NativeAppImage,
   NativeForegroundPttSession,
   NativeSharedMaterial,
-  NativeWakeWordSession,
 } from "../client/android-native";
 import {
   deleteLocalMaterials,
@@ -190,16 +185,7 @@ import {
   MOBILE_WEB_SEARCH_TOOL,
   runMobileWebSearchToolLoop,
 } from "../client/mobile-chat-tools";
-import {
-  isMobileLiveWebRTCAvailable,
-  startMobileLiveSession,
-} from "../client/mobile-live";
-import type { MobileLiveSession, MobileLiveState } from "../client/mobile-live";
-import {
-  isChatModel,
-  isImageModel,
-  isTranscriptionModel,
-} from "../client/mobile-model-kind";
+import { isChatModel, isImageModel } from "../client/mobile-model-kind";
 import {
   inferLocalChatAttachmentMimeType,
   isLocalChatImage,
@@ -1144,49 +1130,6 @@ type GalleryPreference = {
 
 type GalleryPreferences = Record<string, GalleryPreference>;
 
-type MobileVoiceConversationPreferences = {
-  enabled: boolean;
-  continuous: boolean;
-  wakeWordEnabled: boolean;
-  wakeWordPhrase: string;
-  ttsRate: number;
-  // Empty string = keep the server/default behaviour (no change vs. before).
-  liveTranscriptionModel: string;
-  liveVoice: string;
-};
-
-type ActiveMobileLiveConversation = {
-  sessionId: string;
-  assistantMessageId: string;
-  model: string;
-  groupId: number;
-  lastUserTranscript: string;
-};
-
-const DEFAULT_VOICE_CONVERSATION_PREFERENCES: MobileVoiceConversationPreferences =
-  {
-    enabled: false,
-    continuous: false,
-    wakeWordEnabled: false,
-    wakeWordPhrase: "极速蹬",
-    ttsRate: 1,
-    liveTranscriptionModel: "",
-    liveVoice: "",
-  };
-
-// Realtime voices are upstream session parameters, not catalog models, so they
-// come from a curated list plus a custom-entry fallback (not the group models).
-const LIVE_VOICE_OPTIONS = [
-  "alloy",
-  "ash",
-  "ballad",
-  "coral",
-  "echo",
-  "sage",
-  "shimmer",
-  "verse",
-] as const;
-
 type LocalizedString = {
   cn: string;
   en: string;
@@ -1271,7 +1214,6 @@ const PAYMENT_RESULT_FALLBACK_URL = "https://www.jisudeng.com/payment/result";
 const GALLERY_PREF_STORAGE_KEY = "jisudengchat-gallery-preferences-v1";
 const IMAGE_PREF_STORAGE_KEY = "jisudengchat-image-preferences-v1";
 const CHAT_PREF_STORAGE_KEY = "jisudengchat-chat-preferences-v1";
-const VOICE_CONVERSATION_STORAGE_KEY = "jisudengchat-voice-conversation-v1";
 const NATIVE_SHARE_DRAFT_KEY = "jisudengchat-native-share-draft-v1";
 const CRASH_LOG_STORAGE_KEY = "nextchat-mobile-crash-log";
 const DIAGNOSTICS_CURSOR_STORAGE_KEY = "jisudengchat-diagnostics-last-sent-v1";
@@ -2194,16 +2136,6 @@ function chatModelsForGroup(
   return modelsForGroup(workspace, groupID).filter(isChatModel);
 }
 
-function transcriptionModelsForGroup(
-  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
-  groupID?: number,
-) {
-  return modelsForGroup(workspace, groupID)
-    .filter(isTranscriptionModel)
-    .map(modelValue)
-    .filter(Boolean);
-}
-
 function currentImageModels(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
@@ -2495,41 +2427,6 @@ function readChatPreference() {
   return normalizeMobileChatPreference(
     readStoredJSON(CHAT_PREF_STORAGE_KEY, { groupId: 0, model: "" }),
   );
-}
-
-function readVoiceConversationPreferences(): MobileVoiceConversationPreferences {
-  const stored = readStoredJSON(
-    VOICE_CONVERSATION_STORAGE_KEY,
-    DEFAULT_VOICE_CONVERSATION_PREFERENCES,
-  );
-  const phrase = String(stored.wakeWordPhrase || "")
-    .trim()
-    .slice(0, 64);
-  return {
-    enabled: Boolean(stored.enabled),
-    continuous: Boolean(stored.continuous),
-    wakeWordEnabled: Boolean(stored.wakeWordEnabled) && Boolean(phrase),
-    wakeWordPhrase:
-      phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
-    ttsRate: Math.min(2, Math.max(0.5, Number(stored.ttsRate) || 1)),
-    // Missing on legacy stored blobs → empty string → default behaviour.
-    liveTranscriptionModel: String(stored.liveTranscriptionModel || "")
-      .trim()
-      .slice(0, 128),
-    liveVoice: String(stored.liveVoice || "")
-      .trim()
-      .slice(0, 64),
-  };
-}
-
-function plainVoiceText(value: string) {
-  return value
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/!?(?:\[[^\]]*\])?\([^)]*\)/g, "")
-    .replace(/[`*_>#]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 3800);
 }
 
 function resolveChatPreference(
@@ -5077,311 +4974,6 @@ function ChoiceSheet(props: {
   );
 }
 
-function VoiceConversationSheet(props: {
-  open: boolean;
-  text: ManagedMobileText;
-  preferences: MobileVoiceConversationPreferences;
-  listening: boolean;
-  speaking: boolean;
-  liveState: MobileLiveState;
-  liveAvailable: boolean;
-  onClose: () => void;
-  onChange: (next: MobileVoiceConversationPreferences) => void;
-  onStopSpeaking: () => void;
-  onStartLive: () => void;
-  onStopLive: () => void;
-  transcriptionModels: string[];
-}) {
-  // Custom-entry mode lets a user type a model/voice not in the curated list.
-  // Seeded from a stored value that isn't one of the known options.
-  const [asrCustom, setAsrCustom] = useState(
-    () =>
-      Boolean(props.preferences.liveTranscriptionModel) &&
-      !props.transcriptionModels.includes(
-        props.preferences.liveTranscriptionModel,
-      ),
-  );
-  const [voiceCustom, setVoiceCustom] = useState(
-    () =>
-      Boolean(props.preferences.liveVoice) &&
-      !LIVE_VOICE_OPTIONS.includes(
-        props.preferences.liveVoice as (typeof LIVE_VOICE_OPTIONS)[number],
-      ),
-  );
-  if (!props.open) return null;
-  const update = (patch: Partial<MobileVoiceConversationPreferences>) => {
-    const next = { ...props.preferences, ...patch };
-    if (!next.enabled) next.wakeWordEnabled = false;
-    props.onChange(next);
-  };
-  const rateLabel = `${Number(props.preferences.ttsRate || 1).toFixed(1)}x`;
-  const CUSTOM_OPTION = "__custom__";
-  const asrSelectValue = asrCustom
-    ? CUSTOM_OPTION
-    : props.preferences.liveTranscriptionModel;
-  const voiceSelectValue = voiceCustom
-    ? CUSTOM_OPTION
-    : props.preferences.liveVoice;
-
-  return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
-      <aside
-        className={clsx(
-          styles["session-sheet"],
-          styles["voice-settings-sheet"],
-        )}
-        role="dialog"
-        aria-modal="true"
-        aria-label={props.text.chat.voiceConversation}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className={styles["sheet-head"]}>
-          <div>
-            <h2>{props.text.chat.voiceConversation}</h2>
-            <small>{props.text.chat.voiceConversationHint}</small>
-          </div>
-          <IconButton label={props.text.common.close} onClick={props.onClose}>
-            <CloseIcon />
-          </IconButton>
-        </div>
-
-        <div className={styles["voice-settings-list"]}>
-          <label className={styles["voice-settings-toggle"]}>
-            <span>
-              <strong>{props.text.chat.voiceConversation}</strong>
-              <small>{props.text.chat.voiceConversationHint}</small>
-            </span>
-            <input
-              type="checkbox"
-              checked={props.preferences.enabled}
-              onChange={(event) =>
-                update({ enabled: event.currentTarget.checked })
-              }
-            />
-          </label>
-
-          {props.preferences.enabled && (
-            <button
-              type="button"
-              className={styles["voice-live-action"]}
-              disabled={
-                !props.liveAvailable || props.liveState === "connecting"
-              }
-              onClick={() => {
-                if (props.liveState === "connected") {
-                  props.onStopLive();
-                } else {
-                  props.onStartLive();
-                }
-              }}
-            >
-              <VoiceIcon />
-              <span>
-                {props.liveState === "connected"
-                  ? props.text.chat.liveVoiceStop
-                  : props.liveState === "connecting"
-                  ? props.text.chat.liveVoiceConnecting
-                  : props.text.chat.liveVoiceStart}
-              </span>
-            </button>
-          )}
-          {props.preferences.enabled && !props.liveAvailable && (
-            <small className={styles["voice-live-unavailable"]}>
-              {props.text.chat.liveVoiceUnavailable}
-            </small>
-          )}
-
-          <label
-            className={clsx(styles["voice-settings-toggle"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>
-              <strong>{props.text.chat.continuousVoice}</strong>
-              <small>{props.text.chat.continuousVoiceHint}</small>
-            </span>
-            <input
-              type="checkbox"
-              disabled={!props.preferences.enabled}
-              checked={
-                props.preferences.enabled && props.preferences.continuous
-              }
-              onChange={(event) =>
-                update({ continuous: event.currentTarget.checked })
-              }
-            />
-          </label>
-
-          <label
-            className={clsx(styles["voice-settings-toggle"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>
-              <strong>{props.text.chat.wakeWord}</strong>
-              <small>{props.text.chat.wakeWordHint}</small>
-            </span>
-            <input
-              type="checkbox"
-              disabled={!props.preferences.enabled}
-              checked={
-                props.preferences.enabled && props.preferences.wakeWordEnabled
-              }
-              onChange={(event) =>
-                update({ wakeWordEnabled: event.currentTarget.checked })
-              }
-            />
-          </label>
-
-          <label
-            className={clsx(styles["voice-settings-field"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>{props.text.chat.wakeWordPhrase}</span>
-            <input
-              value={props.preferences.wakeWordPhrase}
-              maxLength={64}
-              disabled={!props.preferences.enabled}
-              placeholder={props.text.chat.wakeWordPlaceholder}
-              onChange={(event) =>
-                update({ wakeWordPhrase: event.currentTarget.value })
-              }
-            />
-          </label>
-
-          <label
-            className={clsx(styles["voice-settings-field"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>
-              {props.text.chat.voicePlaybackRate} <em>{rateLabel}</em>
-            </span>
-            <input
-              type="range"
-              min="0.5"
-              max="2"
-              step="0.1"
-              disabled={!props.preferences.enabled}
-              value={props.preferences.ttsRate}
-              onChange={(event) =>
-                update({ ttsRate: Number(event.currentTarget.value) || 1 })
-              }
-            />
-          </label>
-
-          <label
-            className={clsx(styles["voice-settings-field"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>{props.text.chat.liveTranscriptionModel}</span>
-            <select
-              disabled={!props.preferences.enabled}
-              value={asrSelectValue}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                if (value === CUSTOM_OPTION) {
-                  setAsrCustom(true);
-                  return;
-                }
-                setAsrCustom(false);
-                update({ liveTranscriptionModel: value });
-              }}
-            >
-              <option value="">{props.text.chat.liveModelDefault}</option>
-              {props.transcriptionModels.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-              <option value={CUSTOM_OPTION}>
-                {props.text.chat.liveModelCustom}
-              </option>
-            </select>
-          </label>
-          {props.preferences.enabled && asrCustom && (
-            <label className={styles["voice-settings-field"]}>
-              <span>{props.text.chat.liveModelCustom}</span>
-              <input
-                value={props.preferences.liveTranscriptionModel}
-                maxLength={128}
-                placeholder={props.text.chat.liveModelCustomPlaceholder}
-                onChange={(event) =>
-                  update({ liveTranscriptionModel: event.currentTarget.value })
-                }
-              />
-            </label>
-          )}
-
-          <label
-            className={clsx(styles["voice-settings-field"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>{props.text.chat.liveVoiceName}</span>
-            <select
-              disabled={!props.preferences.enabled}
-              value={voiceSelectValue}
-              onChange={(event) => {
-                const value = event.currentTarget.value;
-                if (value === CUSTOM_OPTION) {
-                  setVoiceCustom(true);
-                  return;
-                }
-                setVoiceCustom(false);
-                update({ liveVoice: value });
-              }}
-            >
-              <option value="">{props.text.chat.liveModelDefault}</option>
-              {LIVE_VOICE_OPTIONS.map((voice) => (
-                <option key={voice} value={voice}>
-                  {voice}
-                </option>
-              ))}
-              <option value={CUSTOM_OPTION}>
-                {props.text.chat.liveModelCustom}
-              </option>
-            </select>
-          </label>
-          {props.preferences.enabled && voiceCustom && (
-            <label className={styles["voice-settings-field"]}>
-              <span>{props.text.chat.liveModelCustom}</span>
-              <input
-                value={props.preferences.liveVoice}
-                maxLength={64}
-                placeholder={props.text.chat.liveVoiceCustomPlaceholder}
-                onChange={(event) =>
-                  update({ liveVoice: event.currentTarget.value })
-                }
-              />
-            </label>
-          )}
-
-          {(props.listening || props.speaking) && (
-            <div className={styles["voice-settings-state"]}>
-              <VoiceIcon />
-              <span>
-                {props.speaking
-                  ? props.text.chat.voiceStopSpeaking
-                  : props.text.chat.wakeWordListening(
-                      props.preferences.wakeWordPhrase,
-                    )}
-              </span>
-              {props.speaking && (
-                <button type="button" onClick={props.onStopSpeaking}>
-                  {props.text.chat.voiceStopSpeaking}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </aside>
-    </div>
-  );
-}
-
 function LibrarySheet(props: {
   open: boolean;
   title: string;
@@ -6560,16 +6152,6 @@ function AndroidChat() {
   const selectedModelIsAvailable =
     Boolean(selectedModel) &&
     models.some((model) => modelValue(model) === selectedModel);
-  const selectedManagedModel = models.find(
-    (model) => modelValue(model) === selectedModel,
-  );
-  const liveVoiceAvailable = Boolean(
-    effectiveChatGroupId &&
-      groups.find((group) => group.id === effectiveChatGroupId)
-        ?.live_available &&
-      selectedManagedModel?.tool_capabilities?.live &&
-      isMobileLiveWebRTCAvailable(),
-  );
   const webSearchServiceAvailable = isMobileWebSearchAvailable(
     managed.mobileProtocol,
   );
@@ -6578,7 +6160,6 @@ function AndroidChat() {
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
   const [skillSheetOpen, setSkillSheetOpen] = useState(false);
-  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
   const activeAgent =
     CHAT_AGENT_TEMPLATES.find(
@@ -6593,14 +6174,6 @@ function AndroidChat() {
   const [voiceBarOpen, setVoiceBarOpen] = useState(false);
   const [voiceCancelling, setVoiceCancelling] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
-  const [voicePreferences, setVoicePreferences] = useState(
-    readVoiceConversationPreferences,
-  );
-  const [wakeWordListening, setWakeWordListening] = useState(false);
-  const [wakeWordStatus, setWakeWordStatus] = useState("");
-  const [voiceSpeaking, setVoiceSpeaking] = useState(false);
-  const [liveVoiceState, setLiveVoiceState] =
-    useState<MobileLiveState>("disconnected");
   const [groupSwitching, setGroupSwitching] = useState(false);
   const [chatError, setChatError] = useState("");
   const [quotedMessage, setQuotedMessage] = useState<QuotedChatMessage | null>(
@@ -6622,13 +6195,6 @@ function AndroidChat() {
   const voicePttSessionRef = useRef<NativeForegroundPttSession | null>(null);
   const voicePttSessionIdRef = useRef("");
   const voiceAutoSendRef = useRef(false);
-  const wakeWordSessionRef = useRef<NativeWakeWordSession | null>(null);
-  const liveVoiceSessionRef = useRef<MobileLiveSession | null>(null);
-  const liveVoiceAbortRef = useRef<AbortController | null>(null);
-  const activeLiveConversationRef = useRef<ActiveMobileLiveConversation | null>(
-    null,
-  );
-  const voicePreferencesRef = useRef(voicePreferences);
   const listRef = useRef<HTMLDivElement | null>(null);
   const autoFollowRef = useRef(true);
   const lastScrolledSessionRef = useRef("");
@@ -7204,239 +6770,9 @@ function AndroidChat() {
     }
   }
 
-  function updateVoicePreferences(
-    updater: (
-      current: MobileVoiceConversationPreferences,
-    ) => MobileVoiceConversationPreferences,
-  ) {
-    setVoicePreferences((current) => {
-      const next = updater(current);
-      const phrase = next.wakeWordPhrase.trim().slice(0, 64);
-      const normalized = {
-        ...next,
-        wakeWordPhrase:
-          phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
-        wakeWordEnabled: Boolean(
-          next.enabled && next.wakeWordEnabled && phrase,
-        ),
-        continuous: Boolean(next.enabled && next.continuous),
-        ttsRate: Math.min(2, Math.max(0.5, Number(next.ttsRate) || 1)),
-        liveTranscriptionModel: String(next.liveTranscriptionModel || "")
-          .trim()
-          .slice(0, 128),
-        liveVoice: String(next.liveVoice || "")
-          .trim()
-          .slice(0, 64),
-      };
-      writeStoredJSON(VOICE_CONVERSATION_STORAGE_KEY, normalized);
-      return normalized;
-    });
-  }
-
-  async function stopVoiceSpeaking() {
-    try {
-      await stopNativeSpeech();
-    } finally {
-      setVoiceSpeaking(false);
-    }
-  }
-
-  async function stopLiveVoiceConversation(reason = "user_ended") {
-    const controller = liveVoiceAbortRef.current;
-    liveVoiceAbortRef.current = null;
-    controller?.abort();
-    const live = liveVoiceSessionRef.current;
-    liveVoiceSessionRef.current = null;
-    activeLiveConversationRef.current = null;
-    try {
-      await live?.close(reason);
-    } finally {
-      setLiveVoiceState("disconnected");
-    }
-  }
-
-  async function startLiveVoiceConversation() {
-    if (liveVoiceState === "connecting" || liveVoiceState === "connected") {
-      return;
-    }
-    if (!liveVoiceAvailable) {
-      setChatError(text.chat.liveVoiceUnavailable);
-      return;
-    }
-    const groupId = effectiveChatGroupId || 0;
-    const model = selectedModel || fallbackModel;
-    if (!groupId || !model || !selectedModelIsAvailable || !managed.session) {
-      setChatError(text.errors.noModel);
-      return;
-    }
-
-    const controller = new AbortController();
-    liveVoiceAbortRef.current = controller;
-    setChatError("");
-    setLiveVoiceState("connecting");
-    try {
-      await stopVoiceSpeaking();
-      await cancelForegroundPttSession(
-        voicePttSessionIdRef.current,
-        "live_started",
-      ).catch(() => undefined);
-      await cancelAllForegroundWakeWordSessions("live_started");
-      wakeWordSessionRef.current?.unsubscribe();
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
-      setListening(false);
-
-      let activeManaged = useManagedNextChatStore.getState();
-      if (shouldRefreshManagedSession(activeManaged.session)) {
-        await managed.bootstrap({ silent: true });
-        activeManaged = useManagedNextChatStore.getState();
-      }
-      if (currentGroupID(activeManaged.workspace) !== groupId) {
-        await managed.switchGroup(groupId);
-        activeManaged = useManagedNextChatStore.getState();
-      }
-      if (!activeManaged.session?.api_key) {
-        throw new Error(text.errors.loginRequired);
-      }
-      if (controller.signal.aborted) {
-        throw new DOMException("Aborted", "AbortError");
-      }
-
-      activeLiveConversationRef.current = {
-        sessionId: currentSession?.id || "",
-        assistantMessageId: "",
-        model,
-        groupId,
-        lastUserTranscript: "",
-      };
-      const live = await startMobileLiveSession({
-        baseUrl: activeManaged.backendBaseUrl,
-        apiKey: activeManaged.session.api_key,
-        model,
-        locale: text.dateLocale,
-        requestId: clientRequestID("live-call"),
-        instructions: text.dateLocale.toLowerCase().startsWith("zh")
-          ? "使用自然、简洁的中文对话。"
-          : "Use natural, concise conversation.",
-        // Empty preference → undefined → mobile-live keeps its prior defaults.
-        transcriptionModel: voicePreferences.liveTranscriptionModel || undefined,
-        voice: voicePreferences.liveVoice || undefined,
-        signal: controller.signal,
-        onState: (state, detail) => {
-          if (controller.signal.aborted) return;
-          setLiveVoiceState(state);
-          if (state === "failed" && detail) setChatError(detail);
-        },
-        onTranscript: (event) => {
-          const active = activeLiveConversationRef.current;
-          if (!active || controller.signal.aborted) return;
-          if (event.role === "user") {
-            if (
-              !event.done ||
-              !event.text ||
-              event.text === active.lastUserTranscript
-            ) {
-              return;
-            }
-            active.lastUserTranscript = event.text;
-            const sessionId =
-              active.sessionId ||
-              mobileStore.ensureChatSession(active.model, active.groupId);
-            active.sessionId = sessionId;
-            mobileStore.addChatMessage(sessionId, {
-              role: "user",
-              content: event.text,
-              status: "done",
-            });
-            return;
-          }
-          if (!active.sessionId || !event.text) return;
-          if (!active.assistantMessageId) {
-            active.assistantMessageId = mobileStore.addChatMessage(
-              active.sessionId,
-              {
-                role: "assistant",
-                content: event.text,
-                status: event.done ? "done" : "streaming",
-              },
-            );
-          } else {
-            mobileStore.updateChatMessage(
-              active.sessionId,
-              active.assistantMessageId,
-              {
-                content: event.text,
-                status: event.done ? "done" : "streaming",
-              },
-            );
-          }
-          if (event.done) active.assistantMessageId = "";
-        },
-      });
-      if (controller.signal.aborted) {
-        await live.close("cancelled_during_connect");
-        return;
-      }
-      liveVoiceSessionRef.current = live;
-      setLiveVoiceState("connected");
-    } catch (error) {
-      activeLiveConversationRef.current = null;
-      if (controller.signal.aborted) return;
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : text.chat.liveVoiceUnavailable;
-      setChatError(message);
-      setLiveVoiceState("failed");
-    } finally {
-      if (liveVoiceAbortRef.current === controller) {
-        liveVoiceAbortRef.current = null;
-      }
-    }
-  }
-
-  async function speakAssistantReply(content: string) {
-    if (!voicePreferencesRef.current.enabled) return;
-    const speech = plainVoiceText(content);
-    if (!speech) return;
-    setVoiceSpeaking(true);
-    try {
-      const utteranceId = await speakNativeText({
-        text: speech,
-        language: text.dateLocale,
-        rate: voicePreferencesRef.current.ttsRate,
-        onEvent: (event) => {
-          if (
-            event.type === "done" ||
-            event.type === "error" ||
-            event.type === "stopped"
-          ) {
-            setVoiceSpeaking(false);
-            if (
-              event.type === "done" &&
-              voicePreferencesRef.current.enabled &&
-              voicePreferencesRef.current.continuous &&
-              !running &&
-              !listening
-            ) {
-              window.setTimeout(() => {
-                void startVoiceTurn({ autoSend: true });
-              }, 280);
-            }
-          }
-        },
-      });
-      if (!utteranceId) setVoiceSpeaking(false);
-    } catch {
-      setVoiceSpeaking(false);
-      setChatError(text.chat.ttsUnavailable);
-    }
-  }
-
   async function startVoiceTurn(
     options: {
       event?: PointerEvent<HTMLButtonElement>;
-      autoSend?: boolean;
     } = {},
   ) {
     if (listening || running) return;
@@ -7444,21 +6780,16 @@ function AndroidChat() {
     voiceStartYRef.current = options.event?.clientY || 0;
     voiceCancelledRef.current = false;
     voiceReleasedRef.current = false;
-    voiceAutoSendRef.current = Boolean(options.autoSend);
+    voiceAutoSendRef.current = false;
     setVoiceCancelling(false);
     setVoiceTranscript("");
     setListening(true);
     setChatError("");
-    setWakeWordStatus("");
     const sessionId = `chat-ptt-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 10)}`;
     voicePttSessionIdRef.current = sessionId;
     try {
-      await cancelAllForegroundWakeWordSessions("ptt_started");
-      wakeWordSessionRef.current?.unsubscribe();
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
       const session = await startForegroundPttSession({
         sessionId,
         language: text.dateLocale,
@@ -7471,19 +6802,10 @@ function AndroidChat() {
           }
           if (result.type === "final") {
             const recognized = (result.text || "").trim();
-            const autoSend = voiceAutoSendRef.current;
             if (recognized) {
-              if (autoSend) {
-                setInput("");
-                setQuotedMessage(null);
-                window.setTimeout(() => {
-                  void sendChat(recognized);
-                }, 0);
-              } else {
-                setInput((value) =>
-                  [value.trim(), recognized].filter(Boolean).join("\n"),
-                );
-              }
+              setInput((value) =>
+                [value.trim(), recognized].filter(Boolean).join("\n"),
+              );
               setVoiceBarOpen(false);
             } else if (!voiceCancelledRef.current) {
               setChatError(text.errors.emptySpeechResult);
@@ -7550,118 +6872,6 @@ function AndroidChat() {
     void startVoiceTurn({ event });
   }
 
-  function startVoiceConversationTurn() {
-    if (listening || running || liveVoiceState === "connected") return;
-    setWakeWordStatus(text.chat.wakeWordMatched);
-    setVoiceBarOpen(true);
-    void startVoiceTurn({ autoSend: true });
-  }
-
-  useEffect(() => {
-    voicePreferencesRef.current = voicePreferences;
-  }, [voicePreferences]);
-
-  useEffect(() => {
-    let disposed = false;
-    const enabled =
-      voicePreferences.enabled && voicePreferences.wakeWordEnabled;
-    const phrase = voicePreferences.wakeWordPhrase.trim();
-
-    async function stopWakeWord(reason: string) {
-      const session = wakeWordSessionRef.current;
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
-      if (session) {
-        session.unsubscribe();
-        await session.stop(reason).catch(() => undefined);
-      } else {
-        await cancelAllForegroundWakeWordSessions(reason).catch(
-          () => undefined,
-        );
-      }
-    }
-
-    async function syncWakeWord() {
-      if (
-        !enabled ||
-        !phrase ||
-        running ||
-        listening ||
-        liveVoiceState === "connected"
-      ) {
-        await stopWakeWord("voice_turn_active");
-        if (!enabled || !phrase) setWakeWordStatus("");
-        return;
-      }
-      if (wakeWordSessionRef.current) return;
-      try {
-        const session = await startForegroundWakeWordSession({
-          phrase,
-          language: text.dateLocale,
-          onEvent: (event) => {
-            if (disposed) return;
-            if (event.type === "ready") {
-              setWakeWordListening(true);
-              setWakeWordStatus(text.chat.wakeWordListening(phrase));
-              return;
-            }
-            if (event.type === "partial") return;
-            if (event.type === "matched") {
-              wakeWordSessionRef.current?.unsubscribe();
-              wakeWordSessionRef.current = null;
-              setWakeWordListening(false);
-              startVoiceConversationTurn();
-              return;
-            }
-            if (event.type === "error") {
-              wakeWordSessionRef.current?.unsubscribe();
-              wakeWordSessionRef.current = null;
-              setWakeWordListening(false);
-              setWakeWordStatus("");
-              setChatError(text.chat.wakeWordUnavailable);
-              return;
-            }
-            if (event.type === "stopped") {
-              wakeWordSessionRef.current?.unsubscribe();
-              wakeWordSessionRef.current = null;
-              setWakeWordListening(false);
-            }
-          },
-        });
-        if (disposed) {
-          session.unsubscribe();
-          await session.stop("chat_unmounted").catch(() => undefined);
-          return;
-        }
-        wakeWordSessionRef.current = session;
-        setWakeWordListening(true);
-        setWakeWordStatus(text.chat.wakeWordListening(phrase));
-      } catch {
-        if (disposed) return;
-        setWakeWordListening(false);
-        setWakeWordStatus("");
-        setChatError(text.chat.wakeWordUnavailable);
-      }
-    }
-
-    void syncWakeWord();
-    return () => {
-      disposed = true;
-      void stopWakeWord("chat_state_changed");
-    };
-    // `startVoiceConversationTurn` is intentionally read from this render;
-    // the state inputs below define exactly when a recognizer may own the mic.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    listening,
-    liveVoiceState,
-    running,
-    text.dateLocale,
-    voicePreferences.enabled,
-    voicePreferences.wakeWordEnabled,
-    voicePreferences.wakeWordPhrase,
-  ]);
-
   function moveVoiceHold(event: PointerEvent<HTMLButtonElement>) {
     if (!listening) return;
     const shouldCancel = voiceStartYRef.current - event.clientY > 52;
@@ -7685,11 +6895,6 @@ function AndroidChat() {
   useEffect(() => {
     return () => {
       notifyForegroundPttRouteChange();
-      void stopVoiceSpeaking();
-      void stopLiveVoiceConversation("route_changed");
-      wakeWordSessionRef.current?.unsubscribe();
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
     };
   }, [location.pathname]);
 
@@ -8483,9 +7688,6 @@ function AndroidChat() {
         content: completedContent,
         status: "done",
       });
-      if (contentBuffer.trim()) {
-        void speakAssistantReply(completedContent);
-      }
       void projectedTaskPromise.then(async (completedTask) => {
         if (!completedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
@@ -8939,10 +8141,6 @@ function AndroidChat() {
       setSkillSheetOpen(false);
       return;
     }
-    if (voiceSettingsOpen) {
-      setVoiceSettingsOpen(false);
-      return;
-    }
     if (moreToolsOpen) {
       setMoreToolsOpen(false);
       return;
@@ -9210,12 +8408,6 @@ function AndroidChat() {
               </button>
             </div>
           )}
-          {voicePreferences.enabled && wakeWordStatus && (
-            <div className={styles["voice-status"]} aria-live="polite">
-              <VoiceIcon />
-              <span>{wakeWordStatus}</span>
-            </div>
-          )}
           {moreToolsOpen && (
             <div className={styles["composer-tools"]}>
               <button type="button" onClick={() => fileRef.current?.click()}>
@@ -9228,31 +8420,6 @@ function AndroidChat() {
                   {capturing ? text.chat.capturing : text.chat.camera}
                 </span>
               </button>
-              <button
-                type="button"
-                aria-pressed={voicePreferences.enabled}
-                className={clsx({
-                  [styles["active"]]: voicePreferences.enabled,
-                })}
-                onClick={() => setVoiceSettingsOpen(true)}
-              >
-                <VoiceIcon />
-                <span>
-                  {voicePreferences.enabled
-                    ? text.chat.voiceConversationEnabled
-                    : text.chat.voiceConversation}
-                </span>
-              </button>
-              {voicePreferences.enabled && (
-                <button
-                  type="button"
-                  disabled={!voiceSpeaking}
-                  onClick={() => void stopVoiceSpeaking()}
-                >
-                  <CloseIcon />
-                  <span>{text.chat.voiceStopSpeaking}</span>
-                </button>
-              )}
             </div>
           )}
           <div className={styles["composer-row"]}>
@@ -9396,24 +8563,6 @@ function AndroidChat() {
             setModelSheetOpen(false);
             changeModel(id);
           }}
-        />
-        <VoiceConversationSheet
-          open={voiceSettingsOpen}
-          text={text}
-          preferences={voicePreferences}
-          listening={wakeWordListening}
-          speaking={voiceSpeaking}
-          liveState={liveVoiceState}
-          liveAvailable={liveVoiceAvailable}
-          transcriptionModels={transcriptionModelsForGroup(
-            workspace,
-            effectiveChatGroupId,
-          )}
-          onClose={() => setVoiceSettingsOpen(false)}
-          onChange={(next) => updateVoicePreferences(() => next)}
-          onStopSpeaking={() => void stopVoiceSpeaking()}
-          onStartLive={() => void startLiveVoiceConversation()}
-          onStopLive={() => void stopLiveVoiceConversation()}
         />
         <ChatAgentLibrarySheet
           open={agentSheetOpen}
