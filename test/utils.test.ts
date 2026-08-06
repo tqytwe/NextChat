@@ -4,6 +4,7 @@ import {
   getMessageTextContent,
   getMessageTextContentWithoutThinking,
   getMessageImages,
+  hasMessageImages,
   isDalle3,
   getModelSizes,
   supportsCustomSize,
@@ -108,6 +109,24 @@ describe("getMessageImages", () => {
       ],
     };
     expect(getMessageImages(msg)).toEqual(["http://a", "http://b"]);
+  });
+});
+
+describe("hasMessageImages", () => {
+  test("detects images without consulting model capabilities", () => {
+    expect(
+      hasMessageImages([
+        { role: "user", content: "describe this" },
+        {
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "data:image/png;base64,x" } }],
+        },
+      ]),
+    ).toBe(true);
+  });
+
+  test("returns false for text-only history", () => {
+    expect(hasMessageImages([{ role: "user", content: "hello" }])).toBe(false);
   });
 });
 

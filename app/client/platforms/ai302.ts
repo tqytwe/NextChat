@@ -25,7 +25,7 @@ import { getClientConfig } from "@/app/config/client";
 import {
   getMessageTextContent,
   getMessageTextContentWithoutThinking,
-  isVisionModel,
+  hasMessageImages,
   getTimeoutMSByModel,
 } from "@/app/utils";
 import { RequestPayload } from "./openai";
@@ -82,14 +82,14 @@ export class Ai302Api implements LLMApi {
   }
 
   async chat(options: ChatOptions) {
-    const visionModel = isVisionModel(options.config.model);
+    const preserveImageContent = hasMessageImages(options.messages);
     const messages: ChatOptions["messages"] = [];
     for (const v of options.messages) {
       if (v.role === "assistant") {
         const content = getMessageTextContentWithoutThinking(v);
         messages.push({ role: v.role, content });
       } else {
-        const content = visionModel
+        const content = preserveImageContent
           ? await preProcessImageContent(v.content)
           : getMessageTextContent(v);
         messages.push({ role: v.role, content });

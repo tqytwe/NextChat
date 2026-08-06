@@ -18,7 +18,7 @@ import {
 import { getClientConfig } from "@/app/config/client";
 import {
   getMessageTextContent,
-  isVisionModel,
+  hasMessageImages,
   getTimeoutMSByModel,
 } from "@/app/utils";
 import { RequestPayload } from "./openai";
@@ -154,10 +154,10 @@ export class ChatGLMApi implements LLMApi {
   }
 
   async chat(options: ChatOptions) {
-    const visionModel = isVisionModel(options.config.model);
+    const preserveImageContent = hasMessageImages(options.messages);
     const messages: ChatOptions["messages"] = [];
     for (const v of options.messages) {
-      const content = visionModel
+      const content = preserveImageContent
         ? await preProcessImageContent(v.content)
         : getMessageTextContent(v);
       messages.push({ role: v.role, content });
