@@ -1,5 +1,6 @@
-import { getClientConfig } from "../config/client";
-
-export function shouldInlineUploadedImage(serviceWorkerEnabled: boolean) {
-  return !!getClientConfig()?.sub2apiManagedMode || !serviceWorkerEnabled;
+export function shouldInlineUploadedImage(
+  managedMode: boolean,
+  serviceWorkerEnabled: boolean,
+) {
+  return managedMode || !serviceWorkerEnabled;
 }
