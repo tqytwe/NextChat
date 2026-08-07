@@ -1,9 +1,10 @@
+import { jest } from "@jest/globals";
+import { getClientConfig } from "../app/config/client";
+import { shouldInlineUploadedImage } from "../app/utils/managed-image-upload";
+
 jest.mock("../app/config/client", () => ({
   getClientConfig: jest.fn(),
 }));
-
-import { getClientConfig } from "../app/config/client";
-import { shouldInlineUploadedImage } from "../app/utils/managed-image-upload";
 
 const mockedGetClientConfig = getClientConfig as jest.MockedFunction<
   typeof getClientConfig
