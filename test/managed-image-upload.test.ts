@@ -1,8 +1,8 @@
 import { jest } from "@jest/globals";
-import { getClientConfig } from "../app/config/client";
-import { shouldInlineUploadedImage } from "../app/utils/managed-image-upload";
+import { getClientConfig } from "@/app/config/client";
+import { shouldInlineUploadedImage } from "@/app/utils/managed-image-upload";
 
-jest.mock("../app/config/client", () => ({
+jest.mock("@/app/config/client", () => ({
   getClientConfig: jest.fn(),
 }));
 
