@@ -9,7 +9,9 @@ import {
   EventStreamContentType,
   fetchEventSource,
 } from "@fortaine/fetch-event-source";
+import { getClientConfig } from "@/app/config/client";
 import { prettyObject } from "./format";
+import { shouldInlineUploadedImage } from "./managed-image-upload";
 import { fetch as tauriFetch } from "./stream";
 
 export function compressImage(file: Blob, maxSize: number): Promise<string> {
@@ -142,8 +144,15 @@ export function base64Image2Blob(base64Data: string, contentType: string) {
 }
 
 export function uploadImage(file: Blob): Promise<string> {
-  if (!window._SW_ENABLED) {
-    // if serviceWorker register error, using compressImage
+  // Managed requests are forwarded to external providers. A service-worker cache
+  // URL only exists in this browser, so an upstream vision model cannot fetch it.
+  // Keep the attachment inline for the managed gateway instead.
+  if (
+    shouldInlineUploadedImage(
+      !!getClientConfig()?.sub2apiManagedMode,
+      !!window._SW_ENABLED,
+    )
+  ) {
     return compressImage(file, 256 * 1024);
   }
   const body = new FormData();

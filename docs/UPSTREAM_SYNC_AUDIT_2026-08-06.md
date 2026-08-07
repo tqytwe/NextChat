@@ -86,6 +86,16 @@ As of 2026-08-06:
 4. Future syncs must compare from the recorded official upstream SHA, not infer
    updates from `tqytwe/main` ahead/behind counts.
 
+## Managed image transport follow-up
+
+Managed Web must not send `/api/cache/*` service-worker URLs to external vision
+providers. Those objects exist only in the originating browser CacheStorage, so
+an upstream provider may attempt to fetch the public NextChat host and fail or
+receive no cached object. Managed image attachments are therefore compressed to
+an inline data URL before entering chat history, while non-managed Web keeps the
+original service-worker cache behavior. This is enforced by
+`test/managed-image-upload.test.ts`.
+
 ## Evidence commands
 
 ```bash
