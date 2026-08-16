@@ -6,17 +6,19 @@ export function androidReleaseMetadataFromEnv(
 ) {
   // Gradle and the release packager use ANDROID_* as their source of truth.
   // Keep the embedded web bundle on exactly the same authority.
-  const configuredAndroidVersion = [
-    environment.ANDROID_VERSION_NAME,
-    environment.NEXT_PUBLIC_ANDROID_VERSION,
-  ].find((value) => String(value || "").trim()) || "";
+  const configuredAndroidVersion =
+    [
+      environment.ANDROID_VERSION_NAME,
+      environment.NEXT_PUBLIC_ANDROID_VERSION,
+    ].find((value) => String(value || "").trim()) || "";
   const androidVersion = String(configuredAndroidVersion)
     .trim()
     .replace(/^v/i, "");
-  const configuredAndroidVersionCode = [
-    environment.ANDROID_VERSION_CODE,
-    environment.NEXT_PUBLIC_ANDROID_VERSION_CODE,
-  ].find((value) => String(value || "").trim()) || "";
+  const configuredAndroidVersionCode =
+    [
+      environment.ANDROID_VERSION_CODE,
+      environment.NEXT_PUBLIC_ANDROID_VERSION_CODE,
+    ].find((value) => String(value || "").trim()) || "";
   const normalizedVersionCode = String(configuredAndroidVersionCode).trim();
   const androidVersionCode = /^\d+$/.test(normalizedVersionCode)
     ? Number(normalizedVersionCode)
@@ -36,6 +38,12 @@ export const getBuildConfig = () => {
   const isApp = !!process.env.BUILD_APP;
   const isAndroidApp =
     process.env.BUILD_ANDROID === "1" || process.env.BUILD_ANDROID === "true";
+  const androidDistribution = (() => {
+    const raw = String(process.env.NEXT_PUBLIC_ANDROID_DISTRIBUTION || "")
+      .trim()
+      .toLowerCase();
+    return raw === "play" || raw === "direct" ? raw : "";
+  })();
   const sub2apiManagedMode = ["1", "true", "yes", "on"].includes(
     (process.env.SUB2API_MANAGED_MODE ?? "").toLowerCase(),
   );
@@ -110,6 +118,11 @@ export const getBuildConfig = () => {
     androidApkSha256: process.env.NEXT_PUBLIC_ANDROID_APK_SHA256 ?? "",
     androidApkSize: process.env.NEXT_PUBLIC_ANDROID_APK_SIZE ?? "",
     androidReleaseNotes: process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES ?? "",
+    androidDistribution,
+    androidDirectRedeemShopUrl:
+      isAndroidApp && androidDistribution === "direct"
+        ? process.env.NEXT_PUBLIC_ANDROID_DIRECT_REDEEM_SHOP_URL ?? ""
+        : "",
     basePath,
     sub2apiManagedMode,
     template: process.env.DEFAULT_INPUT_TEMPLATE ?? DEFAULT_INPUT_TEMPLATE,

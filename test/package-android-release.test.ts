@@ -195,6 +195,7 @@ describe("Android release package version gate", () => {
     expect(
       JSON.parse(readFileSync(fixture.manifestPath, "utf-8")),
     ).toMatchObject({
+      channel: "direct",
       version: "2.0.66",
       latestVersion: "2.0.66",
       versionCode: 266,

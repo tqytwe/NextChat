@@ -172,6 +172,44 @@ describe("mobile platform client", () => {
     });
   });
 
+  test("supports cloud project CRUD with retry-safe request identifiers", async () => {
+    const client = platform.createMobilePlatformClient(baseUrl, accessToken);
+
+    await client.projects.create({
+      name: "Launch",
+      description: "Assets",
+      task_ids: ["task-1"],
+      asset_ids: ["asset-1"],
+      client_request_id: "project-create-1",
+    });
+    await client.projects.list({ page: 2, page_size: 20 });
+    await client.projects.detail("project-1");
+    await client.projects.update("project-1", {
+      name: "Launch v2",
+      client_request_id: "project-update-1",
+    });
+    await client.projects.delete("project-1", "project-delete-1");
+
+    expect(managedJsonRequest.mock.calls.map((call) => call[1])).toEqual([
+      "/api/v1/mobile/projects",
+      "/api/v1/mobile/projects?page=2&page_size=20",
+      "/api/v1/mobile/projects/project-1",
+      "/api/v1/mobile/projects/project-1",
+      "/api/v1/mobile/projects/project-1",
+    ]);
+    expect(managedJsonRequest.mock.calls[0][2]).toMatchObject({
+      method: "POST",
+    });
+    expect(managedJsonRequest.mock.calls[3][2]).toMatchObject({
+      method: "PUT",
+    });
+    const deleteInit = managedJsonRequest.mock.calls[4][2] as RequestInit;
+    expect(deleteInit.method).toBe("DELETE");
+    expect(new Headers(deleteInit.headers).get("X-Client-Request-ID")).toBe(
+      "project-delete-1",
+    );
+  });
+
   test("wraps account, session, image history, redeem, and payment operations", async () => {
     const client = platform.createMobilePlatformClient(baseUrl, accessToken);
 

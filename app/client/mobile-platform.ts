@@ -20,6 +20,8 @@ export interface MobileRequestOptions {
 export interface MobilePageQuery {
   cursor?: string;
   limit?: number;
+  page?: number;
+  page_size?: number;
   query?: string;
   locale?: MobileLocale;
   sort?: string;
@@ -29,9 +31,36 @@ export interface MobilePageQuery {
 export interface MobilePage<T> {
   items: T[];
   total?: number;
+  page?: number;
+  page_size?: number;
+  pages?: number;
   cursor?: string;
   next_cursor?: string;
   has_more?: boolean;
+}
+
+export interface MobileProject {
+  id: string;
+  name: string;
+  description: string;
+  task_ids: string[];
+  asset_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MobileProjectWriteRequest {
+  name?: string;
+  description?: string;
+  task_ids?: string[];
+  asset_ids?: string[];
+  client_request_id: string;
+}
+
+export interface MobileProjectPage extends MobilePage<MobileProject> {
+  page: number;
+  page_size: number;
+  pages: number;
 }
 
 export interface MobileDeleteResult {
@@ -386,6 +415,21 @@ export interface MobileTask extends MobileDisplayFields {
   cancellable?: boolean;
   retryable?: boolean;
   metadata?: Record<string, unknown>;
+  artifacts?: Array<{
+    id?: string;
+    kind?: string;
+    name?: string;
+    url?: string;
+    byte_size?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  error?: {
+    code?: string;
+    message?: string;
+    retryable?: boolean;
+    details?: Record<string, unknown>;
+  };
+  finished_at?: string;
 }
 
 export interface MobileTaskListQuery extends MobilePageQuery {
@@ -546,6 +590,39 @@ export interface MobilePaymentOrder {
 
 export interface MobilePaymentSyncRequest {
   client_request_id?: string;
+}
+
+export interface MobilePlayBillingPurchaseRequest {
+  product_id: string;
+  product_type?: "inapp" | "subs" | string;
+  purchase_token: string;
+  order_id?: string;
+  package_name?: string;
+  purchase_time?: number;
+  purchase_state?: number;
+  acknowledged?: boolean;
+  quantity?: number;
+  original_json?: string;
+  signature?: string;
+  plan_id?: number | string;
+  amount?: number;
+  order_type?: "balance" | "subscription" | string;
+  locale?: MobileLocale;
+  client_request_id: string;
+}
+
+export interface MobilePlayBillingPurchaseResult {
+  accepted?: boolean;
+  verified?: boolean;
+  credited?: boolean;
+  consumed?: boolean;
+  acknowledged?: boolean;
+  consume?: boolean;
+  acknowledge?: boolean;
+  order_id?: string | number;
+  balance?: number;
+  amount?: number;
+  message?: string;
 }
 
 export type MobileSupportTicketStatus =
@@ -1065,6 +1142,80 @@ export function deleteMobileTask(
   );
 }
 
+export function createMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileProjectWriteRequest & { name: string },
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProject>(
+    baseUrl,
+    accessToken,
+    "/projects",
+    jsonInit("POST", body, options),
+  );
+}
+
+export function listMobileProjects(
+  baseUrl: string,
+  accessToken: string,
+  query?: MobilePageQuery,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProjectPage>(
+    baseUrl,
+    accessToken,
+    appendQuery("/projects", query),
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function getMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  projectId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProject>(
+    baseUrl,
+    accessToken,
+    `/projects/${encodePathId(projectId)}`,
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function updateMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  projectId: MobileId,
+  body: MobileProjectWriteRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProject>(
+    baseUrl,
+    accessToken,
+    `/projects/${encodePathId(projectId)}`,
+    jsonInit("PUT", body, options),
+  );
+}
+
+export function deleteMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  projectId: MobileId,
+  clientRequestId: string,
+  options?: MobileRequestOptions,
+) {
+  const headers = new Headers(options?.headers);
+  headers.set("X-Client-Request-ID", clientRequestId);
+  return mobilePlatformJsonRequest<MobileDeleteResult>(
+    baseUrl,
+    accessToken,
+    `/projects/${encodePathId(projectId)}`,
+    jsonInit("DELETE", undefined, { ...options, headers }),
+  );
+}
+
 export function listMobileImageHistory(
   baseUrl: string,
   accessToken: string,
@@ -1175,6 +1326,20 @@ export function syncMobilePayment(
     baseUrl,
     accessToken,
     `/payments/${encodePathId(orderId)}/sync`,
+    jsonInit("POST", body, options),
+  );
+}
+
+export function submitMobilePlayBillingPurchase(
+  baseUrl: string,
+  accessToken: string,
+  body: MobilePlayBillingPurchaseRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePlayBillingPurchaseResult>(
+    baseUrl,
+    accessToken,
+    "/play-billing/purchases",
     jsonInit("POST", body, options),
   );
 }
@@ -1360,6 +1525,33 @@ export function createMobilePlatformClient(
       delete: (taskId: MobileId, options?: MobileRequestOptions) =>
         deleteMobileTask(baseUrl, accessToken, taskId, options),
     },
+    projects: {
+      create: (
+        body: MobileProjectWriteRequest & { name: string },
+        options?: MobileRequestOptions,
+      ) => createMobileProject(baseUrl, accessToken, body, options),
+      list: (query?: MobilePageQuery, options?: MobileRequestOptions) =>
+        listMobileProjects(baseUrl, accessToken, query, options),
+      detail: (projectId: MobileId, options?: MobileRequestOptions) =>
+        getMobileProject(baseUrl, accessToken, projectId, options),
+      update: (
+        projectId: MobileId,
+        body: MobileProjectWriteRequest,
+        options?: MobileRequestOptions,
+      ) => updateMobileProject(baseUrl, accessToken, projectId, body, options),
+      delete: (
+        projectId: MobileId,
+        clientRequestId: string,
+        options?: MobileRequestOptions,
+      ) =>
+        deleteMobileProject(
+          baseUrl,
+          accessToken,
+          projectId,
+          clientRequestId,
+          options,
+        ),
+    },
     imageHistory: {
       list: (
         query?: MobileImageHistoryListQuery,
@@ -1398,6 +1590,12 @@ export function createMobilePlatformClient(
         body?: MobilePaymentSyncRequest,
         options?: MobileRequestOptions,
       ) => syncMobilePayment(baseUrl, accessToken, orderId, body, options),
+    },
+    playBilling: {
+      submitPurchase: (
+        body: MobilePlayBillingPurchaseRequest,
+        options?: MobileRequestOptions,
+      ) => submitMobilePlayBillingPurchase(baseUrl, accessToken, body, options),
     },
     support: {
       tickets: {

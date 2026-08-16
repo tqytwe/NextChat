@@ -26,7 +26,14 @@ export function formatMobileWebSearchSources(
   locale: string,
 ) {
   if (sources.length === 0) return "";
-  const zh = locale.toLowerCase().startsWith("zh");
+  const language = locale.toLowerCase();
+  const heading = language.startsWith("zh")
+    ? "联网来源"
+    : language.startsWith("ja") || language.startsWith("jp")
+    ? "ウェブの出典"
+    : language.startsWith("ko")
+    ? "웹 출처"
+    : "Web sources";
   const rows = sources.slice(0, 3).flatMap((source) =>
     source.results.slice(0, 3).map((result) => {
       const label = result.title || result.url;
@@ -40,9 +47,7 @@ export function formatMobileWebSearchSources(
         `${source.provider || "unknown"} · ${source.requestId || "unknown"}`,
     )
     .join(" | ");
-  return [zh ? "联网来源" : "Web sources", diagnostics, ...rows]
-    .filter(Boolean)
-    .join("\n");
+  return [heading, diagnostics, ...rows].filter(Boolean).join("\n");
 }
 
 export const MOBILE_WEB_SEARCH_TOOL = {
@@ -152,10 +157,15 @@ export function createMobileCompletionStreamAccumulator(
 }
 
 function localizedToolError(locale: string, message: string) {
-  const zh = locale.toLowerCase().startsWith("zh");
-  return zh
-    ? `联网搜索未完成：${message}`
-    : `Web search did not complete: ${message}`;
+  const language = locale.toLowerCase();
+  if (language.startsWith("zh")) return `联网搜索未完成：${message}`;
+  if (language.startsWith("ja") || language.startsWith("jp")) {
+    return `ウェブ検索を完了できませんでした: ${message}`;
+  }
+  if (language.startsWith("ko")) {
+    return `웹 검색을 완료하지 못했습니다: ${message}`;
+  }
+  return `Web search did not complete: ${message}`;
 }
 
 function boundedErrorMessage(error: unknown) {

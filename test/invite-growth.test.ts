@@ -168,6 +168,21 @@ describe("invite growth client", () => {
   });
 
   test.each([
+    ["ja-JP", "スキャンしてウェブで参加", "スキャンして APP をダウンロード"],
+    ["ko-KR", "스캔하여 웹에서 참여", "스캔하여 APP 다운로드"],
+  ])("localizes poster QR labels for %s", (locale, join, download) => {
+    const payload = growth.buildInvitePosterPayload({
+      registerUrl: "https://www.jisudeng.com/register?aff_code=AFF",
+      appUrl: "https://www.jisudeng.com/download/android?aff_code=AFF",
+      headline: "Invite",
+      body: "Create",
+      locale,
+    });
+    expect(payload.registerLabel).toBe(join);
+    expect(payload.appLabel).toBe(download);
+  });
+
+  test.each([
     "midnight",
     "light",
     "celebration",

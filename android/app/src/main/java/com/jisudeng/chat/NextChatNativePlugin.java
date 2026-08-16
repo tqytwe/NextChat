@@ -592,6 +592,7 @@ public class NextChatNativePlugin extends Plugin {
             ret.put("product", Build.PRODUCT);
             ret.put("androidVersion", Build.VERSION.RELEASE);
             ret.put("sdkInt", Build.VERSION.SDK_INT);
+            ret.put("distributionChannel", BuildConfig.DISTRIBUTION_CHANNEL);
             PackageInfo info;
             if (Build.VERSION.SDK_INT >= 33) {
                 info = getContext().getPackageManager().getPackageInfo(

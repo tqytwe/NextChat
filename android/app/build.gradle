@@ -1,5 +1,6 @@
 apply plugin: 'com.android.application'
 
+def androidApplicationId = "com.jisudeng.chat"
 def keystorePropertiesFile = rootProject.file('keystore.properties')
 def keystoreProperties = new Properties()
 if (keystorePropertiesFile.exists()) {
@@ -20,6 +21,9 @@ def androidVersionNameRaw = (
 def releaseRequested = gradle.startParameter.taskNames.any {
     it.toLowerCase().contains('release')
 }
+def taskNamesLower = gradle.startParameter.taskNames.collect {
+    it.toLowerCase()
+}
 if (releaseRequested && (!androidVersionCodeRaw || !androidVersionNameRaw)) {
     throw new GradleException(
         'Release builds require ANDROID_VERSION_CODE and ANDROID_VERSION_NAME (or matching -P properties).'
@@ -31,8 +35,11 @@ def androidVersionNameValue = (androidVersionNameRaw ?: '0.0.0-dev').toString().
 android {
     namespace "com.jisudeng.chat"
     compileSdk rootProject.ext.compileSdkVersion
+    buildFeatures {
+        buildConfig true
+    }
     defaultConfig {
-        applicationId "com.jisudeng.chat"
+        applicationId androidApplicationId
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode androidVersionCodeValue
@@ -42,6 +49,19 @@ android {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    flavorDimensions "distribution"
+    productFlavors {
+        play {
+            dimension "distribution"
+            manifestPlaceholders = [distributionChannel: "play"]
+            buildConfigField "String", "DISTRIBUTION_CHANNEL", "\"play\""
+        }
+        direct {
+            dimension "distribution"
+            manifestPlaceholders = [distributionChannel: "direct"]
+            buildConfigField "String", "DISTRIBUTION_CHANNEL", "\"direct\""
         }
     }
     signingConfigs {
@@ -76,6 +96,11 @@ dependencies {
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation "com.android.billingclient:billing:9.1.0"
+    implementation platform("com.google.firebase:firebase-bom:34.17.0")
+    implementation "com.google.firebase:firebase-messaging"
+    implementation "com.google.firebase:firebase-crashlytics"
+    implementation "com.google.firebase:firebase-perf"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
@@ -85,11 +110,50 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
+def firebaseConfigCandidates = []
+def playRequested = taskNamesLower.any { it.contains('play') }
+def directRequested = taskNamesLower.any { it.contains('direct') }
+if (playRequested) {
+    firebaseConfigCandidates << file('src/play/google-services.json')
+}
+if (directRequested) {
+    firebaseConfigCandidates << file('src/direct/google-services.json')
+}
+if (!playRequested && !directRequested) {
+    firebaseConfigCandidates << file('src/play/google-services.json')
+    firebaseConfigCandidates << file('src/direct/google-services.json')
+}
+firebaseConfigCandidates << file('google-services.json')
+def firebaseConfigFile = firebaseConfigCandidates.find {
+    it.exists() && it.length() > 0
+}
+
+if (firebaseConfigFile) {
+    try {
+        def parsedGoogleServices = new groovy.json.JsonSlurper().parse(firebaseConfigFile)
+        def firebasePackages = (parsedGoogleServices.client ?: []).collect {
+            it?.client_info?.android_client_info?.package_name
+        }.findAll { it }
+        if (!firebasePackages.contains(androidApplicationId)) {
+            throw new GradleException(
+                "Firebase google-services.json must contain Android package ${androidApplicationId}; found ${firebasePackages ?: ['none']}."
+            )
+        }
         apply plugin: 'com.google.gms.google-services'
+        apply plugin: 'com.google.firebase.crashlytics'
+        logger.lifecycle("Applied google-services plugin from ${firebaseConfigFile}.")
+    } catch (GradleException e) {
+        throw e
+    } catch(Exception e) {
+        throw new GradleException(
+            "Unable to parse Firebase google-services.json at ${firebaseConfigFile}.",
+            e
+        )
     }
-} catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+} else if (releaseRequested) {
+    throw new GradleException(
+        "Release builds require android/app/google-services.json or a flavor-specific Firebase config containing Android package ${androidApplicationId}. Push Notifications cannot be accepted without it."
+    )
+} else {
+    logger.lifecycle("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }

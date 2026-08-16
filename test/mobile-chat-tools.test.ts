@@ -88,6 +88,12 @@ describe("mobile model-driven web search tools", () => {
     expect(formatMobileWebSearchSources(result.sources, "zh-CN")).toContain(
       "exa · search-1",
     );
+    expect(formatMobileWebSearchSources(result.sources, "ja-JP")).toContain(
+      "ウェブの出典",
+    );
+    expect(formatMobileWebSearchSources(result.sources, "ko-KR")).toContain(
+      "웹 출처",
+    );
   });
 
   test("does not search when a capable model answers without a tool call", async () => {

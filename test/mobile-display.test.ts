@@ -17,6 +17,29 @@ describe("mobile dynamic display localization", () => {
     );
   });
 
+  test("uses Japanese and Korean API variants before English fallback", () => {
+    const multiLocaleRecord = {
+      title_zh: "中文标题",
+      title_en: "English title",
+      title_ja: "日本語タイトル",
+      title_ko: "한국어 제목",
+      title: "Fallback title",
+    };
+
+    expect(localizedMobileDisplay(multiLocaleRecord, { locale: "jp" })).toBe(
+      "日本語タイトル",
+    );
+    expect(localizedMobileDisplay(multiLocaleRecord, { locale: "ko" })).toBe(
+      "한국어 제목",
+    );
+    expect(
+      localizedMobileDisplay(
+        { localized: { en: "Server English", default: "Server default" } },
+        { locale: "jp" },
+      ),
+    ).toBe("Server English");
+  });
+
   test("falls back through localized and generic fields without translating identifiers", () => {
     expect(
       localizedMobileDisplay(

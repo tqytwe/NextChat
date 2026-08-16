@@ -10,6 +10,25 @@ describe("mobile app backend alignment", () => {
     resolve(process.cwd(), "app/components/mobile-app.tsx"),
     "utf8",
   );
+  const constants = readFileSync(
+    resolve(process.cwd(), "app/constant.ts"),
+    "utf8",
+  );
+  const styles = readFileSync(
+    resolve(process.cwd(), "app/components/mobile-app.module.scss"),
+    "utf8",
+  );
+  const mobilePlatform = readFileSync(
+    resolve(process.cwd(), "app/client/mobile-platform.ts"),
+    "utf8",
+  );
+
+  test("selects localized Android release notes before legacy notes", () => {
+    expect(source).toContain("notesByLocale?: Partial");
+    expect(source).toContain('cn: "zh-CN"');
+    expect(source).toContain("manifest?.notesByLocale?.[localeKey]");
+    expect(source).toContain("manifestNotes(updateState.manifest, text)");
+  });
 
   test("routes Android payment creation and sync through mobile payments", () => {
     expect(source).toContain("client.payments.create");
@@ -20,6 +39,57 @@ describe("mobile app backend alignment", () => {
     expect(source).not.toContain(
       'managedAuthenticatedJsonRequest<PaymentOrderCreateResult>(\n          "/api/v1/payment/orders"',
     );
+  });
+
+  test("keeps coarse-pointer controls at an accessible touch size", () => {
+    expect(styles).toContain("@media (pointer: coarse)");
+    expect(styles).toMatch(
+      /\.mobile-app button\s*\{\s*min-width: 44px;\s*min-height: 44px;/,
+    );
+    expect(styles).toContain(
+      'input:not([type="checkbox"]):not([type="radio"])',
+    );
+  });
+
+  test("keeps all five primary destinations in one stable bottom-nav row", () => {
+    const bottomTabs = styles.slice(
+      styles.lastIndexOf(".bottom-tabs {"),
+      styles.indexOf(".attachment-row,"),
+    );
+    expect(bottomTabs).toContain(
+      "grid-template-columns: repeat(5, minmax(0, 1fr));",
+    );
+    expect(bottomTabs).toContain(
+      "grid-template-rows: 22px minmax(24px, auto);",
+    );
+    expect(bottomTabs).toContain("-webkit-line-clamp: 2;");
+    expect(bottomTabs).not.toContain("grid-template-columns: repeat(4, 1fr);");
+  });
+
+  test("supports native Google and GitHub OAuth callback login without web cookies", () => {
+    const manifest = readFileSync(
+      resolve(process.cwd(), "android/app/src/main/AndroidManifest.xml"),
+      "utf8",
+    );
+    const activity = readFileSync(
+      resolve(
+        process.cwd(),
+        "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+      ),
+      "utf8",
+    );
+
+    expect(source).toContain('type MobileOAuthProvider = "google" | "github"');
+    expect(source).toContain("/api/v1/auth/oauth/${provider}/start");
+    expect(source).toContain("readOAuthAuthResponseFromUrl");
+    expect(source).toContain("managed.applyAuth(auth)");
+    expect(source).toContain("text.login.continueWithGoogle");
+    expect(source).toContain("text.login.continueWithGitHub");
+    expect(source).toContain("NATIVE_PENDING_OAUTH_KEY");
+    expect(manifest).toContain("/auth/oauth/callback");
+    expect(manifest).toContain("/auth/callback");
+    expect(activity).toContain("jisudeng-native-pending-oauth");
+    expect(activity).toContain("jisudeng-oauth-callback");
   });
 
   test("routes reference image generation through the managed gateway transport", () => {
@@ -84,7 +154,7 @@ describe("mobile app backend alignment", () => {
     expect(chat).toContain("searchMobileWeb(");
     expect(chat).not.toContain("webSearchEnabled");
     expect(chat).not.toContain("fetchWebSearchContext");
-    expect(chat).not.toContain('aria-pressed={webSearchEnabled}');
+    expect(chat).not.toContain("aria-pressed={webSearchEnabled}");
     expect(chat).not.toContain("isExplicitMobileWebSearchRequest");
     expect(chat).not.toContain("webSearchUnsupportedModel");
   });
@@ -115,14 +185,279 @@ describe("mobile app backend alignment", () => {
     expect(feedback).toContain('"X-Client-Request-ID": requestId');
     expect(feedback).toContain('"Idempotency-Key": idempotencyKey');
 
+    const feedbackForm = source.slice(
+      source.indexOf("async function submitFeedbackForm("),
+      source.indexOf("async function submitFeedback()"),
+    );
+    expect(feedbackForm).toContain("clientRequestID(requestPrefix)");
+    expect(feedbackForm).toContain("feedbackRequestOptions");
+    expect(feedbackForm).toContain('"/api/v1/mobile/support/tickets"');
+    expect(feedbackForm).toContain('"/api/v1/play/mobile-feedback"');
+
     const account = source.slice(
       source.indexOf("async function submitFeedback()"),
       source.indexOf("async function redeemCode()"),
     );
-    expect(account).toContain('clientRequestID("feedback")');
-    expect(account).toContain("feedbackRequestOptions");
-    expect(account).toContain('"/api/v1/mobile/support/tickets"');
-    expect(account).toContain('"/api/v1/play/mobile-feedback"');
+    expect(account).toContain('submitFeedbackForm(form, "feedback")');
+  });
+
+  test("exposes an explicit AI content report path from chat and image results", () => {
+    const chat = source.slice(
+      source.indexOf("function AndroidChat()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    const imageStudio = source.slice(
+      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidGallery()"),
+    );
+    const account = source.slice(
+      source.indexOf("function AndroidAccountSettings()"),
+      source.indexOf("function AndroidGlobalUpdatePrompt()"),
+    );
+
+    expect(source).toContain('"ai_content_report"');
+    expect(source).toContain("MOBILE_REPORT_DRAFT_STORAGE_KEY");
+    expect(chat).toContain("reportChatMessage");
+    expect(chat).toContain("buildChatReportDraft");
+    expect(chat).toContain("onReport={() => reportChatMessage");
+    expect(imageStudio).toContain("reportImageTask");
+    expect(imageStudio).toContain("buildImageReportDraft");
+    expect(imageStudio).toContain("onReport={() => reportImageTask");
+    expect(account).toContain("readMobileReportDraft");
+    expect(account).toContain('setFeedbackCategory("ai_content_report")');
+    expect(account).toContain("setFeedbackTitle(draft.title)");
+    expect(account).toContain("setFeedbackContent(draft.content)");
+  });
+
+  test("routes mobile push opens to the relevant Android surface", () => {
+    const gate = source.slice(
+      source.indexOf("function AndroidManagedGateContent"),
+      source.indexOf("if (!managed._hasHydrated || !secureRestoreDone)"),
+    );
+
+    expect(gate).toContain('window.addEventListener("jisudeng:push-open"');
+    expect(gate).toContain('sourceType === "mobile_feedback"');
+    expect(gate).toContain("navigate(Path.AccountFeedback)");
+    expect(gate).toContain('sourceType === "mobile_task"');
+    expect(gate).toContain('eventType.startsWith("task.")');
+    expect(gate).toContain("navigate(Path.Sd)");
+    expect(gate).toContain("navigate(Path.Chat)");
+    expect(gate).toContain(
+      'navigate(Path.Activity, { state: { view: "tasks" } })',
+    );
+    expect(gate).toContain('eventType.includes("payment")');
+    expect(gate).toContain("navigate(Path.AccountOrders)");
+    expect(gate).toContain(
+      'navigate(Path.Activity, { state: { view: "notifications" } })',
+    );
+  });
+
+  test("opens the cloud task dashboard filter from notification state", () => {
+    const dashboard = source.slice(
+      source.indexOf("function AndroidDashboard()"),
+      source.indexOf("function ChatSessionDrawer("),
+    );
+
+    expect(dashboard).toContain("const location = useLocation()");
+    expect(dashboard).toContain("dashboardFilter");
+    expect(dashboard).toContain("setDashboardFilter(nextFilter)");
+    expect(dashboard).toContain(
+      "navigate(Path.Home, { replace: true, state: null })",
+    );
+  });
+
+  test("keeps app sharing in invite growth with affiliate registration and download links", () => {
+    const account = source.slice(
+      source.indexOf("function AndroidAccountSettings()"),
+      source.indexOf("function AndroidGlobalUpdatePrompt()"),
+    );
+    const inviteUrl = account.slice(
+      account.indexOf("const inviteRegisterUrl = useMemo"),
+      account.indexOf("const refreshInviteGrowth = useCallback"),
+    );
+    const share = account.slice(
+      account.indexOf("async function shareInviteGrowth()"),
+      account.indexOf("async function copyInviteGrowthLink()"),
+    );
+    const home = account.slice(
+      account.indexOf("return ("),
+      account.indexOf("showLogoutConfirm &&"),
+    );
+
+    expect(source).not.toContain("shareAppPoster");
+    expect(inviteUrl).toContain('url.searchParams.set("aff_code"');
+    expect(inviteUrl).toContain(
+      'url.searchParams.set("source", "invite_poster_app_qr")',
+    );
+    expect(inviteUrl).toContain('url.searchParams.set("invite_token"');
+    expect(share).toContain("surface: inviteSummary?.attribution_token");
+    expect(share).toContain('aff_code: inviteSummary?.aff_code || ""');
+    expect(share).toContain("registerUrl: inviteRegisterUrl");
+    expect(share).toContain("appUrl: inviteAppUrl");
+    expect(home).not.toContain("text.account.appShare");
+  });
+
+  test("uses a domestic in-app code shop and keeps the shop entry out of Play", () => {
+    expect(constants).toContain(
+      'AccountDirectCodeShop = "/account/direct-code-shop"',
+    );
+    expect(source).toContain("WEB_OPEN_MODE_STORAGE_KEY");
+    expect(source).toContain("readWebOpenMode()");
+    expect(source).toContain("writeWebOpenMode(mode)");
+    expect(source).toContain('webOpenMode === "in_app"');
+    expect(source).toContain("navigate(Path.AccountDirectCodeShop)");
+    expect(source).toContain('className={styles["direct-code-shop-frame"]}');
+    expect(source).toContain(
+      'data-distribution-commerce="direct-external-code-shop"',
+    );
+    expect(source).toContain('data-distribution-commerce="play-billing"');
+    expect(source).toContain('className={styles["primary-payment-action"]}');
+  });
+
+  test("exposes profile, password, and two-factor account security APIs", () => {
+    expect(constants).toContain('AccountProfile = "/account/profile"');
+    expect(source).toContain('"/api/v1/user/profile"');
+    expect(source).toContain('"/api/v1/user"');
+    expect(source).toContain('"/api/v1/user/password"');
+    expect(source).toContain('"/api/v1/auth/mobile/forgot-password"');
+    expect(source).toContain('"/api/v1/auth/mobile/reset-password"');
+    expect(source).toContain('"/api/v1/user/totp/status"');
+    expect(source).toContain('"/api/v1/user/totp/setup"');
+    expect(source).toContain('"/api/v1/user/totp/enable"');
+    expect(source).toContain('"/api/v1/user/totp/disable"');
+    expect(source).toContain('"/api/v1/user/totp/send-code"');
+  });
+
+  test("submits account deletion requests through the mobile support channel", () => {
+    expect(source).toContain('"account_deletion_request"');
+    expect(source).toContain("accountDeletionReason");
+    expect(source).toContain("sendAccountDeletionCode");
+    expect(source).toContain("submitAccountDeletionRequest");
+    expect(source).toContain('submitFeedbackForm(form, "account-deletion")');
+    expect(source).toContain("accountDeletionTicketBody");
+    expect(source).toContain(
+      'accountDeletionConfirm.trim().toUpperCase() !== "DELETE"',
+    );
+  });
+
+  test("routes Google Play purchases through native billing and backend verification", () => {
+    expect(source).toContain("queryPlayBillingProducts");
+    expect(source).toContain("launchPlayBillingPurchase");
+    expect(source).toContain("submitPlayBillingPurchase");
+    expect(source).toContain("client.playBilling.submitPurchase");
+    expect(mobilePlatform).toContain('"/play-billing/purchases"');
+    expect(source).toContain("consumePlayBillingPurchase");
+    expect(source).toContain("acknowledgePlayBillingPurchase");
+    expect(source).toContain("playBillingProductId(record)");
+    expect(source).toContain("record.product_type");
+    expect(source).toContain('productType: "inapp",');
+    expect(source).not.toContain(
+      'productType: fallbackOrderType === "subscription" ? "subs" : "inapp"',
+    );
+    expect(source).not.toContain(
+      'orderType === "subscription" ? "subs" : fallback.productType',
+    );
+  });
+
+  test("account hub no longer promotes misleading service or duplicate code-shop entries", () => {
+    const accountHome = source.slice(
+      source.indexOf('<AndroidAppShell active="account"'),
+      source.indexOf("{accountData.error && !accountData.updatedAt"),
+    );
+    expect(accountHome).toContain("text.account.profile");
+    expect(accountHome).toContain("Path.AccountProfile");
+    expect(accountHome).toContain("text.account.systemSettings");
+    expect(accountHome).toContain("Path.AccountSystemSettings");
+    expect(accountHome).toContain("Path.AccountInvite");
+    expect(accountHome).not.toContain("Path.AccountFeedback");
+    expect(accountHome).not.toContain("Path.AccountPermissions");
+    expect(accountHome).not.toContain("Path.AccountUpdate");
+    expect(accountHome).not.toContain("Path.ContentKit");
+    expect(accountHome).not.toContain("text.account.accountHubProjects");
+    expect(accountHome).not.toContain("text.account.accountHubHelp");
+    expect(accountHome).not.toContain("Path.AccountSupport");
+    expect(accountHome).not.toContain("text.account.directCodeShopAction");
+  });
+
+  test("provides a system settings hub and managed task history actions", () => {
+    expect(source).toContain("function AndroidSystemSettings");
+    expect(source).toContain("Path.AccountAppearance");
+    expect(source).toContain("Path.AccountLanguage");
+    expect(source).toContain("Path.AccountWebOpenMode");
+    expect(source).toContain("function AndroidAppearanceSettings");
+    expect(source).toContain("function AndroidLanguageSettings");
+    expect(source).toContain("function AndroidWebOpenModeSettings");
+    expect(source).toContain("function deleteSelectedTasks");
+    expect(source).toContain("client.tasks.delete");
+    expect(source).toContain("taskManaging");
+    expect(source).toContain("startTaskLongPress");
+    expect(source).toContain("page_size: 50");
+    expect(mobilePlatform).toContain("deleteMobileTask");
+    expect(source).toContain("function AndroidProjects");
+    expect(source).toContain("client.projects.delete");
+    expect(mobilePlatform).toContain("createMobileProject");
+  });
+
+  test("localizes order titles and keeps monetary balances in dollars", () => {
+    expect(source).toContain("function localizedOrderTitle");
+    expect(source).toContain("orderRecharge");
+    expect(source).toContain("localizedOrderTitle(order, text)");
+    expect(source).toContain("localizedOrderTitle(detail, text)");
+    expect(source).toContain("return `$${Number.isFinite(numberValue)");
+    expect(source).not.toContain("return `¥${Number.isFinite(numberValue)");
+  });
+
+  test("keeps curated mobile templates complete for Japanese and Korean", () => {
+    const curated = source.slice(
+      source.indexOf("const IMAGE_PROMPT_TEMPLATES"),
+      source.indexOf("const IMAGE_SIZE_OPTIONS"),
+    );
+    const partialVisibleBlocks: string[] = [];
+    const visibleKeys = new Set([
+      "title",
+      "description",
+      "personality",
+      "starter",
+      "prompt",
+    ]);
+    const lines = curated.split("\n");
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const match = lines[index].match(
+        /^\s*(title|description|personality|starter|prompt):\s*\{/,
+      );
+      if (!match || !visibleKeys.has(match[1])) continue;
+
+      const block = [lines[index]];
+      let depth =
+        (lines[index].match(/\{/g) || []).length -
+        (lines[index].match(/\}/g) || []).length;
+      while (depth > 0 && index + 1 < lines.length) {
+        index += 1;
+        block.push(lines[index]);
+        depth +=
+          (lines[index].match(/\{/g) || []).length -
+          (lines[index].match(/\}/g) || []).length;
+      }
+      const text = block.join("\n");
+      if (
+        text.includes("cn:") &&
+        text.includes("en:") &&
+        (!text.includes("jp:") || !text.includes("ko:"))
+      ) {
+        partialVisibleBlocks.push(text.slice(0, 160));
+      }
+    }
+
+    expect(partialVisibleBlocks).toEqual([]);
+    expect(source).toContain(
+      'type ImagePromptLanguageMode = "app" | "zh" | "en" | "jp" | "ko" | "both"',
+    );
+    expect(source).toContain(
+      'const allowPromptLibraryFallback = locale === "zh" || locale === "en";',
+    );
+    expect(source).toContain("日本語");
+    expect(source).toContain("한국어");
   });
 
   test("uses planned single-image outputs and a bounded local content-kit queue", () => {
@@ -320,7 +655,9 @@ describe("mobile app backend alignment", () => {
 
     expect(chat).toContain("isMobileWebSearchAvailable(");
     expect(chat).toContain("managed.mobileProtocol");
-    expect(chat).toContain("modelSupportsWebSearch && webSearchServiceAvailable");
+    expect(chat).toContain(
+      "modelSupportsWebSearch && webSearchServiceAvailable",
+    );
     expect(chat).toContain("text.chat.webSearchUnavailable");
   });
 
@@ -355,7 +692,7 @@ describe("mobile app backend alignment", () => {
       source.indexOf("function ChatSessionDrawer("),
     );
     expect(dashboard).toContain(
-      '<AndroidAppShell active="chat" text={text} documentScroll>',
+      '<AndroidAppShell active="home" text={text} documentScroll>',
     );
     const stylesheet = readFileSync(
       resolve(process.cwd(), "app/components/mobile-app.module.scss"),

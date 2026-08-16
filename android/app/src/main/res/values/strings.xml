@@ -4,4 +4,5 @@
     <string name="title_activity_main">JisudengChat</string>
     <string name="package_name">com.jisudeng.chat</string>
     <string name="custom_url_scheme">com.jisudeng.chat</string>
+    <string name="push_open_details">Open JisudengChat to view details</string>
 </resources>

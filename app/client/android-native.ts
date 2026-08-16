@@ -136,6 +136,56 @@ export interface NativeDeviceInfo {
   sdkInt?: number;
   appVersionName?: string;
   appVersionCode?: number;
+  distributionChannel?: string;
+}
+
+export type NativePlayBillingProductType = "inapp" | "subs";
+
+export interface NativePlayBillingStatus {
+  available: boolean;
+  ready?: boolean;
+  responseCode?: number;
+  debugMessage?: string;
+  reason?: string;
+}
+
+export interface NativePlayBillingProduct {
+  productId: string;
+  productType: NativePlayBillingProductType | string;
+  title?: string;
+  name?: string;
+  description?: string;
+  formattedPrice?: string;
+  priceCurrencyCode?: string;
+  priceAmountMicros?: number;
+  offerToken?: string;
+}
+
+export interface NativePlayBillingPurchase {
+  productIds: string[];
+  purchaseToken: string;
+  orderId?: string;
+  packageName?: string;
+  purchaseTime?: number;
+  purchaseState?: number;
+  acknowledged?: boolean;
+  autoRenewing?: boolean;
+  quantity?: number;
+  originalJson?: string;
+  signature?: string;
+}
+
+export interface NativePlayBillingPurchaseResult {
+  status: "purchased" | "pending" | "cancelled" | "failed";
+  responseCode?: number;
+  debugMessage?: string;
+  reason?: string;
+  purchases?: NativePlayBillingPurchase[];
+}
+
+export interface NativePlayBillingProductsResult
+  extends NativePlayBillingStatus {
+  products: NativePlayBillingProduct[];
 }
 
 export interface NativeLoginCredentials {
@@ -154,6 +204,38 @@ export interface NativeManagedSessionSecrets {
   user?: object | null;
   session?: object | null;
   imageSession?: object | null;
+}
+
+export interface NativeFcmTokenResult {
+  token: string;
+}
+
+export interface NativeCrashlyticsException {
+  category?: string;
+  message: string;
+  stack?: string;
+}
+
+export interface NativePerformanceTraceResult {
+  traceId: string;
+}
+
+export interface NativePushInboxItem {
+  id: string;
+  title?: string;
+  body?: string;
+  eventType?: string;
+  sourceType?: string;
+  sourceId?: string;
+  ticketId?: string;
+  kind?: string;
+  status?: string;
+  receivedAt: number;
+  read: boolean;
+}
+
+export interface NativePushInboxResult {
+  items: NativePushInboxItem[];
 }
 
 export interface NativeE2EFixtureFlags {
@@ -209,6 +291,7 @@ interface NextChatNativePlugin {
   requestCameraPermission(): Promise<NativePermissionResult>;
   requestMicrophonePermission(): Promise<NativePermissionResult>;
   requestNotificationPermission(): Promise<NativePermissionResult>;
+  getFcmToken?(): Promise<NativeFcmTokenResult>;
   captureImage(options?: {
     fileName?: string;
   }): Promise<NativeCaptureImageResult>;
@@ -284,6 +367,27 @@ interface NextChatNativePlugin {
   openUrl(options: { url: string }): Promise<NativeOpenUrlResult | void>;
   openAppSettings?(): Promise<void>;
   getDeviceInfo?(): Promise<NativeDeviceInfo>;
+  getPlayBillingStatus?(): Promise<NativePlayBillingStatus>;
+  queryPlayBillingProducts?(options: {
+    productIds: string[];
+    productType?: NativePlayBillingProductType;
+  }): Promise<NativePlayBillingProductsResult>;
+  launchPlayBillingPurchase?(options: {
+    productId: string;
+    productType?: NativePlayBillingProductType;
+    offerToken?: string;
+    obfuscatedAccountId?: string;
+    obfuscatedProfileId?: string;
+  }): Promise<NativePlayBillingPurchaseResult>;
+  queryPlayBillingPurchases?(options?: {
+    productType?: NativePlayBillingProductType;
+  }): Promise<NativePlayBillingPurchaseResult>;
+  consumePlayBillingPurchase?(options: {
+    purchaseToken: string;
+  }): Promise<NativePlayBillingStatus>;
+  acknowledgePlayBillingPurchase?(options: {
+    purchaseToken: string;
+  }): Promise<NativePlayBillingStatus>;
 }
 
 const NextChatNative = registerPlugin<NextChatNativePlugin>("NextChatNative");
@@ -776,6 +880,90 @@ export async function requestNotificationPermission() {
     );
   }
   return NextChatNative.requestNotificationPermission();
+}
+
+export async function getNativeFcmToken(): Promise<NativeFcmTokenResult> {
+  if (!isNativeAndroid()) {
+    throw new Error("native Android FCM token is not available");
+  }
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativeFcmTokenResult>("getFcmToken");
+  }
+  if (NextChatNative.getFcmToken) {
+    return NextChatNative.getFcmToken();
+  }
+  throw new Error("native FCM token bridge is not available");
+}
+
+export async function configureNativeCrashlyticsUser(userId?: string | number) {
+  if (!isDirectNativeBridgeAvailable()) return;
+  await callDirectNative<void>("configureCrashlyticsUser", {
+    userId: userId === undefined || userId === null ? "" : String(userId),
+  });
+}
+
+export async function recordNativeCrashlyticsException(
+  detail: NativeCrashlyticsException,
+) {
+  if (!isDirectNativeBridgeAvailable()) return;
+  await callDirectNative<void>("recordCrashlyticsException", {
+    category: String(detail.category || "javascript").slice(0, 80),
+    message: String(detail.message || "client error").slice(0, 1000),
+    stack: String(detail.stack || "").slice(0, 4000),
+  });
+}
+
+export async function startNativePerformanceTrace(
+  name: string,
+  attributes: Record<string, string | number | boolean> = {},
+) {
+  if (!isDirectNativeBridgeAvailable()) return "";
+  const safeAttributes = Object.fromEntries(
+    Object.entries(attributes)
+      .slice(0, 3)
+      .map(([key, value]) => [key, String(value).slice(0, 100)]),
+  );
+  const result = await callDirectNative<NativePerformanceTraceResult>(
+    "startPerformanceTrace",
+    {
+      name: String(name || "app_operation").slice(0, 80),
+      attributes: safeAttributes,
+    },
+  );
+  return String(result.traceId || "");
+}
+
+export async function stopNativePerformanceTrace(
+  traceId: string,
+  outcome: "success" | "error" | "cancelled" | string,
+) {
+  if (!traceId || !isDirectNativeBridgeAvailable()) return;
+  await callDirectNative<void>("stopPerformanceTrace", {
+    traceId,
+    outcome: String(outcome || "unknown").slice(0, 80),
+  });
+}
+
+export async function getNativePushInbox(): Promise<NativePushInboxItem[]> {
+  if (!isDirectNativeBridgeAvailable()) return [];
+  const result = await callDirectNative<NativePushInboxResult>("getPushInbox");
+  return Array.isArray(result.items) ? result.items : [];
+}
+
+export async function markNativePushInboxRead(ids?: string[]) {
+  if (!isDirectNativeBridgeAvailable()) return [];
+  const result = await callDirectNative<NativePushInboxResult>(
+    "markPushInboxRead",
+    { ids: ids || [], all: !ids?.length },
+  );
+  return Array.isArray(result.items) ? result.items : [];
+}
+
+export async function clearNativePushInbox() {
+  if (!isDirectNativeBridgeAvailable()) return [];
+  const result =
+    await callDirectNative<NativePushInboxResult>("clearPushInbox");
+  return Array.isArray(result.items) ? result.items : [];
 }
 
 export async function requestCameraPermission() {
@@ -1506,6 +1694,151 @@ export async function getNativeDeviceInfo(): Promise<NativeDeviceInfo> {
     platform: "web",
     model: typeof navigator !== "undefined" ? navigator.userAgent : "browser",
   } as NativeDeviceInfo;
+}
+
+export async function getPlayBillingStatus(): Promise<NativePlayBillingStatus> {
+  if (!isNativeAndroid()) {
+    return {
+      available: false,
+      reason: "not_android",
+    } as NativePlayBillingStatus;
+  }
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePlayBillingStatus>("getPlayBillingStatus");
+  }
+  if (NextChatNative.getPlayBillingStatus) {
+    return NextChatNative.getPlayBillingStatus();
+  }
+  return {
+    available: false,
+    reason: "native_method_missing",
+  } as NativePlayBillingStatus;
+}
+
+export async function queryPlayBillingProducts(
+  productIds: string[],
+  productType: NativePlayBillingProductType = "inapp",
+): Promise<NativePlayBillingProductsResult> {
+  const ids = productIds.map((id) => id.trim()).filter(Boolean);
+  if (!ids.length) {
+    return {
+      available: false,
+      products: [],
+      reason: "empty_products",
+    } as NativePlayBillingProductsResult;
+  }
+  if (!isNativeAndroid()) {
+    return {
+      available: false,
+      products: [],
+      reason: "not_android",
+    } as NativePlayBillingProductsResult;
+  }
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePlayBillingProductsResult>(
+      "queryPlayBillingProducts",
+      { productIds: ids, productType },
+    );
+  }
+  if (NextChatNative.queryPlayBillingProducts) {
+    return NextChatNative.queryPlayBillingProducts({
+      productIds: ids,
+      productType,
+    });
+  }
+  return {
+    available: false,
+    products: [],
+    reason: "native_method_missing",
+  } as NativePlayBillingProductsResult;
+}
+
+export async function launchPlayBillingPurchase(options: {
+  productId: string;
+  productType?: NativePlayBillingProductType;
+  offerToken?: string;
+  obfuscatedAccountId?: string;
+  obfuscatedProfileId?: string;
+}) {
+  if (!isNativeAndroid()) {
+    throw new Error("play_billing_android_only");
+  }
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePlayBillingPurchaseResult>(
+      "launchPlayBillingPurchase",
+      {
+        ...options,
+        productType: options.productType || "inapp",
+      },
+    );
+  }
+  if (NextChatNative.launchPlayBillingPurchase) {
+    return NextChatNative.launchPlayBillingPurchase({
+      ...options,
+      productType: options.productType || "inapp",
+    });
+  }
+  throw new Error("play_billing_native_method_missing");
+}
+
+export async function queryPlayBillingPurchases(
+  productType: NativePlayBillingProductType = "inapp",
+) {
+  if (!isNativeAndroid()) {
+    return {
+      status: "failed",
+      purchases: [],
+      reason: "not_android",
+    } as NativePlayBillingPurchaseResult;
+  }
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePlayBillingPurchaseResult>(
+      "queryPlayBillingPurchases",
+      { productType },
+    );
+  }
+  if (NextChatNative.queryPlayBillingPurchases) {
+    return NextChatNative.queryPlayBillingPurchases({ productType });
+  }
+  return {
+    status: "failed",
+    purchases: [],
+    reason: "native_method_missing",
+  } as NativePlayBillingPurchaseResult;
+}
+
+export async function consumePlayBillingPurchase(purchaseToken: string) {
+  if (!purchaseToken) return { available: false };
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePlayBillingStatus>(
+      "consumePlayBillingPurchase",
+      { purchaseToken },
+    );
+  }
+  if (NextChatNative.consumePlayBillingPurchase) {
+    return NextChatNative.consumePlayBillingPurchase({ purchaseToken });
+  }
+  return {
+    available: false,
+    reason: "native_method_missing",
+  } as NativePlayBillingStatus;
+}
+
+export async function acknowledgePlayBillingPurchase(purchaseToken: string) {
+  if (!purchaseToken) return { available: false };
+  if (isDirectNativeBridgeAvailable()) {
+    return callDirectNative<NativePlayBillingStatus>(
+      "acknowledgePlayBillingPurchase",
+      { purchaseToken },
+    );
+  }
+  if (NextChatNative.acknowledgePlayBillingPurchase) {
+    return NextChatNative.acknowledgePlayBillingPurchase({ purchaseToken });
+  }
+  return {
+    available: false,
+    reason: "native_method_missing",
+  } as NativePlayBillingStatus;
 }
 
 export async function startNativeDownload(

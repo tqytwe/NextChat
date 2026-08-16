@@ -13,13 +13,31 @@ import {
 import path from "path";
 
 const root = process.cwd();
-const apkSource = path.join(
-  root,
-  "android/app/build/outputs/apk/release/app-release.apk",
+
+function resolveReleaseBuildOutput(configured, candidates) {
+  const selected = String(configured || "").trim();
+  if (selected)
+    return path.isAbsolute(selected) ? selected : path.join(root, selected);
+  for (const candidate of candidates) {
+    const resolved = path.join(root, candidate);
+    if (existsSync(resolved)) return resolved;
+  }
+  return path.join(root, candidates[0]);
+}
+
+const apkSource = resolveReleaseBuildOutput(
+  process.env.ANDROID_RELEASE_APK_SOURCE,
+  [
+    "android/app/build/outputs/apk/direct/release/app-direct-release.apk",
+    "android/app/build/outputs/apk/release/app-release.apk",
+  ],
 );
-const metadataPath = path.join(
-  root,
-  "android/app/build/outputs/apk/release/output-metadata.json",
+const metadataPath = resolveReleaseBuildOutput(
+  process.env.ANDROID_RELEASE_METADATA_SOURCE,
+  [
+    "android/app/build/outputs/apk/direct/release/output-metadata.json",
+    "android/app/build/outputs/apk/release/output-metadata.json",
+  ],
 );
 const embeddedWebIndexPath = path.join(
   root,
@@ -84,6 +102,18 @@ function parseNotes(raw) {
     .split(/[;\n；]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseLocalizedNotes() {
+  const entries = [
+    ["zh-CN", process.env.ANDROID_RELEASE_NOTES_ZH],
+    ["en", process.env.ANDROID_RELEASE_NOTES_EN],
+    ["ja", process.env.ANDROID_RELEASE_NOTES_JA],
+    ["ko", process.env.ANDROID_RELEASE_NOTES_KO],
+  ]
+    .map(([locale, raw]) => [locale, parseNotes(raw)])
+    .filter(([, notes]) => notes.length);
+  return Object.fromEntries(entries);
 }
 
 function normalizeVersionName(value, source) {
@@ -591,10 +621,12 @@ const envNotes = parseNotes(
   process.env.ANDROID_RELEASE_NOTES ||
     process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES,
 );
+const localizedNotes = parseLocalizedNotes();
 
 const manifest = {
   ...existingManifest,
   platform: "android",
+  channel: "direct",
   // The public manifest is derived only from the verified release APK metadata.
   version: apkRelease.version,
   latestVersion: apkRelease.version,
@@ -622,6 +654,11 @@ const manifest = {
         "JisudengChat 聊天与生图支持 Android",
         "生图结果保存在 APP 本机",
       ],
+  ...(Object.keys(localizedNotes).length
+    ? { notesByLocale: localizedNotes }
+    : existingManifest.notesByLocale
+    ? { notesByLocale: existingManifest.notesByLocale }
+    : {}),
 };
 
 assertManifestMatchesApk(manifest, apkRelease, "Generated Android");

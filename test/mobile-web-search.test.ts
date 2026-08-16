@@ -75,6 +75,21 @@ describe("mobile web search", () => {
     expect(context.length).toBeLessThanOrEqual(6000);
   });
 
+  test.each([
+    ["ja-JP", "信頼されていないウェブ資料", "ウェブ検索の出典"],
+    ["ko-KR", "신뢰할 수 없는 웹 참고 자료", "웹 검색 출처"],
+  ])("localizes the web safety boundary for %s", (locale, warning, heading) => {
+    const context = formatMobileWebSearchContext(
+      normalizeMobileWebSearchResponse({
+        request_id: "localized-search",
+        results: [{ title: "Source", url: "https://example.com/source" }],
+      }),
+      locale,
+    );
+    expect(context).toContain(warning);
+    expect(context).toContain(heading);
+  });
+
   test("sends one stable idempotency key only when a model tool call executes", async () => {
     await expect(
       searchMobileWeb(

@@ -20,6 +20,14 @@ const {
   startForegroundWakeWordSession,
   startDirectNativeStreamRequest,
   stopNativeSpeech,
+  getNativeFcmToken,
+  configureNativeCrashlyticsUser,
+  recordNativeCrashlyticsException,
+  startNativePerformanceTrace,
+  stopNativePerformanceTrace,
+  getNativePushInbox,
+  markNativePushInboxRead,
+  clearNativePushInbox,
 } = await import("../app/client/android-native");
 
 describe("direct Android bridge authentication", () => {
@@ -147,6 +155,255 @@ test("native bridge implements a system toast and finish action for double back"
   expect(source).toContain("Toast.makeText(");
   expect(source).toContain('case "finishApp"');
   expect(source).toContain("finishAndRemoveTask()");
+});
+
+test("native bridge exposes Firebase Cloud Messaging token acquisition", async () => {
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
+  let method = "";
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const payload = JSON.parse(raw) as { id: string; method: string };
+      method = payload.method;
+      window.__jisudengNativeResolve?.(payload.id, { token: "fcm-token-1" });
+    },
+  };
+
+  await expect(getNativeFcmToken()).resolves.toEqual({ token: "fcm-token-1" });
+  expect(method).toBe("getFcmToken");
+
+  const source = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  expect(source).toContain('case "getFcmToken"');
+  expect(source).toContain("FirebaseMessaging.getInstance().getToken()");
+  expect(source).toContain("FCM_TOKEN_TIMEOUT_MS");
+  expect(source).toContain("FCM token request timed out");
+});
+
+test("native shell owns FCM receipt notifications and push-open routing", () => {
+  const manifest = readFileSync(
+    resolve(process.cwd(), "android/app/src/main/AndroidManifest.xml"),
+    "utf8",
+  );
+  const activity = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  const service = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/JisudengFirebaseMessagingService.java",
+    ),
+    "utf8",
+  );
+  const pushClient = readFileSync(
+    resolve(process.cwd(), "app/client/mobile-push.ts"),
+    "utf8",
+  );
+
+  expect(manifest).toContain(".JisudengFirebaseMessagingService");
+  expect(manifest).toContain("com.google.firebase.MESSAGING_EVENT");
+  expect(manifest).toContain("com.jisudeng.chat.PUSH_OPEN");
+  expect(manifest).toContain(
+    "com.google.firebase.messaging.default_notification_channel_id",
+  );
+  expect(manifest).toContain(
+    'android:name="com.capacitorjs.plugins.pushnotifications.MessagingService"',
+  );
+  expect(manifest).toContain('tools:node="remove"');
+
+  expect(service).toContain("extends FirebaseMessagingService");
+  expect(service).toContain("void onMessageReceived(RemoteMessage message)");
+  expect(service).toContain("MainActivity.createPushOpenIntent");
+  expect(service).toContain("PendingIntent.getActivity");
+  expect(service).toContain("MainActivity.PUSH_CHANNEL_ID");
+  expect(service).toContain("POST_NOTIFICATIONS");
+  expect(service).toContain("FCM token refreshed length=");
+  expect(service).toContain("FCM_TOKEN_REFRESH_ACTION");
+  expect(service).toContain("sendBroadcast(refreshIntent)");
+  expect(service).toContain("R.string.push_open_details");
+  expect(service).not.toContain("Log.i(LOG_TAG, token)");
+
+  expect(pushClient).toContain('"jisudeng-native-resume"');
+  expect(pushClient).toContain('"online"');
+  expect(pushClient).toContain('"jisudeng:mobile-locale-change"');
+  expect(pushClient).toContain('"jisudeng:fcm-token-refresh"');
+  expect(pushClient).toContain("getManagedMobileLocale()");
+  expect(pushClient).toContain("PUSH_REFRESH_THROTTLE_MS");
+
+  expect(activity).toContain("PUSH_EXTRA_EVENT_TYPE");
+  expect(activity).toContain("PUSH_EXTRA_TICKET_ID");
+  expect(activity).toContain("PUSH_EXTRA_KIND");
+  expect(activity).toContain("PUSH_EXTRA_STATUS");
+  expect(activity).toContain("pushDetailFromIntent");
+  expect(activity).toContain("dispatchPushOpen(intent)");
+  expect(activity).toContain("dispatchPushOpen(getIntent())");
+  expect(activity).toContain("clearPushIntent()");
+  expect(activity).toContain("Intent.ACTION_MAIN");
+  expect(activity).toContain("lastPushIntentSignature");
+  expect(activity).toContain("'jisudeng:push-open'");
+});
+
+test("native bridge forwards JS failures and opaque user ids to Crashlytics", async () => {
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
+  const calls: Array<{ method: string; options: Record<string, unknown> }> = [];
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const payload = JSON.parse(raw) as {
+        id: string;
+        method: string;
+        options: Record<string, unknown>;
+      };
+      calls.push({ method: payload.method, options: payload.options });
+      window.__jisudengNativeResolve?.(payload.id, {});
+    },
+  };
+
+  await configureNativeCrashlyticsUser(42);
+  await recordNativeCrashlyticsException({
+    category: "unhandledrejection",
+    message: "render failed",
+    stack: "stack line",
+  });
+
+  expect(calls).toEqual([
+    { method: "configureCrashlyticsUser", options: { userId: "42" } },
+    {
+      method: "recordCrashlyticsException",
+      options: {
+        category: "unhandledrejection",
+        message: "render failed",
+        stack: "stack line",
+      },
+    },
+  ]);
+
+  const activity = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  expect(activity).toContain("FirebaseCrashlytics.getInstance()");
+  expect(activity).toContain('case "configureCrashlyticsUser"');
+  expect(activity).toContain('case "recordCrashlyticsException"');
+  expect(activity).toContain('"distribution_channel"');
+});
+
+test("native bridge records bounded Firebase performance traces", async () => {
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
+  const calls: Array<{ method: string; options: Record<string, unknown> }> = [];
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const payload = JSON.parse(raw) as {
+        id: string;
+        method: string;
+        options: Record<string, unknown>;
+      };
+      calls.push({ method: payload.method, options: payload.options });
+      window.__jisudengNativeResolve?.(
+        payload.id,
+        payload.method === "startPerformanceTrace"
+          ? { traceId: "trace-1" }
+          : {},
+      );
+    },
+  };
+
+  await expect(
+    startNativePerformanceTrace("chat_completion", {
+      transport: "native",
+      retry: false,
+      attachments: true,
+      ignored: "fourth-attribute",
+    }),
+  ).resolves.toBe("trace-1");
+  await stopNativePerformanceTrace("trace-1", "success");
+
+  expect(calls).toEqual([
+    {
+      method: "startPerformanceTrace",
+      options: {
+        name: "chat_completion",
+        attributes: {
+          transport: "native",
+          retry: "false",
+          attachments: "true",
+        },
+      },
+    },
+    {
+      method: "stopPerformanceTrace",
+      options: { traceId: "trace-1", outcome: "success" },
+    },
+  ]);
+
+  const activity = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  expect(activity).toContain("FirebasePerformance.getInstance()");
+  expect(activity).toContain('newTrace("app_cold_start")');
+  expect(activity).toContain('newTrace("webview_first_load")');
+  expect(activity).toContain('case "startPerformanceTrace"');
+  expect(activity).toContain('case "stopPerformanceTrace"');
+});
+
+test("native bridge exposes the durable FCM notification inbox", async () => {
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
+  const methods: string[] = [];
+  window.JisudengNativeBridge = {
+    request(raw) {
+      const payload = JSON.parse(raw) as { id: string; method: string };
+      methods.push(payload.method);
+      window.__jisudengNativeResolve?.(payload.id, {
+        items:
+          payload.method === "clearPushInbox"
+            ? []
+            : [
+                {
+                  id: "message-1",
+                  title: "Ready",
+                  receivedAt: 1,
+                  read: payload.method === "markPushInboxRead",
+                },
+              ],
+      });
+    },
+  };
+
+  await expect(getNativePushInbox()).resolves.toHaveLength(1);
+  await expect(markNativePushInboxRead(["message-1"])).resolves.toEqual([
+    expect.objectContaining({ id: "message-1", read: true }),
+  ]);
+  await expect(clearNativePushInbox()).resolves.toEqual([]);
+  expect(methods).toEqual([
+    "getPushInbox",
+    "markPushInboxRead",
+    "clearPushInbox",
+  ]);
+
+  const service = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/JisudengFirebaseMessagingService.java",
+    ),
+    "utf8",
+  );
+  expect(service).toContain("persistPushNotification(message, data)");
+  expect(service).toContain("markPushInboxRead");
+  expect(service).toContain("next.length() < 100");
 });
 
 test("native image storage requires an owner and exposes only explicit legacy claims", () => {
