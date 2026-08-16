@@ -16709,7 +16709,9 @@ function AndroidDetailShell(props: {
     <main className={clsx(styles["mobile-app"], styles["native-page"])}>
       <section className={styles["app-shell"]}>
         <div className={clsx(styles["app-scroll"], styles["detail-scroll"])}>
-          <header className={styles["app-header"]}>
+          <header
+            className={clsx(styles["app-header"], styles["detail-header"])}
+          >
             <IconButton
               label={props.text.common.back}
               onClick={() =>
@@ -16732,7 +16734,7 @@ function AndroidDetailShell(props: {
                 <ReloadIcon />
               </IconButton>
             ) : (
-              <span className={styles["header-spacer"]} />
+              <span className={styles["header-spacer"]} aria-hidden="true" />
             )}
           </header>
           {props.children}
@@ -16869,10 +16871,6 @@ function AndroidAppearanceSettings() {
       fallback={Path.AccountSystemSettings}
     >
       <section className={styles["section"]}>
-        <div className={styles["section-head"]}>
-          <h2>{text.account.appearance}</h2>
-          <span>{text.account.appearanceModes}</span>
-        </div>
         <ThemeSwitch text={text} />
       </section>
     </AndroidDetailShell>
@@ -16908,10 +16906,6 @@ function AndroidWebOpenModeSettings() {
       fallback={Path.AccountSystemSettings}
     >
       <section className={styles["section"]}>
-        <div className={styles["section-head"]}>
-          <h2>{text.account.webOpenMode}</h2>
-          <span>{text.account.webOpenInApp}</span>
-        </div>
         <div className={styles["web-open-mode"]}>
           {(["in_app", "external"] as WebOpenMode[]).map((mode) => (
             <button
@@ -21931,14 +21925,11 @@ function AndroidAccountSettings() {
     return (
       <AndroidDetailShell
         title={text.account.feedbackNew}
+        subtitle={currentVersion}
         text={text}
         fallback={Path.AccountFeedback}
       >
         <section className={styles["section"]}>
-          <div className={styles["section-head"]}>
-            <h2>{text.account.feedbackNew}</h2>
-            <span>{currentVersion}</span>
-          </div>
           <p className={styles["empty-copy"]}>{text.account.feedbackHint}</p>
           <label className={styles["field-card"]}>
             <span>{text.account.feedbackTitleLabel}</span>

@@ -436,6 +436,35 @@ describe("mobile app backend alignment", () => {
     expect(source).toContain("navigate(legacySystemRoute, { replace: true })");
   });
 
+  test("keeps native detail pages compact without nested section cards", () => {
+    const appearancePage = source.slice(
+      source.indexOf("function AndroidAppearanceSettings"),
+      source.indexOf("function AndroidLanguageSettings"),
+    );
+    const webModePage = source.slice(
+      source.indexOf("function AndroidWebOpenModeSettings"),
+      source.indexOf("function AndroidPaymentOrderCard"),
+    );
+    expect(source).toContain('styles["detail-header"]');
+    expect(appearancePage).not.toContain('styles["section-head"]');
+    expect(webModePage).not.toContain('styles["section-head"]');
+    expect(styles).toMatch(
+      /\.detail-header\s*\{[\s\S]*?min-height: 48px;[\s\S]*?margin-bottom: 8px;/,
+    );
+    expect(styles).toMatch(
+      /\.detail-header\s*\{[\s\S]*?h1\s*\{[\s\S]*?font-size: 20px;/,
+    );
+    expect(styles).toMatch(
+      /\.detail-header\s*\{[\s\S]*?\.icon-button\s*\{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/,
+    );
+    expect(styles).toMatch(
+      /\.detail-scroll\s*\{[\s\S]*?> \.section\s*\{[\s\S]*?border: 0;[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/,
+    );
+    expect(styles).toMatch(
+      /\.language-settings\s*\{[\s\S]*?margin: 0;[\s\S]*?border-radius: 8px;/,
+    );
+  });
+
   test("localizes order titles and keeps monetary balances in dollars", () => {
     expect(source).toContain("function localizedOrderTitle");
     expect(source).toContain("orderRecharge");
