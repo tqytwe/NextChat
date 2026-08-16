@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, jest, test } from "@jest/globals";
+import type { MobileTask } from "../app/client/mobile-platform";
 
 const managedJsonRequest = jest.fn<(...args: unknown[]) => Promise<unknown>>();
 const managedRequestText = jest.fn<(...args: unknown[]) => Promise<unknown>>();
@@ -88,6 +89,80 @@ describe("mobile platform client", () => {
       }),
     );
     expect(String(init.body)).not.toContain(accessToken);
+  });
+
+  test("lists tasks with the stable cursor and filter contract", async () => {
+    await platform.listMobileTasks(baseUrl, accessToken, {
+      kind: "image",
+      status: "completed",
+      query: "poster",
+      date_from: "2026-08-01T00:00:00Z",
+      date_to: "2026-08-31T00:00:00Z",
+      order: "desc",
+      cursor: "next-page",
+      limit: 50,
+    });
+
+    expect(managedJsonRequest.mock.calls[0][1]).toBe(
+      "/api/v1/mobile/tasks?kind=image&status=completed&query=poster&date_from=2026-08-01T00%3A00%3A00Z&date_to=2026-08-31T00%3A00%3A00Z&order=desc&cursor=next-page&limit=50",
+    );
+  });
+
+  test("bulk deletes tasks with a stable request and idempotency key", async () => {
+    await platform.bulkDeleteMobileTasks(baseUrl, accessToken, {
+      ids: ["task-1", "task-2"],
+      client_request_id: "bulk-delete-1",
+    });
+
+    const init = managedJsonRequest.mock.calls[0][2] as RequestInit;
+    expect(managedJsonRequest).toHaveBeenCalledWith(
+      baseUrl,
+      "/api/v1/mobile/tasks/bulk-delete",
+      expect.objectContaining({ method: "POST" }),
+      accessToken,
+    );
+    expect(init.body).toBe(
+      JSON.stringify({
+        ids: ["task-1", "task-2"],
+        client_request_id: "bulk-delete-1",
+      }),
+    );
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-Client-Request-ID")).toBe("bulk-delete-1");
+    expect(headers.get("Idempotency-Key")).toBe("bulk-delete-1");
+    expect(headers.get("X-Request-ID")).toBe("bulk-delete-1");
+  });
+
+  test("bulk cancels tasks with the same idempotency contract", async () => {
+    await platform.bulkCancelMobileTasks(baseUrl, accessToken, {
+      ids: ["task-1"],
+      client_request_id: "bulk-cancel-1",
+    });
+    expect(managedJsonRequest.mock.calls[0][1]).toBe(
+      "/api/v1/mobile/tasks/bulk-cancel",
+    );
+    const headers = new Headers(
+      (managedJsonRequest.mock.calls[0][2] as RequestInit).headers,
+    );
+    expect(headers.get("Idempotency-Key")).toBe("bulk-cancel-1");
+  });
+
+  test("merges refreshed and appended task pages without duplicates", () => {
+    const existing = [
+      { id: "task-2", status: "running" },
+      { id: "task-1", status: "queued" },
+    ] as MobileTask[];
+    const refreshed = [
+      { id: "task-3", status: "queued" },
+      { id: "task-2", status: "completed" },
+    ] as MobileTask[];
+
+    expect(
+      platform.mergeMobileTaskPages(existing, refreshed, "refresh"),
+    ).toEqual([refreshed[0], refreshed[1], existing[1]]);
+    expect(
+      platform.mergeMobileTaskPages(existing, [existing[1]], "append"),
+    ).toEqual(existing);
   });
 
   test("uploads assets through the managed native-capable transport", async () => {
@@ -223,6 +298,14 @@ describe("mobile platform client", () => {
       client_request_id: "switch-1",
     });
     await client.tasks.delete("task-1");
+    await client.tasks.bulkDelete({
+      ids: ["task-1"],
+      client_request_id: "bulk-delete-2",
+    });
+    await client.tasks.bulkCancel({
+      ids: ["task-2"],
+      client_request_id: "bulk-cancel-2",
+    });
     await client.imageHistory.list({ status: "failed", limit: 10 });
     await client.imageHistory.delete("history-1");
     await client.imageHistory.retry("history-2", {
@@ -255,6 +338,8 @@ describe("mobile platform client", () => {
       "/api/v1/mobile/sessions",
       "/api/v1/mobile/sessions/image/switch-group",
       "/api/v1/mobile/tasks/task-1",
+      "/api/v1/mobile/tasks/bulk-delete",
+      "/api/v1/mobile/tasks/bulk-cancel",
       "/api/v1/mobile/image-history?status=failed&limit=10",
       "/api/v1/mobile/image-history/history-1",
       "/api/v1/mobile/image-history/history-2/retry",
@@ -275,10 +360,10 @@ describe("mobile platform client", () => {
     expect(managedJsonRequest.mock.calls[5][2]).toMatchObject({
       method: "DELETE",
     });
-    expect(managedJsonRequest.mock.calls[9][2]).toMatchObject({
+    expect(managedJsonRequest.mock.calls[11][2]).toMatchObject({
       method: "POST",
     });
-    expect(managedJsonRequest.mock.calls[11][2]).toMatchObject({
+    expect(managedJsonRequest.mock.calls[13][2]).toMatchObject({
       method: "POST",
       body: JSON.stringify({
         provider: "wechat",

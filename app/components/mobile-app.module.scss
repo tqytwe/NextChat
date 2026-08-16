@@ -2267,10 +2267,12 @@
   top: 0;
   z-index: 3;
   justify-content: space-between;
+  flex-wrap: wrap;
   padding: 6px 0;
   background: var(--surface-strong);
 
   button {
+    flex: 1 1 auto;
     min-height: 40px;
     padding: 0 12px;
     border: var(--border-in-light);
@@ -5383,28 +5385,29 @@
 
 .profile-security-section {
   display: grid;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 13px;
-  border: var(--border-in-light);
-  border-radius: 16px;
-  background: var(--surface);
-  box-shadow: var(--card-shadow);
+  gap: 8px;
+  margin: 0;
+  padding: 14px 2px;
+  border: 0;
+  border-bottom: var(--border-in-light);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .profile-avatar-preview {
   display: grid;
-  grid-template-columns: 58px 1fr;
+  grid-template-columns: 48px 1fr;
   align-items: center;
   gap: 12px;
   min-width: 0;
 
   img,
   i {
-    width: 58px;
-    height: 58px;
-    border-radius: 20px;
-    box-shadow: var(--card-shadow);
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    box-shadow: none;
   }
 
   img {
@@ -5414,9 +5417,9 @@
   i {
     display: grid;
     place-items: center;
-    background: linear-gradient(135deg, #007aff, #34c759);
+    background: var(--ios-blue);
     color: #fff;
-    font-size: 24px;
+    font-size: 20px;
     font-style: normal;
     font-weight: 950;
   }
@@ -5525,8 +5528,9 @@
 
 .field-card {
   display: grid;
-  gap: 7px;
-  padding: 10px 12px;
+  gap: 3px;
+  min-height: 46px;
+  padding: 6px 10px;
   border: var(--border-in-light);
   border-radius: 8px;
   background: var(--gray);

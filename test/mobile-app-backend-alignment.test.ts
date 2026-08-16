@@ -64,6 +64,11 @@ describe("mobile app backend alignment", () => {
     );
     expect(bottomTabs).toContain("-webkit-line-clamp: 2;");
     expect(bottomTabs).not.toContain("grid-template-columns: repeat(4, 1fr);");
+    expect(source).toContain("props.text.navigation.home");
+    expect(source).toContain("props.text.navigation.chat");
+    expect(source).toContain("props.text.navigation.create");
+    expect(source).toContain("props.text.navigation.projects");
+    expect(source).toContain("props.text.navigation.account");
   });
 
   test("supports native Google and GitHub OAuth callback login without web cookies", () => {
@@ -237,7 +242,10 @@ describe("mobile app backend alignment", () => {
 
     expect(gate).toContain('window.addEventListener("jisudeng:push-open"');
     expect(gate).toContain('sourceType === "mobile_feedback"');
-    expect(gate).toContain("navigate(Path.AccountFeedback)");
+    expect(gate).toContain("Path.AccountFeedbackDetail");
+    expect(gate).toContain("encodeURIComponent(");
+    expect(gate).toContain("sourceId,");
+    expect(source).toContain("selectedSupportTicketID");
     expect(gate).toContain('sourceType === "mobile_task"');
     expect(gate).toContain('eventType.startsWith("task.")');
     expect(gate).toContain("navigate(Path.Sd)");
@@ -388,7 +396,18 @@ describe("mobile app backend alignment", () => {
     expect(source).toContain("function AndroidLanguageSettings");
     expect(source).toContain("function AndroidWebOpenModeSettings");
     expect(source).toContain("function deleteSelectedTasks");
-    expect(source).toContain("client.tasks.delete");
+    expect(source).toContain("client.tasks.bulkDelete");
+    expect(source).toContain("client.tasks.bulkCancel");
+    expect(source).toContain("function ConfirmSheet");
+    expect(source).toContain('result.status === "not_terminal"');
+    expect(source).toContain("error.status === 405");
+    expect(source).toContain("taskDeleteConfirmOpen");
+    expect(source).toContain('styles["app-toast"]');
+    expect(source).not.toContain(
+      "window.confirm(text.platform.taskDeleteConfirm",
+    );
+    expect(source).toContain("taskPageRef.current");
+    expect(source).toContain("mergeMobileTaskPages");
     expect(source).toContain("taskManaging");
     expect(source).toContain("startTaskLongPress");
     expect(source).toContain("page_size: 50");
@@ -396,6 +415,25 @@ describe("mobile app backend alignment", () => {
     expect(source).toContain("function AndroidProjects");
     expect(source).toContain("client.projects.delete");
     expect(mobilePlatform).toContain("createMobileProject");
+    expect(constants).toContain(
+      'AccountPermissions = "/account/system-settings/permissions"',
+    );
+    expect(constants).toContain(
+      'AccountUpdate = "/account/system-settings/version"',
+    );
+    expect(constants).toContain(
+      'AccountFeedback = "/account/system-settings/feedback"',
+    );
+    expect(constants).toContain(
+      'AccountFeedbackNew = "/account/system-settings/feedback/new"',
+    );
+    expect(constants).toContain(
+      'AccountFeedbackDetail = "/account/system-settings/feedback/detail"',
+    );
+    expect(source).toContain("route === Path.AccountFeedbackNew");
+    expect(source).toContain("route === Path.AccountFeedbackDetail");
+    expect(source).toContain('"/account/permissions": Path.AccountPermissions');
+    expect(source).toContain("navigate(legacySystemRoute, { replace: true })");
   });
 
   test("localizes order titles and keeps monetary balances in dollars", () => {

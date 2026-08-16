@@ -206,6 +206,7 @@ import {
 import type { LocalMaterial } from "../client/local-materials";
 import {
   createMobilePlatformClient,
+  mergeMobileTaskPages,
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
 import { searchMobileWeb } from "../client/mobile-web-search";
@@ -568,6 +569,18 @@ async function mobilePlatformClient() {
       delete: (...args: Parameters<MobilePlatformClient["tasks"]["delete"]>) =>
         requestWithManagedAuth(({ baseUrl, accessToken }) =>
           makeClient(baseUrl, accessToken).tasks.delete(...args),
+        ),
+      bulkDelete: (
+        ...args: Parameters<MobilePlatformClient["tasks"]["bulkDelete"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.bulkDelete(...args),
+        ),
+      bulkCancel: (
+        ...args: Parameters<MobilePlatformClient["tasks"]["bulkCancel"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.bulkCancel(...args),
         ),
     },
     projects: {
@@ -4682,31 +4695,31 @@ function AndroidBottomTabs(props: {
   }> = [
     {
       id: "home",
-      label: props.text.dashboard.title,
+      label: props.text.navigation.home,
       path: Path.Home,
       icon: <BotIcon />,
     },
     {
       id: "chat",
-      label: props.text.chat.title,
+      label: props.text.navigation.chat,
       path: Path.Chat,
       icon: <ChatIcon />,
     },
     {
       id: "create",
-      label: props.text.image.title,
+      label: props.text.navigation.create,
       path: Path.Sd,
       icon: <SDIcon />,
     },
     {
       id: "projects",
-      label: props.text.platform.projects,
+      label: props.text.navigation.projects,
       path: Path.Projects,
       icon: <HistoryIcon />,
     },
     {
       id: "account",
-      label: props.text.account.title,
+      label: props.text.navigation.account,
       path: Path.Settings,
       icon: <SettingsIcon />,
     },
@@ -6445,6 +6458,10 @@ function AndroidActivityCenter() {
   const [taskPage, setTaskPage] = useState(1);
   const [taskHasMore, setTaskHasMore] = useState(true);
   const [taskLoadingMore, setTaskLoadingMore] = useState(false);
+  const taskPageRef = useRef(1);
+  const taskHasMoreRef = useRef(true);
+  const taskLoadingMoreRef = useRef(false);
+  const taskCursorRef = useRef("");
   const [taskStatusFilter, setTaskStatusFilter] = useState<
     "all" | MobileTaskStatus
   >("all");
@@ -6461,60 +6478,83 @@ function AndroidActivityCenter() {
   const [targetProjectId, setTargetProjectId] = useState("");
   const [projectMessage, setProjectMessage] = useState("");
   const [projectBusy, setProjectBusy] = useState(false);
+  const [taskDeleteConfirmOpen, setTaskDeleteConfirmOpen] = useState(false);
+  const [taskCancelConfirmOpen, setTaskCancelConfirmOpen] = useState(false);
+  const [taskNotice, setTaskNotice] = useState("");
+  const taskNoticeTimerRef = useRef<number | null>(null);
+
+  function showTaskNotice(message: string) {
+    setTaskNotice(message);
+    if (taskNoticeTimerRef.current !== null) {
+      window.clearTimeout(taskNoticeTimerRef.current);
+    }
+    taskNoticeTimerRef.current = window.setTimeout(() => {
+      setTaskNotice("");
+      taskNoticeTimerRef.current = null;
+    }, 3200);
+  }
 
   const refresh = useCallback(
     async (append = false, preserveLoaded = false) => {
-      if (append && (taskLoadingMore || !taskHasMore || view !== "tasks"))
+      if (
+        append &&
+        (taskLoadingMoreRef.current ||
+          !taskHasMoreRef.current ||
+          view !== "tasks")
+      )
         return;
-      if (append) setTaskLoadingMore(true);
-      else setLoading(true);
+      if (append) {
+        taskLoadingMoreRef.current = true;
+        setTaskLoadingMore(true);
+      } else setLoading(true);
       try {
         if (view === "notifications") {
           setNotifications(await getNativePushInbox());
         } else {
           const client = await mobilePlatformClient();
-          const nextPage = append ? taskPage + 1 : 1;
+          const nextPage = append ? taskPageRef.current + 1 : 1;
           const page = await client.tasks.list({
             page: nextPage,
             page_size: 50,
+            cursor: append ? taskCursorRef.current || undefined : undefined,
+            limit: 50,
             order: "desc",
             status: taskStatusFilter === "all" ? undefined : taskStatusFilter,
           });
           const items = page.items || [];
           setTasks((current) => {
-            if (append) return [...current, ...items];
-            if (!preserveLoaded) return items;
-            const refreshed = new Set(items.map((item) => String(item.id)));
-            return [
-              ...items,
-              ...current.filter((item) => !refreshed.has(String(item.id))),
-            ];
+            if (append) return mergeMobileTaskPages(current, items, "append");
+            return mergeMobileTaskPages(
+              current,
+              items,
+              preserveLoaded ? "refresh" : "replace",
+            );
           });
-          if (!preserveLoaded) setTaskPage(nextPage);
-          setTaskHasMore(
-            typeof page.has_more === "boolean"
-              ? page.has_more
-              : typeof page.pages === "number"
-              ? nextPage < page.pages
-              : items.length >= 50,
-          );
+          if (!preserveLoaded) {
+            const hasMore =
+              typeof page.has_more === "boolean"
+                ? page.has_more
+                : typeof page.pages === "number"
+                ? nextPage < page.pages
+                : items.length >= 50;
+            taskPageRef.current = nextPage;
+            taskHasMoreRef.current = hasMore;
+            taskCursorRef.current = page.next_cursor || "";
+            setTaskPage(nextPage);
+            setTaskHasMore(hasMore);
+          }
         }
         setError("");
       } catch {
         setError(text.platform.taskRefreshFailed);
       } finally {
-        if (append) setTaskLoadingMore(false);
-        else setLoading(false);
+        if (append) {
+          taskLoadingMoreRef.current = false;
+          setTaskLoadingMore(false);
+        } else setLoading(false);
       }
     },
-    [
-      taskHasMore,
-      taskLoadingMore,
-      taskPage,
-      taskStatusFilter,
-      text.platform.taskRefreshFailed,
-      view,
-    ],
+    [taskStatusFilter, text.platform.taskRefreshFailed, view],
   );
 
   useEffect(() => {
@@ -6548,11 +6588,22 @@ function AndroidActivityCenter() {
       if (taskLongPressRef.current !== null) {
         window.clearTimeout(taskLongPressRef.current);
       }
+      if (taskNoticeTimerRef.current !== null) {
+        window.clearTimeout(taskNoticeTimerRef.current);
+      }
     },
     [],
   );
 
   useNativeBackHandler(true, () => {
+    if (taskDeleteConfirmOpen) {
+      setTaskDeleteConfirmOpen(false);
+      return;
+    }
+    if (taskCancelConfirmOpen) {
+      setTaskCancelConfirmOpen(false);
+      return;
+    }
     if (selectedTask) {
       setSelectedTask(null);
       setProjectMessage("");
@@ -6675,22 +6726,56 @@ function AndroidActivityCenter() {
       setError(text.platform.taskRunningCannotDelete);
       return;
     }
-    if (!window.confirm(text.platform.taskDeleteConfirm(deletable.length)))
-      return;
+    setTaskDeleteConfirmOpen(false);
     const failed = new Set<string>(protectedTaskIds);
+    let deletedCount = 0;
     try {
       const client = await mobilePlatformClient();
-      for (let index = 0; index < deletable.length; index += 4) {
-        const batch = deletable.slice(index, index + 4);
-        const results = await Promise.allSettled(
-          batch.map((task) => client.tasks.delete(task.id)),
-        );
-        results.forEach((result, resultIndex) => {
-          if (result.status === "rejected") {
-            failed.add(String(batch[resultIndex].id));
+      const requestId = clientRequestID("task-bulk-delete");
+      try {
+        const result = await client.tasks.bulkDelete({
+          ids: selected.map((task) => String(task.id)),
+          client_request_id: requestId,
+        });
+        deletedCount = result.deleted;
+        const returned = new Set(result.results.map((item) => String(item.id)));
+        result.results.forEach((result) => {
+          if (result.status === "not_terminal" || result.status === "failed") {
+            failed.add(String(result.id));
+          } else {
+            failed.delete(String(result.id));
           }
         });
+        selected.forEach((task) => {
+          if (!returned.has(String(task.id))) failed.add(String(task.id));
+        });
+      } catch (error) {
+        const olderBackend =
+          error instanceof ManagedApiError &&
+          (error.status === 404 || error.status === 405);
+        if (!olderBackend) throw error;
+        for (let index = 0; index < deletable.length; index += 4) {
+          const batch = deletable.slice(index, index + 4);
+          const results = await Promise.allSettled(
+            batch.map((task) => client.tasks.delete(task.id)),
+          );
+          results.forEach((result, resultIndex) => {
+            if (result.status === "rejected") {
+              failed.add(String(batch[resultIndex].id));
+            } else {
+              failed.delete(String(batch[resultIndex].id));
+              deletedCount += 1;
+            }
+          });
+        }
       }
+      setTasks((current) =>
+        current.filter(
+          (task) =>
+            !selectedTaskIds.has(String(task.id)) ||
+            failed.has(String(task.id)),
+        ),
+      );
       await refresh();
       setSelectedTaskIds(failed);
       if (failed.size) {
@@ -6703,9 +6788,108 @@ function AndroidActivityCenter() {
         setError("");
         setTaskManaging(false);
       }
+      if (deletedCount > 0) {
+        showTaskNotice(text.platform.taskDeleteDone(deletedCount));
+      }
     } catch {
       setError(text.platform.taskRefreshFailed);
     }
+  }
+
+  function requestDeleteSelectedTasks() {
+    const deletableCount = tasks.filter(
+      (task) =>
+        selectedTaskIds.has(String(task.id)) &&
+        !["queued", "running", "streaming"].includes(task.status),
+    ).length;
+    if (!deletableCount) {
+      setError(text.platform.taskRunningCannotDelete);
+      return;
+    }
+    setTaskDeleteConfirmOpen(true);
+  }
+
+  async function cancelSelectedTasks() {
+    const selected = tasks.filter(
+      (task) =>
+        selectedTaskIds.has(String(task.id)) &&
+        ["queued", "running", "streaming"].includes(task.status),
+    );
+    if (!selected.length) return;
+    setTaskCancelConfirmOpen(false);
+    const failed = new Set<string>();
+    let cancelledCount = 0;
+    try {
+      const client = await mobilePlatformClient();
+      const requestId = clientRequestID("task-bulk-cancel");
+      try {
+        const result = await client.tasks.bulkCancel({
+          ids: selected.map((task) => String(task.id)),
+          client_request_id: requestId,
+        });
+        cancelledCount = result.cancelled;
+        const returned = new Set(result.results.map((item) => String(item.id)));
+        result.results.forEach((item) => {
+          if (item.status === "not_cancellable" || item.status === "failed") {
+            failed.add(String(item.id));
+          }
+        });
+        selected.forEach((task) => {
+          if (!returned.has(String(task.id))) failed.add(String(task.id));
+        });
+      } catch (error) {
+        const olderBackend =
+          error instanceof ManagedApiError &&
+          (error.status === 404 || error.status === 405);
+        if (!olderBackend) throw error;
+        const results = await Promise.allSettled(
+          selected.map((task) =>
+            client.tasks.cancel(task.id, {
+              reason: "user_cancelled",
+              client_request_id: clientRequestID("task-cancel"),
+            }),
+          ),
+        );
+        results.forEach((result, index) => {
+          if (result.status === "rejected")
+            failed.add(String(selected[index].id));
+          else cancelledCount += 1;
+        });
+      }
+      setTasks((current) =>
+        current.map((task) =>
+          selectedTaskIds.has(String(task.id)) && !failed.has(String(task.id))
+            ? {
+                ...task,
+                status: "cancelled",
+                cancellable: false,
+                retryable: true,
+              }
+            : task,
+        ),
+      );
+      await refresh(false, true);
+      setSelectedTaskIds(failed);
+      if (failed.size) setError(text.platform.taskCancelPartial(failed.size));
+      else {
+        setError("");
+        setTaskManaging(false);
+      }
+      if (cancelledCount) {
+        showTaskNotice(text.platform.taskCancelDone(cancelledCount));
+      }
+    } catch {
+      setError(text.platform.taskRefreshFailed);
+    }
+  }
+
+  function requestCancelSelectedTasks() {
+    const cancellableCount = tasks.filter(
+      (task) =>
+        selectedTaskIds.has(String(task.id)) &&
+        ["queued", "running", "streaming"].includes(task.status),
+    ).length;
+    if (cancellableCount) setTaskCancelConfirmOpen(true);
   }
 
   const unreadCount = notifications.filter((item) => !item.read).length;
@@ -6875,6 +7059,9 @@ function AndroidActivityCenter() {
                   setTaskStatusFilter(
                     event.currentTarget.value as "all" | MobileTaskStatus,
                   );
+                  taskPageRef.current = 1;
+                  taskHasMoreRef.current = true;
+                  taskCursorRef.current = "";
                   setTaskPage(1);
                   setTaskHasMore(true);
                   leaveTaskManage();
@@ -6897,6 +7084,21 @@ function AndroidActivityCenter() {
                   <div className={styles["task-selection-toolbar"]}>
                     <button
                       type="button"
+                      disabled={
+                        !tasks.some(
+                          (task) =>
+                            selectedTaskIds.has(String(task.id)) &&
+                            ["queued", "running", "streaming"].includes(
+                              task.status,
+                            ),
+                        )
+                      }
+                      onClick={requestCancelSelectedTasks}
+                    >
+                      {text.common.cancel}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() =>
                         setSelectedTaskIds(
                           selectedTaskIds.size === tasks.length
@@ -6911,7 +7113,7 @@ function AndroidActivityCenter() {
                       type="button"
                       className={styles["danger-inline"]}
                       disabled={!selectedTaskIds.size}
-                      onClick={() => void deleteSelectedTasks()}
+                      onClick={requestDeleteSelectedTasks}
                     >
                       <DeleteIcon />
                       <span>{text.common.delete}</span>
@@ -7083,6 +7285,42 @@ function AndroidActivityCenter() {
             )}
           </section>
         </>
+      )}
+      <ConfirmSheet
+        open={taskDeleteConfirmOpen}
+        title={text.common.delete}
+        body={text.platform.taskDeleteConfirm(
+          tasks.filter(
+            (task) =>
+              selectedTaskIds.has(String(task.id)) &&
+              !["queued", "running", "streaming"].includes(task.status),
+          ).length,
+        )}
+        cancelLabel={text.common.cancel}
+        confirmLabel={text.common.delete}
+        danger
+        onClose={() => setTaskDeleteConfirmOpen(false)}
+        onConfirm={() => void deleteSelectedTasks()}
+      />
+      <ConfirmSheet
+        open={taskCancelConfirmOpen}
+        title={text.common.cancel}
+        body={text.platform.taskCancelConfirm(
+          tasks.filter(
+            (task) =>
+              selectedTaskIds.has(String(task.id)) &&
+              ["queued", "running", "streaming"].includes(task.status),
+          ).length,
+        )}
+        cancelLabel={text.common.back}
+        confirmLabel={text.common.cancel}
+        onClose={() => setTaskCancelConfirmOpen(false)}
+        onConfirm={() => void cancelSelectedTasks()}
+      />
+      {taskNotice && (
+        <div className={styles["app-toast"]} role="status" aria-live="polite">
+          {taskNotice}
+        </div>
       )}
     </AndroidAppShell>
   );
@@ -16522,6 +16760,45 @@ function AccountMenuItem(props: {
   );
 }
 
+function ConfirmSheet(props: {
+  open: boolean;
+  title: string;
+  body: string;
+  cancelLabel: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  if (!props.open) return null;
+  return (
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-sheet-title"
+      onClick={props.onClose}
+    >
+      <div
+        className={styles["confirm-dialog"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="confirm-sheet-title">{props.title}</h2>
+        <p>{props.body}</p>
+        <div className={styles["dialog-actions"]}>
+          <button onClick={props.onClose}>{props.cancelLabel}</button>
+          <button
+            className={clsx({ [styles["danger-inline"]]: props.danger })}
+            onClick={props.onConfirm}
+          >
+            {props.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AndroidSystemSettings() {
   const text = useMobileText();
   const navigate = useNavigate();
@@ -17099,6 +17376,10 @@ function AndroidAccountSettings() {
     () => new URLSearchParams(location.search).get("tx") || "",
     [location.search],
   );
+  const selectedSupportTicketID = useMemo(
+    () => new URLSearchParams(location.search).get("ticket") || "",
+    [location.search],
+  );
 
   const currentVersion = formatAndroidReleaseVersion(
     installedRelease,
@@ -17135,6 +17416,19 @@ function AndroidAccountSettings() {
   const visiblePaymentOptionCount =
     paymentMethods.length + (replacedWechatPaymentAvailable ? 1 : 0);
   const route = location.pathname;
+  const legacySystemRoute = (
+    {
+      "/account/permissions": Path.AccountPermissions,
+      "/account/update": Path.AccountUpdate,
+      "/account/feedback": Path.AccountFeedback,
+      "/account/support": Path.AccountFeedback,
+    } as Record<string, Path>
+  )[route];
+  useEffect(() => {
+    if (legacySystemRoute) {
+      navigate(legacySystemRoute, { replace: true });
+    }
+  }, [legacySystemRoute, navigate]);
   const playRechargeCandidates = useMemo(
     () =>
       playBillingCandidatesForOrder(checkoutInfo, accountData, text, "balance"),
@@ -17172,7 +17466,7 @@ function AndroidAccountSettings() {
     }
   }, []);
   useEffect(() => {
-    if (route !== Path.AccountFeedback) return;
+    if (route !== Path.AccountFeedbackNew) return;
     const draft = readMobileReportDraft();
     if (!draft) return;
     setFeedbackCategory("ai_content_report");
@@ -17885,8 +18179,12 @@ function AndroidAccountSettings() {
       });
       setSupportTickets(page.items || []);
       setSupportError("");
-      if (supportTicket) {
-        setSupportTicket(await client.support.tickets.detail(supportTicket.id));
+      const detailID =
+        route === Path.AccountFeedbackDetail ? selectedSupportTicketID : "";
+      if (detailID) {
+        setSupportTicket(await client.support.tickets.detail(detailID));
+      } else {
+        setSupportTicket(null);
       }
     } catch (error) {
       setSupportError(
@@ -17900,20 +18198,9 @@ function AndroidAccountSettings() {
   }
 
   async function openSupportTicket(ticket: MobileSupportTicket) {
-    setSupportBusy(true);
-    try {
-      const client = await mobilePlatformClient();
-      setSupportTicket(await client.support.tickets.detail(ticket.id));
-      setSupportError("");
-    } catch (error) {
-      setSupportError(
-        error instanceof Error && error.message
-          ? localizeManagedMobileError({ message: error.message })
-          : text.platform.supportTicketRefreshFailed,
-      );
-    } finally {
-      setSupportBusy(false);
-    }
+    navigate(
+      `${Path.AccountFeedbackDetail}?ticket=${encodeURIComponent(ticket.id)}`,
+    );
   }
 
   async function replySupportTicket() {
@@ -18981,6 +19268,8 @@ function AndroidAccountSettings() {
       setFeedbackContent("");
       setFeedbackCategory("bug");
       setFeedbackScreenshots([]);
+      navigate(Path.AccountFeedback, { replace: true });
+      await refreshSupportTickets();
     } catch (error) {
       setFeedbackError(
         localizedMobileErrorMessage(error, text.errors.saveFailed),
@@ -19709,8 +19998,9 @@ function AndroidAccountSettings() {
   useEffect(() => {
     if (route === Path.AccountSupport) void refreshSupportTickets();
     if (route === Path.AccountFeedback) void refreshSupportTickets();
+    if (route === Path.AccountFeedbackDetail) void refreshSupportTickets();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route]);
+  }, [route, selectedSupportTicketID]);
 
   useEffect(() => {
     const refresh = () => void refreshPushInbox();
@@ -21637,16 +21927,16 @@ function AndroidAccountSettings() {
     );
   }
 
-  if (route === Path.AccountFeedback) {
+  if (route === Path.AccountFeedbackNew) {
     return (
       <AndroidDetailShell
-        title={text.account.feedback}
+        title={text.account.feedbackNew}
         text={text}
-        fallback={Path.AccountSystemSettings}
+        fallback={Path.AccountFeedback}
       >
         <section className={styles["section"]}>
           <div className={styles["section-head"]}>
-            <h2>{text.account.feedback}</h2>
+            <h2>{text.account.feedbackNew}</h2>
             <span>{currentVersion}</span>
           </div>
           <p className={styles["empty-copy"]}>{text.account.feedbackHint}</p>
@@ -21748,19 +22038,28 @@ function AndroidAccountSettings() {
             {text.account.copyFeedback}
           </button>
         </section>
+      </AndroidDetailShell>
+    );
+  }
+
+  if (route === Path.AccountFeedbackDetail) {
+    return (
+      <AndroidDetailShell
+        title={text.account.feedbackDetail}
+        text={text}
+        fallback={Path.AccountFeedback}
+        onRefresh={refreshSupportTickets}
+      >
         <section className={styles["section"]}>
-          <div className={styles["section-head"]}>
-            <h2>{text.account.feedbackProgress}</h2>
-            <span>
-              {supportBusy
-                ? text.account.refreshingData
-                : text.shortCount(supportTickets.length)}
-            </span>
-          </div>
           {supportError && (
             <div className={styles["form-error"]}>{supportError}</div>
           )}
-          {supportTicket ? (
+          {!supportTicket && !supportBusy && !supportError && (
+            <p className={styles["empty-copy"]}>
+              {text.platform.supportTicketEmpty}
+            </p>
+          )}
+          {supportTicket && (
             <>
               <div className={styles["ticket-detail-head"]}>
                 <strong>
@@ -21772,12 +22071,6 @@ function AndroidAccountSettings() {
                   {text.platform.supportStatuses[supportTicket.status] ||
                     text.notSynced}
                 </span>
-                <button
-                  onClick={() => setSupportTicket(null)}
-                  className={styles["wide-soft-action"]}
-                >
-                  {text.common.back}
-                </button>
               </div>
               <div className={styles["ticket-messages"]}>
                 {(supportTicket.messages || []).map((message) => (
@@ -21820,39 +22113,70 @@ function AndroidAccountSettings() {
                 </div>
               )}
             </>
-          ) : (
-            <div className={styles["ticket-list"]}>
-              {!supportBusy && supportTickets.length === 0 && (
-                <p className={styles["empty-copy"]}>
-                  {text.platform.supportTicketEmpty}
-                </p>
-              )}
-              {supportTickets.map((ticket) => (
-                <button
-                  key={ticket.id}
-                  onClick={() => openSupportTicket(ticket)}
-                >
-                  <span>
-                    <strong>
-                      {localizedMobileDisplay(ticket, {
-                        fallback: `#${ticket.number || ticket.id}`,
-                      })}
-                    </strong>
-                    <small>
-                      {formatDateTime(
-                        ticket.updated_at || ticket.created_at,
-                        text,
-                      )}
-                    </small>
-                  </span>
-                  <em>
-                    {text.platform.supportStatuses[ticket.status] ||
-                      text.notSynced}
-                  </em>
-                </button>
-              ))}
-            </div>
           )}
+        </section>
+      </AndroidDetailShell>
+    );
+  }
+
+  if (route === Path.AccountFeedback) {
+    return (
+      <AndroidDetailShell
+        title={text.account.feedbackRecords}
+        subtitle={text.account.feedbackRecordsHint}
+        text={text}
+        fallback={Path.AccountSystemSettings}
+        onRefresh={refreshSupportTickets}
+      >
+        <section className={styles["section"]}>
+          <button
+            className={styles["primary-action"]}
+            onClick={() => navigate(Path.AccountFeedbackNew)}
+          >
+            {text.account.feedbackNew}
+          </button>
+          {feedbackMessage && (
+            <div className={styles["form-success"]}>{feedbackMessage}</div>
+          )}
+          {supportError && (
+            <div className={styles["form-error"]}>{supportError}</div>
+          )}
+          <div className={styles["section-head"]}>
+            <h2>{text.account.feedbackProgress}</h2>
+            <span>
+              {supportBusy
+                ? text.account.refreshingData
+                : text.shortCount(supportTickets.length)}
+            </span>
+          </div>
+          <div className={styles["ticket-list"]}>
+            {!supportBusy && supportTickets.length === 0 && (
+              <p className={styles["empty-copy"]}>
+                {text.platform.supportTicketEmpty}
+              </p>
+            )}
+            {supportTickets.map((ticket) => (
+              <button key={ticket.id} onClick={() => openSupportTicket(ticket)}>
+                <span>
+                  <strong>
+                    {localizedMobileDisplay(ticket, {
+                      fallback: `#${ticket.number || ticket.id}`,
+                    })}
+                  </strong>
+                  <small>
+                    {formatDateTime(
+                      ticket.updated_at || ticket.created_at,
+                      text,
+                    )}
+                  </small>
+                </span>
+                <em>
+                  {text.platform.supportStatuses[ticket.status] ||
+                    text.notSynced}
+                </em>
+              </button>
+            ))}
+          </div>
         </section>
       </AndroidDetailShell>
     );
@@ -23844,9 +24168,16 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       };
       const eventType = String(detail.eventType || "").toLowerCase();
       const sourceType = String(detail.sourceType || "").toLowerCase();
+      const sourceId = String(detail.sourceId || "").trim();
       const kind = String(detail.kind || "").toLowerCase();
       if (sourceType === "mobile_feedback" || eventType.includes("support")) {
-        navigate(Path.AccountFeedback);
+        navigate(
+          sourceId
+            ? `${Path.AccountFeedbackDetail}?ticket=${encodeURIComponent(
+                sourceId,
+              )}`
+            : Path.AccountFeedback,
+        );
         return;
       }
       if (sourceType === "mobile_task" || eventType.startsWith("task.")) {

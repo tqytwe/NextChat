@@ -147,6 +147,13 @@ const MANAGED_MOBILE_TEXT_BASE = {
       pinned: "固定",
       selectedMark: "已选",
     },
+    navigation: {
+      home: "首页",
+      chat: "对话",
+      create: "创作",
+      projects: "项目",
+      account: "我的",
+    },
     platform: {
       contentKit: {
         title: "内容创作工作台",
@@ -331,6 +338,10 @@ const MANAGED_MOBILE_TEXT_BASE = {
         `确定删除选中的 ${count} 条任务吗？任务记录会从历史中隐藏。`,
       taskDeleteDone: (count: number) => `已删除 ${count} 条任务`,
       taskDeletePartial: (count: number) => `${count} 条任务删除失败，请重试`,
+      taskCancelConfirm: (count: number) =>
+        `确定取消选中的 ${count} 条进行中任务吗？`,
+      taskCancelDone: (count: number) => `已取消 ${count} 条任务`,
+      taskCancelPartial: (count: number) => `${count} 条任务取消失败，请重试`,
       taskLoadMore: "加载更多",
       taskAllLoaded: "已加载全部任务",
       taskRunningCannotDelete: "进行中的任务只能取消",
@@ -816,8 +827,12 @@ const MANAGED_MOBILE_TEXT_BASE = {
       copyShopLink: "复制店铺链接",
       shopLinkCopied: "店铺链接已复制",
       feedbackProgress: "反馈处理进度",
+      feedbackRecords: "反馈记录",
+      feedbackRecordsHint: "查看处理状态、回复和历史反馈",
+      feedbackNew: "提交新反馈",
+      feedbackDetail: "反馈详情",
       notifications: "通知中心",
-      activityCenter: "动态",
+      activityCenter: "任务",
       activityHint: "统一查看任务与通知",
       notificationHint: "任务、支付、福利和反馈动态",
       notificationEmpty: "暂无通知",
@@ -1501,6 +1516,13 @@ const MANAGED_MOBILE_TEXT_BASE = {
       pinned: "Pinned",
       selectedMark: "Selected",
     },
+    navigation: {
+      home: "Home",
+      chat: "Chat",
+      create: "Create",
+      projects: "Projects",
+      account: "Me",
+    },
     platform: {
       contentKit: {
         title: "Content creation workspace",
@@ -1709,6 +1731,11 @@ const MANAGED_MOBILE_TEXT_BASE = {
       taskDeleteDone: (count: number) => `Deleted ${count} task(s)`,
       taskDeletePartial: (count: number) =>
         `${count} task(s) could not be deleted. Try again.`,
+      taskCancelConfirm: (count: number) =>
+        `Cancel the selected ${count} running task(s)?`,
+      taskCancelDone: (count: number) => `Cancelled ${count} task(s)`,
+      taskCancelPartial: (count: number) =>
+        `${count} task(s) could not be cancelled. Try again.`,
       taskLoadMore: "Load more",
       taskAllLoaded: "All tasks loaded",
       taskRunningCannotDelete: "Running tasks can only be cancelled",
@@ -2228,8 +2255,12 @@ const MANAGED_MOBILE_TEXT_BASE = {
       copyShopLink: "Copy shop link",
       shopLinkCopied: "Shop link copied",
       feedbackProgress: "Feedback progress",
+      feedbackRecords: "Feedback records",
+      feedbackRecordsHint: "View status, replies, and previous feedback",
+      feedbackNew: "Submit new feedback",
+      feedbackDetail: "Feedback details",
       notifications: "Notifications",
-      activityCenter: "Activity",
+      activityCenter: "Tasks",
       activityHint: "Tasks and notifications in one place",
       notificationHint: "Tasks, payments, rewards, and feedback updates",
       notificationEmpty: "No notifications yet",
@@ -3328,8 +3359,12 @@ const MANAGED_MOBILE_TEXT_JP_OVERRIDES = {
     copyShopLink: "ショップリンクをコピー",
     shopLinkCopied: "ショップリンクをコピーしました",
     feedbackProgress: "フィードバック対応状況",
+    feedbackRecords: "フィードバック履歴",
+    feedbackRecordsHint: "対応状況、返信、過去のフィードバックを確認",
+    feedbackNew: "新しいフィードバックを送信",
+    feedbackDetail: "フィードバック詳細",
     notifications: "通知センター",
-    activityCenter: "アクティビティ",
+    activityCenter: "タスク",
     activityHint: "タスクと通知をまとめて確認",
     notificationHint: "タスク、支払い、特典、フィードバックの更新",
     notificationEmpty: "通知はありません",
@@ -3957,8 +3992,12 @@ const MANAGED_MOBILE_TEXT_KO_OVERRIDES = {
     copyShopLink: "상점 링크 복사",
     shopLinkCopied: "상점 링크가 복사되었습니다",
     feedbackProgress: "피드백 처리 현황",
+    feedbackRecords: "피드백 기록",
+    feedbackRecordsHint: "처리 상태, 답변, 이전 피드백을 확인",
+    feedbackNew: "새 피드백 제출",
+    feedbackDetail: "피드백 상세",
     notifications: "알림 센터",
-    activityCenter: "활동",
+    activityCenter: "작업",
     activityHint: "작업과 알림을 한곳에서 확인",
     notificationHint: "작업, 결제, 혜택, 피드백 업데이트",
     notificationEmpty: "알림이 없습니다",
@@ -4130,6 +4169,13 @@ const MANAGED_MOBILE_TEXT_KO_OVERRIDES = {
 } satisfies ManagedMobileTextOverrides;
 
 const MANAGED_MOBILE_TEXT_JP_COMPLETE_OVERRIDES = {
+  navigation: {
+    home: "ホーム",
+    chat: "チャット",
+    create: "制作",
+    projects: "プロジェクト",
+    account: "マイページ",
+  },
   errors: {
     teamAlreadyJoined: "すでに別のチームに参加しています。",
     teamFull: "このチームは定員に達しています。",
@@ -4301,6 +4347,12 @@ const MANAGED_MOBILE_TEXT_JP_COMPLETE_OVERRIDES = {
     taskDeleteDone: (count: number) => `${count} 件のタスクを削除しました`,
     taskDeletePartial: (count: number) =>
       `${count} 件を削除できませんでした。再試行してください。`,
+    taskCancelConfirm: (count: number) =>
+      `選択した実行中の ${count} 件をキャンセルしますか？`,
+    taskCancelDone: (count: number) =>
+      `${count} 件のタスクをキャンセルしました`,
+    taskCancelPartial: (count: number) =>
+      `${count} 件をキャンセルできませんでした。再試行してください。`,
     taskLoadMore: "さらに読み込む",
     taskAllLoaded: "すべてのタスクを読み込みました",
     taskRunningCannotDelete: "実行中のタスクはキャンセルのみ可能です",
@@ -4653,6 +4705,13 @@ const MANAGED_MOBILE_TEXT_JP_COMPLETE_OVERRIDES = {
 } satisfies ManagedMobileTextOverrides;
 
 const MANAGED_MOBILE_TEXT_KO_COMPLETE_OVERRIDES = {
+  navigation: {
+    home: "홈",
+    chat: "대화",
+    create: "제작",
+    projects: "프로젝트",
+    account: "내 정보",
+  },
   errors: {
     teamAlreadyJoined: "이미 다른 팀에 가입되어 있습니다.",
     teamFull: "이 팀은 정원이 찼습니다.",
@@ -4818,6 +4877,11 @@ const MANAGED_MOBILE_TEXT_KO_COMPLETE_OVERRIDES = {
     taskDeleteDone: (count: number) => `${count}개의 작업을 삭제했습니다`,
     taskDeletePartial: (count: number) =>
       `${count}개 작업을 삭제하지 못했습니다. 다시 시도하세요.`,
+    taskCancelConfirm: (count: number) =>
+      `선택한 실행 중 작업 ${count}개를 취소할까요?`,
+    taskCancelDone: (count: number) => `${count}개 작업을 취소했습니다`,
+    taskCancelPartial: (count: number) =>
+      `${count}개 작업을 취소하지 못했습니다. 다시 시도하세요.`,
     taskLoadMore: "더 불러오기",
     taskAllLoaded: "모든 작업을 불러왔습니다",
     taskRunningCannotDelete: "실행 중인 작업은 취소만 할 수 있습니다",

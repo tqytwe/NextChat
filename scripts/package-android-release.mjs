@@ -622,9 +622,11 @@ const envNotes = parseNotes(
     process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES,
 );
 const localizedNotes = parseLocalizedNotes();
+const previousManifest = { ...existingManifest };
+delete previousManifest.sourceState;
 
 const manifest = {
-  ...existingManifest,
+  ...previousManifest,
   platform: "android",
   channel: "direct",
   // The public manifest is derived only from the verified release APK metadata.

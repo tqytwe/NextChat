@@ -438,6 +438,8 @@ export interface MobileTaskListQuery extends MobilePageQuery {
   status?: MobileTaskStatus;
   skill_id?: string;
   asset_id?: string;
+  date_from?: string;
+  date_to?: string;
 }
 
 export interface MobileTaskActionRequest {
@@ -461,6 +463,60 @@ export interface MobileTaskStatusRequest {
 export interface MobileTaskRetryRequest {
   client_request_id?: string;
   overrides?: Partial<MobileTaskCreateRequest>;
+}
+
+export type MobileTaskBulkDeleteStatus =
+  | "deleted"
+  | "not_found"
+  | "not_terminal"
+  | "failed";
+
+export interface MobileTaskBulkDeleteRequest {
+  ids: string[];
+  client_request_id: string;
+}
+
+export interface MobileTaskBulkDeleteResult {
+  client_request_id: string;
+  results: Array<{
+    id: string;
+    status: MobileTaskBulkDeleteStatus;
+  }>;
+  deleted: number;
+  failed: number;
+}
+
+export type MobileTaskBulkCancelStatus =
+  | "cancelled"
+  | "not_found"
+  | "not_cancellable"
+  | "failed";
+
+export interface MobileTaskBulkCancelResult {
+  client_request_id: string;
+  results: Array<{
+    id: string;
+    status: MobileTaskBulkCancelStatus;
+  }>;
+  cancelled: number;
+  failed: number;
+}
+
+export function mergeMobileTaskPages(
+  current: MobileTask[],
+  incoming: MobileTask[],
+  mode: "replace" | "refresh" | "append",
+) {
+  if (mode === "replace") return incoming;
+  const seen = new Set<string>();
+  const merged =
+    mode === "refresh" ? [...incoming, ...current] : [...current, ...incoming];
+  return merged.filter((task) => {
+    const id = String(task.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 export interface MobileImageHistoryItem extends MobileDisplayFields {
@@ -1142,6 +1198,42 @@ export function deleteMobileTask(
   );
 }
 
+export function bulkDeleteMobileTasks(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileTaskBulkDeleteRequest,
+  options?: MobileRequestOptions,
+) {
+  const headers = new Headers(options?.headers);
+  headers.set("X-Client-Request-ID", body.client_request_id);
+  headers.set("Idempotency-Key", body.client_request_id);
+  headers.set("X-Request-ID", body.client_request_id);
+  return mobilePlatformJsonRequest<MobileTaskBulkDeleteResult>(
+    baseUrl,
+    accessToken,
+    "/tasks/bulk-delete",
+    jsonInit("POST", body, { ...options, headers }),
+  );
+}
+
+export function bulkCancelMobileTasks(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileTaskBulkDeleteRequest,
+  options?: MobileRequestOptions,
+) {
+  const headers = new Headers(options?.headers);
+  headers.set("X-Client-Request-ID", body.client_request_id);
+  headers.set("Idempotency-Key", body.client_request_id);
+  headers.set("X-Request-ID", body.client_request_id);
+  return mobilePlatformJsonRequest<MobileTaskBulkCancelResult>(
+    baseUrl,
+    accessToken,
+    "/tasks/bulk-cancel",
+    jsonInit("POST", body, { ...options, headers }),
+  );
+}
+
 export function createMobileProject(
   baseUrl: string,
   accessToken: string,
@@ -1524,6 +1616,14 @@ export function createMobilePlatformClient(
       ) => updateMobileTaskStatus(baseUrl, accessToken, taskId, body, options),
       delete: (taskId: MobileId, options?: MobileRequestOptions) =>
         deleteMobileTask(baseUrl, accessToken, taskId, options),
+      bulkDelete: (
+        body: MobileTaskBulkDeleteRequest,
+        options?: MobileRequestOptions,
+      ) => bulkDeleteMobileTasks(baseUrl, accessToken, body, options),
+      bulkCancel: (
+        body: MobileTaskBulkDeleteRequest,
+        options?: MobileRequestOptions,
+      ) => bulkCancelMobileTasks(baseUrl, accessToken, body, options),
     },
     projects: {
       create: (
