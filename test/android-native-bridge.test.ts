@@ -28,6 +28,8 @@ const {
   getNativePushInbox,
   markNativePushInboxRead,
   clearNativePushInbox,
+  copyTextToClipboard,
+  startNativeDownload,
 } = await import("../app/client/android-native");
 
 describe("direct Android bridge authentication", () => {
@@ -155,6 +157,90 @@ test("native bridge implements a system toast and finish action for double back"
   expect(source).toContain("Toast.makeText(");
   expect(source).toContain('case "finishApp"');
   expect(source).toContain("finishAndRemoveTask()");
+});
+
+test("message copying uses the Android clipboard bridge instead of WebView permissions", async () => {
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
+  let payload: Record<string, unknown> = {};
+  window.JisudengNativeBridge = {
+    request(raw) {
+      payload = JSON.parse(raw) as Record<string, unknown>;
+      window.__jisudengNativeResolve?.(String(payload.id), {});
+    },
+  };
+
+  await expect(copyTextToClipboard("copy me")).resolves.toBeUndefined();
+  expect(payload).toMatchObject({
+    method: "copyText",
+    options: { text: "copy me" },
+    bridgeToken: "launch-secret-123",
+  });
+
+  const activity = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  const plugin = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/NextChatNativePlugin.java",
+    ),
+    "utf8",
+  );
+  expect(activity).toContain('case "copyText"');
+  expect(activity).toContain("ClipData.newPlainText");
+  expect(plugin).toContain("public void copyText(PluginCall call)");
+});
+
+test("authenticated native downloads keep the bearer token out of the URL", async () => {
+  window.history.replaceState({}, "", "/?nativeBridgeToken=launch-secret-123");
+  let payload: Record<string, unknown> = {};
+  window.JisudengNativeBridge = {
+    request(raw) {
+      payload = JSON.parse(raw) as Record<string, unknown>;
+      window.__jisudengNativeResolve?.(String(payload.id), { status: "running" });
+    },
+  };
+
+  await expect(
+    startNativeDownload(
+      "https://api.example.test/api/v1/mobile/video/jobs/task-1/content",
+      "video-task-1.mp4",
+      "JisudengChat",
+      { authorization: "Bearer temporary-session-token" },
+    ),
+  ).resolves.toEqual({ status: "running" });
+  expect(payload).toMatchObject({
+    method: "downloadFile",
+    options: {
+      url: "https://api.example.test/api/v1/mobile/video/jobs/task-1/content",
+      fileName: "video-task-1.mp4",
+      authorization: "Bearer temporary-session-token",
+    },
+  });
+  expect(String((payload.options as { url?: string }).url)).not.toContain(
+    "temporary-session-token",
+  );
+
+  const activity = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+    ),
+    "utf8",
+  );
+  const plugin = readFileSync(
+    resolve(
+      process.cwd(),
+      "android/app/src/main/java/com/jisudeng/chat/NextChatNativePlugin.java",
+    ),
+    "utf8",
+  );
+  expect(activity).toContain('request.addRequestHeader("Authorization", authorization)');
+  expect(plugin).toContain('request.addRequestHeader("Authorization", authorization)');
 });
 
 test("native bridge exposes Firebase Cloud Messaging token acquisition", async () => {

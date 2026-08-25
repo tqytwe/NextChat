@@ -7,6 +7,8 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
@@ -477,6 +479,18 @@ public class NextChatNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void copyText(PluginCall call) {
+        String text = call.getString("text", "");
+        ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            call.reject("clipboard unavailable");
+            return;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("JisudengChat", text));
+        call.resolve();
+    }
+
+    @PluginMethod
     public void showNotification(PluginCall call) {
         String title = call.getString("title", "JisudengChat");
         String body = call.getString("body", "");
@@ -505,8 +519,12 @@ public class NextChatNativePlugin extends Plugin {
         String url = call.getString("url", "");
         String fileName = safeFileName(call.getString("fileName", "jisudengchat-android.apk"));
         String title = call.getString("title", "JisudengChat");
+        String authorization = safeDownloadAuthorization(call.getString("authorization", ""));
         try {
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            if (!authorization.isEmpty()) {
+                request.addRequestHeader("Authorization", authorization);
+            }
             request.setTitle(title);
             request.setDescription(fileName);
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
@@ -520,6 +538,15 @@ public class NextChatNativePlugin extends Plugin {
         } catch (Exception e) {
             call.reject(e.getMessage(), e);
         }
+    }
+
+    private String safeDownloadAuthorization(String rawAuthorization) {
+        String authorization = rawAuthorization == null ? "" : rawAuthorization.trim();
+        if (!authorization.startsWith("Bearer ") || authorization.length() > 8192 ||
+            authorization.contains("\r") || authorization.contains("\n")) {
+            return "";
+        }
+        return authorization;
     }
 
     @PluginMethod

@@ -8,7 +8,7 @@ import { formatManagedMobileError } from "./managed-mobile-i18n";
 
 export const MOBILE_PLATFORM_API_PREFIX = "/api/v1/mobile";
 
-export type MobileLocale = "zh-CN" | "en-US" | string;
+export type MobileLocale = "zh-CN" | "en-US" | "ja-JP" | "ko-KR" | string;
 export type MobileId = number | string;
 export type MobileSortOrder = "asc" | "desc";
 
@@ -115,7 +115,13 @@ export interface MobileAsset extends MobileDisplayFields {
   duration_ms?: number;
   preview_url?: string;
   thumbnail_url?: string;
-  source?: "upload" | "share" | "image_result" | "chat_export" | "voice";
+  source?:
+    | "upload"
+    | "share"
+    | "image_result"
+    | "video_result"
+    | "chat_export"
+    | "voice";
   folder_id?: string;
   created_at: string;
   updated_at?: string;
@@ -138,7 +144,7 @@ export interface MobileAssetDeleteResult {
   message?: string;
 }
 
-export type MobileSessionPurpose = "chat" | "image";
+export type MobileSessionPurpose = "chat" | "image" | "video";
 
 export interface MobileManagedSession {
   purpose: MobileSessionPurpose;
@@ -153,6 +159,7 @@ export interface MobileManagedSession {
 export interface MobileSessionBundle {
   chat: MobileManagedSession;
   image: MobileManagedSession;
+  video?: MobileManagedSession;
 }
 
 export interface MobileSwitchSessionGroupRequest {
@@ -178,6 +185,7 @@ export interface MobileAccountSummary {
   current_group?: Record<string, unknown>;
   chat_group?: Record<string, unknown>;
   image_group?: Record<string, unknown>;
+  video_group?: Record<string, unknown>;
   subscription?: Record<string, unknown>;
   quotas?: MobileQuotaSummary[];
   sessions?: Partial<MobileSessionBundle>;
@@ -359,7 +367,7 @@ export interface MobileSkillUseRequest {
   locale?: MobileLocale;
 }
 
-export type MobileTaskKind = "chat" | "image" | "file";
+export type MobileTaskKind = "chat" | "image" | "video" | "file";
 
 export type MobileTaskStatus =
   | "queued"
@@ -389,6 +397,57 @@ export interface MobileTaskCreateRequest {
   asset_ids?: string[];
   group_id?: number;
   locale?: MobileLocale;
+}
+
+export interface MobileVideoCapabilities {
+  text_to_video?: boolean;
+  image_to_video?: boolean;
+  video_reference?: boolean;
+  audio_reference?: boolean;
+  resolutions: string[];
+  ratios: string[];
+  durations: number[];
+  generate_audio?: boolean;
+  watermark?: boolean;
+}
+
+export interface MobileVideoGroup {
+  id: number;
+  name: string;
+  platform?: string;
+  video_available: boolean;
+  video_unavailable_code?: string;
+  models: string[];
+  capabilities?: MobileVideoCapabilities;
+}
+
+export interface MobileVideoBootstrap {
+  protocol_version: number;
+  capabilities_version: string;
+  groups: MobileVideoGroup[];
+}
+
+export interface MobileVideoJobRequest {
+  group_id: number;
+  model: string;
+  prompt: string;
+  resolution: string;
+  ratio?: string;
+  duration_seconds: number;
+  generate_audio?: boolean;
+  watermark?: boolean;
+  reference_asset_ids?: string[];
+  client_request_id: string;
+}
+
+export interface MobileVideoEstimate {
+  group_id: number;
+  model: string;
+  resolution: string;
+  duration_seconds: number;
+  unit_price_usd: number;
+  estimated_cost_usd: number;
+  currency: string;
 }
 
 export interface MobileTask extends MobileDisplayFields {
@@ -1190,11 +1249,143 @@ export function deleteMobileTask(
   taskId: MobileId,
   options?: MobileRequestOptions,
 ) {
+  const headers = new Headers(options?.headers);
+  const requestId =
+    headers.get("X-Client-Request-ID") ||
+    headers.get("Idempotency-Key") ||
+    `mobile-task-delete-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+  headers.set("X-Client-Request-ID", requestId);
+  headers.set("Idempotency-Key", requestId);
+  headers.set("X-Request-ID", requestId);
   return mobilePlatformJsonRequest<MobileDeleteResult>(
     baseUrl,
     accessToken,
     `/tasks/${encodePathId(taskId)}`,
-    jsonInit("DELETE", undefined, options),
+    jsonInit("DELETE", undefined, { ...options, headers }),
+  );
+}
+
+export function getMobileVideoBootstrap(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileVideoBootstrap>(
+    baseUrl,
+    accessToken,
+    "/video/bootstrap",
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function estimateMobileVideo(
+  baseUrl: string,
+  accessToken: string,
+  body: Pick<
+    MobileVideoJobRequest,
+    | "group_id"
+    | "model"
+    | "prompt"
+    | "resolution"
+    | "ratio"
+    | "duration_seconds"
+    | "generate_audio"
+    | "watermark"
+    | "reference_asset_ids"
+  >,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileVideoEstimate>(
+    baseUrl,
+    accessToken,
+    "/video/estimate",
+    jsonInit("POST", body, options),
+  );
+}
+
+export function createMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileVideoJobRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<{ task: MobileTask; execution?: string }>(
+    baseUrl,
+    accessToken,
+    "/video/jobs",
+    jsonInit("POST", body, options),
+  );
+}
+
+export function listMobileVideoJobs(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePage<MobileTask>>(
+    baseUrl,
+    accessToken,
+    "/video/jobs",
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function getMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileTask>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}`,
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function cancelMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileTask>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}/cancel`,
+    jsonInit("POST", {}, options),
+  );
+}
+
+export function retryMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  clientRequestId: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileTask>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}/retry`,
+    jsonInit("POST", { client_request_id: clientRequestId }, options),
+  );
+}
+
+export function saveMobileVideoJobAsAsset(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileAsset>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}/save-as-asset`,
+    jsonInit("POST", {}, options),
   );
 }
 

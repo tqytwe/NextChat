@@ -1,21 +1,59 @@
 {
   "platform": "android",
-  "version": "2.0.91",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=2.0.91-291-3e43f557a953bda98a190fb5f7020ae8f2d4e81a656c9073f30082b2db69d128",
-  "size": "7.3 MB",
-  "sha256": "3e43f557a953bda98a190fb5f7020ae8f2d4e81a656c9073f30082b2db69d128",
+  "version": "3.0.23",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.23-323-3fc6da18acebe4f86c721b1a785ec8124c9f17a98b395f875e4a97495a4346d1",
+  "size": "9.7 MB",
+  "sha256": "3fc6da18acebe4f86c721b1a785ec8124c9f17a98b395f875e4a97495a4346d1",
   "minAndroidVersion": "6.0",
-  "releaseDate": "2026-08-06",
+  "releaseDate": "2026-08-20",
   "notes": [
-    "实时语音功能已移除",
-    "按住说话语音输入保持可用",
-    "修复模型列表分类"
+    "视频创作界面适配手机窄屏",
+    "素材与提示词首次保存到本机，后续仅增量更新",
+    "视频任务轮询与创作空间保持一致"
   ],
-  "versionCode": 291,
-  "bytes": 7633213,
+  "versionCode": 323,
+  "bytes": 10179012,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "2.0.91",
-  "sourceCommit": "7b0c1bcd813eadfcf7a996a970880018611ac190",
-  "builtFromCommit": "7b0c1bcd813eadfcf7a996a970880018611ac190"
+  "latestVersion": "3.0.23",
+  "sourceCommit": "114885acb3ad0319cbff490e087fb42b5da2b497",
+  "builtFromCommit": "114885acb3ad0319cbff490e087fb42b5da2b497",
+  "sourceDirty": true,
+  "channel": "direct",
+  "notes_i18n": {
+    "zh": [
+      "新增视频创作：在创作页切换图像和视频",
+      "素材、封面与提示词首次同步到本机，之后仅增量检查更新",
+      "完成视频优先保存在本机，可选择保存为素材"
+    ],
+    "en": [
+      "Adds video creation in the unified Create page",
+      "Materials, covers, and prompts sync locally once then use incremental update checks",
+      "Completed videos stay on this device and can be saved as materials"
+    ],
+    "ja": [
+      "作成ページに動画作成を追加。素材、カバー、プロンプトは初回に端末へ同期し、以後は差分のみ確認。生成した動画は端末に保存され、素材として保存できます"
+    ],
+    "ko": [
+      "통합 만들기 화면에 동영상 생성을 추가했습니다. 소재, 표지, 프롬프트는 최초 한 번 기기에 동기화하고 이후 증분 업데이트만 확인합니다. 완성된 동영상은 기기에 저장되며 소재로 저장할 수 있습니다"
+    ]
+  },
+  "notesByLocale": {
+    "zh-CN": [
+      "新增视频创作：在创作页切换图像和视频",
+      "素材、封面与提示词首次同步到本机，之后仅增量检查更新",
+      "完成视频优先保存在本机，可选择保存为素材"
+    ],
+    "en": [
+      "Adds video creation in the unified Create page",
+      "Materials, covers, and prompts sync locally once then use incremental update checks",
+      "Completed videos stay on this device and can be saved as materials"
+    ],
+    "ja": [
+      "作成ページに動画作成を追加。素材、カバー、プロンプトは初回に端末へ同期し、以後は差分のみ確認。生成した動画は端末に保存され、素材として保存できます"
+    ],
+    "ko": [
+      "통합 만들기 화면에 동영상 생성을 추가했습니다. 소재, 표지, 프롬프트는 최초 한 번 기기에 동기화하고 이후 증분 업데이트만 확인합니다. 완성된 동영상은 기기에 저장되며 소재로 저장할 수 있습니다"
+    ]
+  }
 }

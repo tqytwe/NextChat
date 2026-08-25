@@ -100,6 +100,14 @@ describe("Android Play/direct distribution split", () => {
     expect(app).toContain("!playDistribution &&");
   });
 
+  test("video creation stays confined to the direct build", () => {
+    const app = read("app/components/mobile-app.tsx");
+
+    expect(app).toContain('mode === "video" ? <AndroidVideoStudio />');
+    expect(app).toContain("!playDistribution && (");
+    expect(app).toContain("if (playDistribution && mode === \"video\") setMode(\"image\")");
+  });
+
   test("Android release manifest and WebView are hardened for Play", () => {
     const manifest = read("android/app/src/main/AndroidManifest.xml");
     const networkSecurityConfig = read(

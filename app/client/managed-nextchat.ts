@@ -101,7 +101,7 @@ export interface ManagedSession {
   api_key: string;
   api_key_id: number;
   expires_at?: string;
-  purpose?: "chat" | "image";
+  purpose?: "chat" | "image" | "video";
 }
 
 export function shouldRefreshManagedSession(
@@ -153,11 +153,42 @@ export interface ManagedWorkspaceModel {
     recommended_parallelism?: number;
     max_queued_outputs?: number;
   };
+  video_capabilities?: {
+    operations?: string[];
+    text_to_video?: boolean;
+    image_to_video?: boolean;
+    video_reference?: boolean;
+    audio_reference?: boolean;
+    resolutions?: string[];
+    ratios?: string[];
+    durations?: number[];
+    generate_audio?: boolean;
+    watermark?: boolean;
+    supported_resolutions?: string[];
+    supported_ratios?: string[];
+    supported_durations?: number[];
+    max_reference_images?: number;
+    max_reference_videos?: number;
+    max_reference_audios?: number;
+  };
 }
 
 export interface ManagedWorkspaceGroup {
   id: number;
   name: string;
+  name_zh?: string;
+  name_en?: string;
+  name_ja?: string;
+  name_jp?: string;
+  name_ko?: string;
+  localized?: {
+    name?: Record<string, string | undefined>;
+    zh?: string;
+    en?: string;
+    ja?: string;
+    jp?: string;
+    ko?: string;
+  };
   description?: string;
   platform?: string;
   rate_multiplier?: number;
@@ -165,6 +196,25 @@ export interface ManagedWorkspaceGroup {
   is_current?: boolean;
   /** Server-declared group authorization for the managed /v1/live gateway. */
   live_available?: boolean;
+  video_available?: boolean;
+  video_unavailable_code?: string;
+  video_capabilities?: {
+    text_to_video?: boolean;
+    image_to_video?: boolean;
+    video_reference?: boolean;
+    audio_reference?: boolean;
+    resolutions?: string[];
+    ratios?: string[];
+    durations?: number[];
+    supported_resolutions?: string[];
+    supported_ratios?: string[];
+    supported_durations?: number[];
+    max_reference_images?: number;
+    max_reference_videos?: number;
+    max_reference_audios?: number;
+    generate_audio?: boolean;
+    watermark?: boolean;
+  };
   models?: ManagedWorkspaceModel[];
 }
 
@@ -172,6 +222,7 @@ export interface ManagedWorkspaceModels {
   source?: string;
   default_model?: string;
   image_capabilities_version?: string;
+  video_capabilities_version?: string;
   selected_group_id?: number;
   groups?: ManagedWorkspaceGroup[];
 }
@@ -187,6 +238,7 @@ export interface ManagedWorkspaceBootstrap {
   features?: {
     chat?: boolean;
     image_studio?: boolean;
+    video_studio?: boolean;
     prompts?: boolean;
     history_export?: boolean;
     cloud_sync?: boolean;
@@ -208,10 +260,12 @@ export interface ManagedWorkspaceBootstrap {
   managed_api_keys?: {
     chat?: ManagedWorkspaceAPIKey;
     image?: ManagedWorkspaceAPIKey;
+    video?: ManagedWorkspaceAPIKey;
   };
   workspaces?: {
     chat?: { models?: ManagedWorkspaceModels };
     image?: { models?: ManagedWorkspaceModels };
+    video?: { models?: ManagedWorkspaceModels };
   };
 }
 
@@ -220,6 +274,7 @@ export interface ManagedMobileBootstrap extends ManagedWorkspaceBootstrap {
   sessions?: {
     chat?: ManagedSession;
     image?: ManagedSession;
+    video?: ManagedSession;
   };
 }
 
@@ -809,6 +864,10 @@ export async function managedRequestText(
       const res = await fetch(url, {
         ...init,
         headers,
+        // The material/prompt sync callers use ETag themselves. Do not let a
+        // WebView cache answer an activation without asking the server for
+        // the current manifest; unchanged bytes still remain local in IDB.
+        cache: "no-store",
       });
       return {
         ok: res.ok,
@@ -913,6 +972,60 @@ export async function managedJsonRequest<T>(
   return payload.data as T;
 }
 
+/** Download an authenticated binary from the managed backend. This is used
+ * for private mobile video results because a HTMLMediaElement cannot attach
+ * the Bearer header itself. Callers own the returned object URL lifecycle. */
+export async function managedDownloadBlob(
+  baseUrl: string,
+  path: string,
+  accessToken: string,
+  signal?: AbortSignal,
+) {
+  const target = /^https?:\/\//i.test(path)
+    ? path
+    : managedApiUrl(baseUrl, path);
+  const headers: Record<string, string> = {
+    // The same authenticated helper is used for video results and the
+    // account-scoped material library (images, audio, documents, and video).
+    // Do not advertise only video here or a content-negotiating object store
+    // may return the wrong representation for non-video materials.
+    Accept: "*/*",
+  };
+  // Never forward the managed account token to a provider-owned host. Mobile
+  // results are expected to use the authenticated relative content endpoint;
+  // an absolute URL is only safe when it is already a same-origin backend URL.
+  if (!/^https?:\/\//i.test(path)) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  } else {
+    try {
+      if (
+        new URL(target).origin ===
+        new URL(normalizeManagedBaseUrl(baseUrl)).origin
+      ) {
+        headers.Authorization = `Bearer ${accessToken}`;
+      }
+    } catch {
+      // Invalid external URLs will be rejected by fetch without credentials.
+    }
+  }
+  const response = await fetch(target, {
+    method: "GET",
+    headers,
+    signal,
+  });
+  if (!response.ok) {
+    throw new ManagedApiError(
+      `managed binary request failed: HTTP ${response.status}`,
+      response.status,
+      path,
+      undefined,
+      "unknown",
+      "http",
+    );
+  }
+  return response.blob();
+}
+
 export function loginManagedUser(
   baseUrl: string,
   email: string,
@@ -1008,7 +1121,7 @@ export function switchManagedMobileGroup(
 export function switchManagedMobileSessionGroup(
   baseUrl: string,
   accessToken: string,
-  purpose: "chat" | "image",
+  purpose: "chat" | "image" | "video",
   groupID: number,
 ) {
   return managedJsonRequest<ManagedMobileBootstrap>(
@@ -1025,7 +1138,7 @@ export function switchManagedMobileSessionGroup(
 export function switchManagedMobileSessionGroupV1(
   baseUrl: string,
   accessToken: string,
-  purpose: "chat" | "image",
+  purpose: "chat" | "image" | "video",
   groupID: number,
 ) {
   return managedJsonRequest<unknown>(
@@ -1105,6 +1218,31 @@ export async function switchManagedChatGroupCompatible(
     }
     return switchManagedMobileGroup(baseUrl, accessToken, groupID);
   }
+}
+
+export async function switchManagedVideoGroupCompatible(
+  baseUrl: string,
+  accessToken: string,
+  groupID: number,
+) {
+  try {
+    await switchManagedMobileSessionGroupV1(
+      baseUrl,
+      accessToken,
+      "video",
+      groupID,
+    );
+    return null;
+  } catch (error) {
+    if (!(error instanceof ManagedApiError) || error.status !== 404)
+      throw error;
+  }
+  return switchManagedMobileSessionGroup(
+    baseUrl,
+    accessToken,
+    "video",
+    groupID,
+  );
 }
 
 export function flattenManagedModels(

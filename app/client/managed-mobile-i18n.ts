@@ -487,6 +487,7 @@ const MANAGED_MOBILE_TEXT_BASE = {
       group: "分组",
       sending: "发送中",
       stop: "停止",
+      send: "发送",
       retryLast: "重试上一条",
       uploadImage: "上传图片",
       attachFile: "添加图片或文件",
@@ -1890,6 +1891,7 @@ const MANAGED_MOBILE_TEXT_BASE = {
       group: "Group",
       sending: "Sending",
       stop: "Stop",
+      send: "Send",
       retryLast: "Retry last",
       uploadImage: "Attach image",
       attachFile: "Attach image or file",
@@ -3105,6 +3107,7 @@ const MANAGED_MOBILE_TEXT_JP_OVERRIDES = {
     model: "モデル",
     group: "グループ",
     stop: "停止",
+    send: "送信",
     retryLast: "最後を再試行",
     uploadImage: "画像を添付",
     attachFile: "画像またはファイルを添付",
@@ -3740,6 +3743,7 @@ const MANAGED_MOBILE_TEXT_KO_OVERRIDES = {
     model: "모델",
     group: "그룹",
     stop: "중지",
+    send: "보내기",
     retryLast: "마지막 다시 시도",
     uploadImage: "이미지 첨부",
     attachFile: "이미지 또는 파일 첨부",
@@ -4189,6 +4193,8 @@ const MANAGED_MOBILE_TEXT_JP_COMPLETE_OVERRIDES = {
       "チーム競争は一時的に利用できません。後でもう一度お試しください。",
   },
   platform: {
+    skills: "スキルセンター",
+    noSkill: "スキルなし",
     contentKit: {
       title: "コンテンツ制作ワークスペース",
       hint: "シーンに合わせてビジュアルと投稿文を作成します。プロジェクトはこの端末に保存されます。",
@@ -4725,6 +4731,8 @@ const MANAGED_MOBILE_TEXT_KO_COMPLETE_OVERRIDES = {
       "팀 경쟁을 일시적으로 사용할 수 없습니다. 나중에 다시 시도해 주세요.",
   },
   platform: {
+    skills: "스킬 센터",
+    noSkill: "스킬 없음",
     contentKit: {
       title: "콘텐츠 제작 워크스페이스",
       hint: "상황별로 비주얼과 게시 문안을 만듭니다. 프로젝트는 이 기기에 저장됩니다.",

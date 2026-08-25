@@ -520,9 +520,9 @@ describe("mobile app backend alignment", () => {
     expect(source).toContain(
       'type ImagePromptLanguageMode = "app" | "zh" | "en" | "jp" | "ko" | "both"',
     );
-    expect(source).toContain(
-      'const allowPromptLibraryFallback = locale === "zh" || locale === "en";',
-    );
+    expect(source).toContain("syncLocalPromptCatalog(");
+    expect(source).toContain('appLocale === "jp"');
+    expect(source).toContain('appLocale === "ko"');
     expect(source).toContain("日本語");
     expect(source).toContain("한국어");
   });
@@ -665,6 +665,8 @@ describe("mobile app backend alignment", () => {
     expect(signOut).toContain("listAppImages(activeAccountId)");
     expect(signOut).toContain("deleteAppImages(fileNames, activeAccountId)");
     expect(signOut).toContain("clearLocalMaterials(activeAccountId)");
+    expect(signOut).toContain("clearLocalPromptCatalogs(activeAccountId)");
+    expect(signOut).toContain("clearLocalVideos(activeAccountId)");
     expect(signOut).toContain(
       "clearAccountScopedLocalStorage(activeAccountId)",
     );

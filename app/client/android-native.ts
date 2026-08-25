@@ -12,6 +12,14 @@ export interface NativeDownloadResult {
   status?: string;
 }
 
+export interface NativeDownloadOptions {
+  /**
+   * Used only for an authenticated same-account file download. Native code
+   * rejects values other than a bounded Bearer token and never persists it.
+   */
+  authorization?: string;
+}
+
 export interface NativeDownloadStatus {
   id?: string;
   status: "pending" | "running" | "success" | "failed" | "unknown";
@@ -204,6 +212,7 @@ export interface NativeManagedSessionSecrets {
   user?: object | null;
   session?: object | null;
   imageSession?: object | null;
+  videoSession?: object | null;
 }
 
 export interface NativeFcmTokenResult {
@@ -352,11 +361,13 @@ interface NextChatNativePlugin {
     text?: string;
   }): Promise<void>;
   shareText(options: { title?: string; text: string }): Promise<void>;
+  copyText?(options: { text: string }): Promise<void>;
   showNotification(options: { title: string; body: string }): Promise<void>;
   downloadFile(options: {
     url: string;
     fileName?: string;
     title?: string;
+    authorization?: string;
   }): Promise<NativeDownloadResult>;
   getDownloadStatus(options: { id: string }): Promise<NativeDownloadStatus>;
   installApk?(options: {
@@ -1581,6 +1592,37 @@ export async function shareText(text: string, title = "JisudengChat") {
   await navigator.clipboard?.writeText(text);
 }
 
+/** Copy text reliably in the Android WebView, with browser fallbacks for web tests. */
+export async function copyTextToClipboard(text: string) {
+  if (!text) return;
+  if (isDirectNativeBridgeAvailable()) {
+    await callDirectNative<void>("copyText", { text });
+    return;
+  }
+  if (isNativeAndroid() && NextChatNative.copyText) {
+    await NextChatNative.copyText({ text });
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  try {
+    if (!document.execCommand("copy")) throw new Error("copy command failed");
+  } finally {
+    textarea.remove();
+  }
+}
+
 export async function showNativeNotification(title: string, body: string) {
   if (!isNativeAndroid()) return;
   const permission = await requestNotificationPermission();
@@ -1845,16 +1887,27 @@ export async function startNativeDownload(
   url: string,
   fileName: string,
   title = "JisudengChat",
+  options: NativeDownloadOptions = {},
 ) {
+  const authorization = String(options.authorization || "").trim();
+  const nativeOptions = authorization.startsWith("Bearer ")
+    ? { authorization }
+    : {};
   if (isNativeAndroid()) {
     if (isDirectNativeBridgeAvailable()) {
       return callDirectNative<NativeDownloadResult>("downloadFile", {
         url,
         fileName,
         title,
+        ...nativeOptions,
       });
     }
-    return NextChatNative.downloadFile({ url, fileName, title });
+    return NextChatNative.downloadFile({
+      url,
+      fileName,
+      title,
+      ...nativeOptions,
+    });
   }
   downloadInBrowser(url, fileName);
   return { status: "success", path: url };

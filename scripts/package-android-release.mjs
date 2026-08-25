@@ -64,7 +64,19 @@ function gitOutput(args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf-8" }).trim();
 }
 
+function gitSourceIsDirty() {
+  return Boolean(
+    execFileSync("git", ["status", "--porcelain=v1"], {
+      cwd: root,
+      encoding: "utf-8",
+    }).trim(),
+  );
+}
+
 function assertReleaseSourceIsClean() {
+  if (process.env.ANDROID_RELEASE_ALLOW_DIRTY === "1") {
+    return;
+  }
   // Do not trim the complete porcelain output: a leading space is meaningful
   // for an unstaged first entry and trimming it corrupts that file's path.
   const statusOutput = execFileSync("git", ["status", "--porcelain=v1"], {
@@ -106,7 +118,7 @@ function parseNotes(raw) {
 
 function parseLocalizedNotes() {
   const entries = [
-    ["zh-CN", process.env.ANDROID_RELEASE_NOTES_ZH],
+    ["zh", process.env.ANDROID_RELEASE_NOTES_ZH],
     ["en", process.env.ANDROID_RELEASE_NOTES_EN],
     ["ja", process.env.ANDROID_RELEASE_NOTES_JA],
     ["ko", process.env.ANDROID_RELEASE_NOTES_KO],
@@ -114,6 +126,46 @@ function parseLocalizedNotes() {
     .map(([locale, raw]) => [locale, parseNotes(raw)])
     .filter(([, notes]) => notes.length);
   return Object.fromEntries(entries);
+}
+
+const defaultLocalizedNotes = {
+  zh: ["平台账号登录", "余额、分组和模型自动同步", "生图结果保存在 APP 本机"],
+  en: ["Account login", "Balance, groups, and models sync automatically", "Image results stay on this device"],
+  ja: ["アカウントログイン", "残高・グループ・モデルを自動同期", "画像結果は端末に保存"],
+  ko: ["계정 로그인", "잔액·그룹·모델 자동 동기화", "이미지 결과는 기기에 저장"],
+};
+
+function notesByLocaleForClient(notes) {
+  return {
+    "zh-CN": notes.zh,
+    en: notes.en,
+    ja: notes.ja,
+    ko: notes.ko,
+  };
+}
+
+function normalizeLocalizedNotes(value) {
+  const normalized = {};
+  for (const [locale, notes] of Object.entries(value || {})) {
+    const key = locale === "zh-CN" ? "zh" : locale;
+    if (!["zh", "en", "ja", "ko"].includes(key)) continue;
+    const parsed = Array.isArray(notes)
+      ? notes.map(String).map((note) => note.trim()).filter(Boolean)
+      : parseNotes(notes);
+    if (parsed.length) normalized[key] = parsed;
+  }
+  return normalized;
+}
+
+function requireLocalizedNotes(notes) {
+  const missing = ["zh", "en", "ja", "ko"].filter(
+    (locale) => !notes[locale]?.length,
+  );
+  if (missing.length) {
+    throw new Error(
+      `Android release requires localized notes for: ${missing.join(", ")}`,
+    );
+  }
 }
 
 function normalizeVersionName(value, source) {
@@ -585,6 +637,7 @@ if (!existsSync(apkSource)) {
 
 assertReleaseSourceIsClean();
 const sourceCommit = gitOutput(["rev-parse", "HEAD"]);
+const sourceDirty = gitSourceIsDirty();
 const outputMetadataRelease = readApkReleaseVersion();
 const apkRelease = readActualApkReleaseVersion();
 assertReleaseVersionsMatch(
@@ -621,7 +674,14 @@ const envNotes = parseNotes(
   process.env.ANDROID_RELEASE_NOTES ||
     process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES,
 );
-const localizedNotes = parseLocalizedNotes();
+const localizedNotes = {
+  ...defaultLocalizedNotes,
+  ...normalizeLocalizedNotes(
+    existingManifest.notes_i18n || existingManifest.notesByLocale,
+  ),
+  ...parseLocalizedNotes(),
+};
+requireLocalizedNotes(localizedNotes);
 const previousManifest = { ...existingManifest };
 delete previousManifest.sourceState;
 
@@ -638,6 +698,7 @@ const manifest = {
   // mistaken for the build input.
   sourceCommit,
   builtFromCommit: sourceCommit,
+  sourceDirty,
   packageName: androidPackageName,
   signingCertificateSha256,
   apkUrl: canonicalApkUrl,
@@ -657,9 +718,15 @@ const manifest = {
         "生图结果保存在 APP 本机",
       ],
   ...(Object.keys(localizedNotes).length
-    ? { notesByLocale: localizedNotes }
-    : existingManifest.notesByLocale
-    ? { notesByLocale: existingManifest.notesByLocale }
+    ? {
+        notes_i18n: localizedNotes,
+        notesByLocale: notesByLocaleForClient(localizedNotes),
+      }
+    : existingManifest.notes_i18n
+    ? {
+        notes_i18n: existingManifest.notes_i18n,
+        notesByLocale: notesByLocaleForClient(existingManifest.notes_i18n),
+      }
     : {}),
 };
 

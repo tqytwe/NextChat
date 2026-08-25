@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   createContext,
   lazy,
   Suspense,
@@ -31,6 +32,9 @@ import ImageIcon from "../icons/image.svg";
 import LeftIcon from "../icons/left.svg";
 import MaxIcon from "../icons/max.svg";
 import PromptIcon from "../icons/prompt.svg";
+import PaletteIcon from "../icons/palette.svg";
+import PlayIcon from "../icons/play.svg";
+import DiscoveryIcon from "../icons/discovery.svg";
 import ReloadIcon from "../icons/reload.svg";
 import SDIcon from "../icons/sd.svg";
 import SendIcon from "../icons/send-white.svg";
@@ -67,11 +71,15 @@ import type {
   AndroidReleaseManifest,
   AndroidReleaseVersion,
 } from "../client/android-release-version";
-import { compressImage, removeImage } from "../utils/chat";
+import {
+  compressMobileImage as compressImage,
+  removeMobileImage as removeImage,
+} from "../client/mobile-image";
 import {
   ManagedApiError,
   ManagedTransportError,
   managedJsonRequest as managedApiJsonRequest,
+  managedDownloadBlob,
   managedApiUrl,
   managedGatewayBaseUrl,
   managedRequestText,
@@ -85,8 +93,16 @@ import {
 } from "../client/managed-nextchat";
 import type {
   ManagedAuthResponse,
+  ManagedWorkspaceGroup,
   ManagedWorkspaceModel,
 } from "../client/managed-nextchat";
+import {
+  buildMobileVideoScriptPrompt,
+  managedVideoCapabilities,
+  MOBILE_VIDEO_POLL_INTERVAL_MS,
+  MOBILE_VIDEO_POLL_TIMEOUT_MS,
+  resolveMobileVideoScriptSelection,
+} from "../client/mobile-video";
 import {
   formatManagedMobileError,
   getManagedMobileLocale,
@@ -162,6 +178,7 @@ import {
   shareImage,
   shareImages,
   shareText,
+  copyTextToClipboard,
   showNativeNotification,
   isDirectNativeStreamAvailable,
   startDirectNativeStreamRequest,
@@ -169,6 +186,7 @@ import {
   startNativeDownload,
   stopForegroundPttSession,
   readNativeSharedMaterial,
+  isNativeAndroid,
   loadLoginCredentials,
   saveLoginCredentials,
   clearLoginCredentials,
@@ -199,11 +217,33 @@ import {
   deleteLocalMaterials,
   importLocalMaterials,
   listLocalMaterials,
+  syncLocalMaterials,
   readLocalMaterialBlob,
   readLocalMaterialDataUrl,
   clearLocalMaterials,
+  localMaterialKind,
 } from "../client/local-materials";
-import type { LocalMaterial } from "../client/local-materials";
+import type {
+  LocalMaterial,
+  LocalMaterialKind,
+} from "../client/local-materials";
+import {
+  clearLocalPromptCatalogs,
+  createLocalPromptCoverObjectURL,
+  readLocalPromptCatalog,
+  syncLocalPromptCatalog,
+} from "../client/local-prompt-library";
+import type {
+  LocalPromptCatalog,
+  LocalPromptCatalogItem,
+} from "../client/local-prompt-library";
+import {
+  clearLocalVideos,
+  deleteLocalVideos,
+  listLocalVideosWithBlobs,
+  saveLocalVideo,
+} from "../client/local-video-cache";
+import type { LocalVideoEntry } from "../client/local-video-cache";
 import {
   createMobilePlatformClient,
   mergeMobileTaskPages,
@@ -265,7 +305,6 @@ import type {
 import {
   mobileAttributionAffiliateCode,
   mobileAttributionToken,
-  reportMobileAttributionEvent,
 } from "../client/mobile-attribution";
 import type {
   MobileAsset,
@@ -742,6 +781,74 @@ function mobileTaskStatusLabel(
   text: ManagedMobileText,
 ) {
   return text.platform.taskStatuses[status] || text.notSynced;
+}
+
+function mobileTaskOperationLabel(task: MobileTask, text: ManagedMobileText) {
+  const explicitTitle = localizedMobileDisplay(task, {
+    defaultFields: ["title", "name"],
+  });
+  if (explicitTitle) return explicitTitle;
+  const operation = String(task.operation || "")
+    .trim()
+    .toLowerCase();
+  const locale = getManagedMobileLocale();
+  const labels: Record<string, Record<ManagedMobileLocale, string>> = {
+    "chat.completions": {
+      cn: "AI 对话",
+      en: "AI conversation",
+      jp: "AI チャット",
+      ko: "AI 대화",
+    },
+    "images.generations": {
+      cn: "图片生成",
+      en: "Image generation",
+      jp: "画像生成",
+      ko: "이미지 생성",
+    },
+    "images.edits": {
+      cn: "图片编辑",
+      en: "Image editing",
+      jp: "画像編集",
+      ko: "이미지 편집",
+    },
+    content_kit: {
+      cn: "内容创作",
+      en: "Content creation",
+      jp: "コンテンツ制作",
+      ko: "콘텐츠 제작",
+    },
+    "files.upload": {
+      cn: "文件上传",
+      en: "File upload",
+      jp: "ファイルアップロード",
+      ko: "파일 업로드",
+    },
+  };
+  if (labels[operation]) return labels[operation][locale];
+  if (task.kind === "image") {
+    return {
+      cn: "图片任务",
+      en: "Image task",
+      jp: "画像タスク",
+      ko: "이미지 작업",
+    }[locale];
+  }
+  if (task.kind === "file") {
+    return {
+      cn: "文件任务",
+      en: "File task",
+      jp: "ファイルタスク",
+      ko: "파일 작업",
+    }[locale];
+  }
+  return (
+    {
+      cn: "对话任务",
+      en: "Conversation task",
+      jp: "チャットタスク",
+      ko: "대화 작업",
+    }[locale] || text.platform.tasks
+  );
 }
 
 function mobileAssetTitle(asset: MobileAsset, text: ManagedMobileText) {
@@ -1353,6 +1460,7 @@ type ImagePromptTemplate = {
   domain?: string;
   style?: string;
   subject?: string;
+  coverUrl?: string;
   featured?: boolean;
   needReferenceImages?: boolean;
   params: {
@@ -2590,6 +2698,35 @@ function normalizeImagePromptPayload(
   };
 }
 
+function localPromptCatalogItemToImageTemplate(
+  item: LocalPromptCatalogItem,
+  coverUrl = "",
+): ImagePromptTemplate {
+  const prompt = String(item.prompt_text || "").trim();
+  return {
+    id: item.id,
+    category: item.category || item.purpose || "featured",
+    title: { cn: item.title, en: item.title },
+    description: { cn: item.description, en: item.description },
+    prompt: { cn: prompt, en: prompt },
+    author: "Jisudeng",
+    source: "Jisudeng creation space",
+    categories: item.categories,
+    domain: item.purpose,
+    style: item.style,
+    subject: item.subject,
+    featured: item.featured,
+    coverUrl: coverUrl || undefined,
+    params: {},
+  };
+}
+
+function localPromptCatalogCategoryToImageCategory(
+  category: LocalPromptCatalog["categories"][number],
+): ImagePromptCategory {
+  return { id: category.id, label: category.label, axis: category.axis };
+}
+
 function fallbackImagePromptCategories(text: ManagedMobileText) {
   return [
     { id: "all", label: text.common.all },
@@ -3007,9 +3144,27 @@ function groupNameByID(
   groupID: number | undefined,
   text: ManagedMobileText,
 ) {
-  return (
-    groupByID(workspace, groupID)?.name || currentGroupName(workspace, text)
-  );
+  const group = groupByID(workspace, groupID);
+  const name = localizedMobileDisplay(group, {
+    defaultFields: ["name"],
+    fallback: currentGroupName(workspace, text),
+  });
+  const normalized = name.replace(/\s+/g, "").toLowerCase();
+  const systemLabels: Record<string, Record<ManagedMobileLocale, string>> = {
+    国产分组: {
+      cn: "国产分组",
+      en: "Domestic models",
+      jp: "国内モデル",
+      ko: "국산 모델",
+    },
+    默认分组: {
+      cn: "默认分组",
+      en: "Default group",
+      jp: "標準グループ",
+      ko: "기본 그룹",
+    },
+  };
+  return systemLabels[normalized]?.[getManagedMobileLocale()] || name;
 }
 
 function modelsForGroup(
@@ -5174,15 +5329,6 @@ function AndroidLogin() {
           },
         ).catch(() => undefined);
         if (referralAttributed) storeInviteReferral(null);
-        void reportMobileAttributionEvent({
-          baseUrl: backendBaseUrl,
-          eventType: "register",
-          appVersion: installedRelease.name,
-          locale: text.dateLocale,
-          accessToken: auth.access_token,
-          userScope: auth.user?.id || "new-account",
-          metadata: { surface: "android_register", event_name: "registered" },
-        });
         await managed.bootstrap();
         navigate(Path.Home);
         return;
@@ -5560,6 +5706,7 @@ function AndroidDashboard() {
   >("all");
   const [cloudTasks, setCloudTasks] = useState<MobileTask[]>([]);
   const [taskError, setTaskError] = useState("");
+  const dashboardTaskLongPressRef = useRef<number | null>(null);
   const visibleSessions = useMemo(() => {
     if (dashboardFilter === "pinned") {
       return sessions.filter((session) => session.pinned);
@@ -5662,6 +5809,15 @@ function AndroidDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showingTasks, managed.accessToken]);
 
+  useEffect(
+    () => () => {
+      if (dashboardTaskLongPressRef.current !== null) {
+        window.clearTimeout(dashboardTaskLongPressRef.current);
+      }
+    },
+    [],
+  );
+
   async function cancelCloudTask(task: MobileTask) {
     try {
       const client = await mobilePlatformClient();
@@ -5682,6 +5838,32 @@ function AndroidDashboard() {
     } catch {
       setTaskError(text.platform.taskRefreshFailed);
     }
+  }
+
+  function openTaskManager(taskId?: string) {
+    navigate(Path.Activity, {
+      state: {
+        view: "tasks",
+        manage: true,
+        taskId,
+      },
+    });
+  }
+
+  function startDashboardTaskLongPress(taskId: string) {
+    if (dashboardTaskLongPressRef.current !== null) {
+      window.clearTimeout(dashboardTaskLongPressRef.current);
+    }
+    dashboardTaskLongPressRef.current = window.setTimeout(() => {
+      dashboardTaskLongPressRef.current = null;
+      openTaskManager(taskId);
+    }, 450);
+  }
+
+  function stopDashboardTaskLongPress() {
+    if (dashboardTaskLongPressRef.current === null) return;
+    window.clearTimeout(dashboardTaskLongPressRef.current);
+    dashboardTaskLongPressRef.current = null;
   }
 
   async function deleteDashboardImageTask(item: any) {
@@ -5765,7 +5947,7 @@ function AndroidDashboard() {
           <span>
             {workspace?.brand?.workspace_name || text.workspaceFallback}
           </span>
-          <h1>{text.dashboard.title}</h1>
+          <h1>{text.navigation.home}</h1>
         </div>
         <button
           className={styles["avatar"]}
@@ -5909,22 +6091,23 @@ function AndroidDashboard() {
               ? text.image.history
               : text.chat.sessions}
           </h2>
-          <button
-            aria-label="dashboard-new-chat"
-            onClick={
-              showingTasks
-                ? refreshCloudTasks
-                : showingImages
-                ? () => navigate(Path.Sd)
-                : openChat
-            }
-          >
-            {showingTasks
-              ? text.common.refresh
-              : showingImages
-              ? text.image.generate
-              : text.chat.newSession}
-          </button>
+          {showingTasks ? (
+            <div className={styles["dashboard-task-actions"]}>
+              <button type="button" onClick={() => openTaskManager()}>
+                {text.platform.taskManage}
+              </button>
+              <button type="button" onClick={refreshCloudTasks}>
+                {text.common.refresh}
+              </button>
+            </div>
+          ) : (
+            <button
+              aria-label="dashboard-new-chat"
+              onClick={showingImages ? () => navigate(Path.Sd) : openChat}
+            >
+              {showingImages ? text.image.generate : text.chat.newSession}
+            </button>
+          )}
         </div>
         <div
           className={styles["conversation-list"]}
@@ -5960,15 +6143,25 @@ function AndroidDashboard() {
           )}
           {showingTasks
             ? cloudTasks.map((task) => (
-                <article key={task.id} className={styles["cloud-task-item"]}>
+                <article
+                  key={task.id}
+                  className={styles["cloud-task-item"]}
+                  onPointerDown={(event) => {
+                    if (event.pointerType !== "mouse") {
+                      startDashboardTaskLongPress(task.id);
+                    }
+                  }}
+                  onPointerUp={stopDashboardTaskLongPress}
+                  onPointerCancel={stopDashboardTaskLongPress}
+                  onPointerLeave={stopDashboardTaskLongPress}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openTaskManager(task.id);
+                  }}
+                >
                   <i>{task.kind === "image" ? <ImageIcon /> : <ChatIcon />}</i>
                   <span>
-                    <strong>
-                      {localizedMobileDisplay(task, {
-                        defaultFields: ["operation"],
-                        fallback: text.platform.tasks,
-                      })}
-                    </strong>
+                    <strong>{mobileTaskOperationLabel(task, text)}</strong>
                     <small>
                       {formatDateTime(task.updated_at || task.created_at, text)}
                     </small>
@@ -6465,7 +6658,9 @@ function AndroidActivityCenter() {
   const [taskStatusFilter, setTaskStatusFilter] = useState<
     "all" | MobileTaskStatus
   >("all");
-  const [taskManaging, setTaskManaging] = useState(false);
+  const [taskManaging, setTaskManaging] = useState(() =>
+    Boolean((location.state as any)?.manage),
+  );
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -6558,9 +6753,18 @@ function AndroidActivityCenter() {
   );
 
   useEffect(() => {
-    const nextView = (location.state as any)?.view;
+    const routeState = (location.state as any) || {};
+    const nextView = routeState.view;
     if (nextView === "tasks" || nextView === "notifications") {
       setView(nextView);
+      if (routeState.manage) {
+        setTaskManaging(true);
+        if (typeof routeState.taskId === "string" && routeState.taskId) {
+          setSelectedTaskIds((current) =>
+            new Set(current).add(routeState.taskId),
+          );
+        }
+      }
       navigate(Path.Activity, { replace: true, state: null });
     }
   }, [location.state, navigate]);
@@ -6935,12 +7139,7 @@ function AndroidActivityCenter() {
         <section className={styles["task-detail"]} aria-live="polite">
           <div className={styles["section-head"]}>
             <div>
-              <h2>
-                {localizedMobileDisplay(selectedTask, {
-                  defaultFields: ["operation"],
-                  fallback: text.platform.tasks,
-                })}
-              </h2>
+              <h2>{mobileTaskOperationLabel(selectedTask, text)}</h2>
               <span>{formatDateTime(selectedTask.created_at, text)}</span>
             </div>
             <em>{mobileTaskStatusLabel(selectedTask.status, text)}</em>
@@ -7172,12 +7371,7 @@ function AndroidActivityCenter() {
                           void openTaskDetail(task);
                         }}
                       >
-                        <strong>
-                          {localizedMobileDisplay(task, {
-                            defaultFields: ["operation"],
-                            fallback: text.platform.tasks,
-                          })}
-                        </strong>
+                        <strong>{mobileTaskOperationLabel(task, text)}</strong>
                         <small>
                           {formatDateTime(
                             task.updated_at || task.created_at,
@@ -7574,6 +7768,9 @@ function ImagePromptLibrarySheet(props: {
   open: boolean;
   text: ManagedMobileText;
   currentModel?: string;
+  accountId?: string;
+  backendBaseUrl?: string;
+  accessToken?: string;
   onClose: () => void;
   onApply: (template: ImagePromptTemplate) => void;
   onAdapt: (template: ImagePromptTemplate) => void;
@@ -7595,6 +7792,7 @@ function ImagePromptLibrarySheet(props: {
   const [recentIds, setRecentIds] = useState<string[]>(() =>
     readStoredJSON("jisudengchat-image-prompt-recents-v1", [] as string[]),
   );
+  const coverObjectURLsRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -7608,57 +7806,75 @@ function ImagePromptLibrarySheet(props: {
         : appLocale === "ko"
         ? "ko"
         : "en";
-    const allowPromptLibraryFallback = locale === "zh" || locale === "en";
-    async function loadLibrary() {
-      try {
-        const manifest = await fetch("/image-prompts/manifest.json").then(
-          (res) => res.json(),
+    const releaseCoverObjectURLs = () => {
+      coverObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      coverObjectURLsRef.current = [];
+    };
+    async function applyCatalog(catalog: LocalPromptCatalog) {
+      const entries = await Promise.all(
+        catalog.items.map(async (item) => {
+          const coverUrl = await createLocalPromptCoverObjectURL(
+            catalog.accountId,
+            catalog.locale,
+            "image",
+            item.id,
+            catalog.source,
+          );
+          return { item, coverUrl };
+        }),
+      );
+      if (!alive) {
+        entries.forEach(({ coverUrl }) => {
+          if (coverUrl) URL.revokeObjectURL(coverUrl);
+        });
+        return;
+      }
+      releaseCoverObjectURLs();
+      coverObjectURLsRef.current = entries
+        .map(({ coverUrl }) => coverUrl)
+        .filter(Boolean);
+      const normalized = entries.map(({ item, coverUrl }) =>
+        localPromptCatalogItemToImageTemplate(item, coverUrl),
+      );
+      if (normalized.length > 0) setLibraryItems(normalized);
+      const systemCategories = fallbackImagePromptCategories(props.text).filter(
+        (item) => ["all", "featured", "favorites", "recent"].includes(item.id),
+      );
+      const remoteOnly = catalog.categories
+        .map(localPromptCatalogCategoryToImageCategory)
+        .filter(
+          (item) =>
+            item.id &&
+            !systemCategories.some((system) => system.id === item.id),
         );
-        const categoryFile =
-          manifest?.categoryFiles?.[locale] ||
-          (allowPromptLibraryFallback ? manifest?.categoryFiles?.zh : "") ||
-          "";
-        const promptFiles: string[] =
-          manifest?.promptFiles?.[locale] ||
-          (allowPromptLibraryFallback ? manifest?.promptFiles?.zh : []) ||
-          [];
-        const [remoteCategories, promptParts] = await Promise.all([
-          categoryFile
-            ? fetch(categoryFile)
-                .then((res) => res.json())
-                .catch(() => [])
-            : Promise.resolve([]),
-          Promise.all(
-            promptFiles.map((file) =>
-              fetch(file)
-                .then((res) => res.json())
-                .catch(() => []),
-            ),
-          ),
-        ]);
-        if (!alive) return;
-        const normalized = promptParts
-          .flat()
-          .filter((item: ImagePromptLibraryPayload) => item?.id)
-          .map(normalizeImagePromptPayload);
-        if (normalized.length > 0) {
-          setLibraryItems(normalized);
-        }
-        if (Array.isArray(remoteCategories) && remoteCategories.length > 0) {
-          const systemCategories = fallbackImagePromptCategories(
-            props.text,
-          ).filter((item) =>
-            ["all", "featured", "favorites", "recent"].includes(item.id),
-          );
-          const remoteOnly = remoteCategories.filter(
-            (item: ImagePromptCategory) =>
-              item?.id &&
-              !systemCategories.some((system) => system.id === item.id),
-          );
-          setLibraryCategories([...systemCategories, ...remoteOnly]);
-        }
+      setLibraryCategories([...systemCategories, ...remoteOnly]);
+    }
+    async function loadLibrary() {
+      const accountId = String(props.accountId || "").trim();
+      const accessToken = String(props.accessToken || "").trim();
+      const backendBaseUrl = String(props.backendBaseUrl || "").trim();
+      try {
+        if (!accountId) return;
+        const cached = await readLocalPromptCatalog(
+          accountId,
+          locale,
+          "image",
+          "canvas",
+        );
+        if (cached) await applyCatalog(cached);
+        if (!accessToken || !backendBaseUrl) return;
+        const synced = await syncLocalPromptCatalog(
+          accountId,
+          locale,
+          "image",
+          backendBaseUrl,
+          accessToken,
+          undefined,
+          "canvas",
+        );
+        await applyCatalog(synced.catalog);
       } catch {
-        if (alive) {
+        if (alive && !String(props.accountId || "").trim()) {
           setLibraryItems(IMAGE_PROMPT_TEMPLATES);
           setLibraryCategories(fallbackImagePromptCategories(props.text));
         }
@@ -7667,8 +7883,15 @@ function ImagePromptLibrarySheet(props: {
     loadLibrary();
     return () => {
       alive = false;
+      releaseCoverObjectURLs();
     };
-  }, [props.open, props.text]);
+  }, [
+    props.accessToken,
+    props.accountId,
+    props.backendBaseUrl,
+    props.open,
+    props.text,
+  ]);
 
   function markRecent(id: string) {
     setRecentIds((ids) => {
@@ -7778,6 +8001,14 @@ function ImagePromptLibrarySheet(props: {
       <div className={styles["library-list"]}>
         {items.map((item) => (
           <article key={item.id} className={styles["library-item"]}>
+            {item.coverUrl && (
+              <img
+                className={styles["prompt-library-cover"]}
+                src={item.coverUrl}
+                alt=""
+                loading="lazy"
+              />
+            )}
             <div className={styles["library-item-main"]}>
               <strong>{localizedValue(item.title, props.text)}</strong>
               <small>{localizedValue(item.description, props.text)}</small>
@@ -8804,6 +9035,33 @@ function parseMarkdownTable(lines: string[], start: number) {
 function renderPlainMessageLines(content: string) {
   const lines = content.split("\n");
   const nodes: ReactNode[] = [];
+
+  function renderInlineText(value: string, keyPrefix: string) {
+    const parts = value.split(/(https?:\/\/[^\s<]+)/gi);
+    return parts.map((part, index) => {
+      if (!/^https?:\/\//i.test(part)) return part;
+      const trailing =
+        part.match(/[),.;!?\u3002\uff0c\uff01\uff1b\uff1a]+$/)?.[0] || "";
+      const url = trailing ? part.slice(0, -trailing.length) : part;
+      return (
+        <Fragment key={`${keyPrefix}-link-${index}`}>
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => {
+              event.preventDefault();
+              void openExternalUrl(url);
+            }}
+          >
+            {url}
+          </a>
+          {trailing}
+        </Fragment>
+      );
+    });
+  }
+
   let paragraph: string[] = [];
 
   function flushParagraph(key: string) {
@@ -8813,7 +9071,14 @@ function renderPlainMessageLines(content: string) {
         {paragraph
           .join("\n")
           .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-          .replace(/\*\*([^*]+)\*\*/g, "$1")}
+          .replace(/\*\*([^*]+)\*\*/g, "$1")
+          .split("\n")
+          .map((line, index, lines) => (
+            <Fragment key={`${key}-line-${index}`}>
+              {index > 0 ? "\n" : null}
+              {renderInlineText(line, `${key}-${lines.length}`)}
+            </Fragment>
+          ))}
       </p>,
     );
     paragraph = [];
@@ -9059,6 +9324,17 @@ function AndroidChat() {
   const autoFollowRef = useRef(true);
   const lastScrolledSessionRef = useRef("");
   const autoRetryKeyRef = useRef("");
+
+  const messageError =
+    currentSession?.messages
+      .slice()
+      .reverse()
+      .find((message) => message.error?.trim())
+      ?.error?.trim() || "";
+  const sessionError = chatError.trim() || currentSession?.error?.trim() || "";
+  const showChatErrorBar = Boolean(
+    sessionError && sessionError !== messageError,
+  );
 
   async function addMaterialDraft(input: {
     blob: Blob;
@@ -10659,7 +10935,7 @@ function AndroidChat() {
     const value = messageTextValue(message, text);
     if (!value) return;
     try {
-      await navigator.clipboard?.writeText(value);
+      await copyTextToClipboard(value);
       setMessageActionTarget(null);
       setMessageViewerTarget(null);
     } catch {
@@ -11154,11 +11430,36 @@ function AndroidChat() {
               ) : null}
               {message.content ? (
                 <MobileMessageContent content={message.content} />
-              ) : message.status === "streaming" ? (
-                <p className={styles["muted"]}>{text.chat.assistantThinking}</p>
-              ) : null}
+              ) : message.status === "streaming" ? null : (
+                <p className={styles["message-empty"]}>
+                  {message.imageUrls?.length
+                    ? text.chat.imageAttached(message.imageUrls.length)
+                    : message.role === "user"
+                    ? text.errors.emptyMessage
+                    : text.common.empty}
+                </p>
+              )}
+              {message.status === "streaming" && (
+                <div
+                  className={styles["message-generating"]}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span
+                    className={styles["message-generating-dots"]}
+                    aria-hidden="true"
+                  >
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <span>{text.chat.assistantThinking}</span>
+                </div>
+              )}
               {message.error && (
-                <div className={styles["inline-error"]}>{message.error}</div>
+                <div className={styles["inline-error"]} role="alert">
+                  {message.error}
+                </div>
               )}
               <div className={styles["message-footer"]}>
                 <small className={styles["message-meta"]}>
@@ -11177,26 +11478,16 @@ function AndroidChat() {
                     }
                   }}
                 >
-                  ...
+                  <ThreeDotsIcon />
                 </button>
               </div>
             </article>
           ))}
         </div>
 
-        {(chatError ||
-          (currentSession?.messages.some((message) => message.role === "user")
-            ? currentSession?.error
-            : "")) && (
-          <div className={styles["chat-error-bar"]}>
-            <span>
-              {chatError ||
-                (currentSession?.messages.some(
-                  (message) => message.role === "user",
-                )
-                  ? currentSession?.error
-                  : "")}
-            </span>
+        {showChatErrorBar && (
+          <div className={styles["chat-error-bar"]} role="alert">
+            <span>{sessionError}</span>
             {currentSession?.messages.some(
               (message) => message.role === "user",
             ) && <button onClick={retryLast}>{text.chat.retryLast}</button>}
@@ -11360,13 +11651,20 @@ function AndroidChat() {
                 rows={1}
               />
             )}
+            <IconButton
+              label={text.chat.moreTools}
+              onClick={() => setMoreToolsOpen((value) => !value)}
+              active={moreToolsOpen}
+            >
+              <AddIcon />
+            </IconButton>
             {running ? (
               <IconButton label={text.chat.stop} onClick={stopChat} danger>
                 <CloseIcon />
               </IconButton>
             ) : (
               <IconButton
-                label="chat-send"
+                label={text.chat.send}
                 type="submit"
                 disabled={
                   !input.trim() &&
@@ -11382,13 +11680,6 @@ function AndroidChat() {
                 <SendIcon />
               </IconButton>
             )}
-            <IconButton
-              label={text.chat.moreTools}
-              onClick={() => setMoreToolsOpen((value) => !value)}
-              active={moreToolsOpen}
-            >
-              <AddIcon />
-            </IconButton>
           </div>
         </form>
 
@@ -13549,6 +13840,1739 @@ function AndroidContentKit() {
   );
 }
 
+const VIDEO_STUDIO_PREF_KEY = "jisudeng-mobile-video-studio-preferences";
+
+function videoStudioPreferenceKey(accountID: string) {
+  return `${VIDEO_STUDIO_PREF_KEY}:${String(accountID || "anonymous")}`;
+}
+
+const DEFAULT_VIDEO_STUDIO_PREFERENCES = {
+  groupId: 0,
+  model: "",
+  resolution: "720p",
+  ratio: "16:9",
+  duration: 8,
+  generateAudio: false,
+  watermark: false,
+};
+
+function videoStudioCopy() {
+  const locale = getManagedMobileLocale();
+  const copies = {
+    cn: {
+      title: "视频创作",
+      image: "图片",
+      video: "视频",
+      group: "视频分组",
+      model: "视频模型",
+      prompt: "视频提示词",
+      placeholder: "描述你要生成的视频画面、动作和镜头",
+      script: "AI 编写提示词",
+      scriptModel: "剧本模型",
+      scriptFollowing: "跟随当前聊天",
+      scriptNoModel: "当前聊天没有可用的文本模型",
+      scripting: "正在整理提示词",
+      scriptFailed: "提示词生成失败",
+      noGroup: "当前账号没有可用的视频分组",
+      noModel: "当前视频分组没有已授权的视频模型",
+      groupHint: "请让管理员为该分组配置视频模型和视频价格后再生成。",
+      resolution: "分辨率",
+      ratio: "画面比例",
+      duration: "时长",
+      seconds: "秒",
+      smartDuration: "智能时长",
+      audio: "生成声音",
+      watermark: "添加水印",
+      reference: "参考素材",
+      choose: "选择",
+      generate: "生成视频",
+      generating: "正在生成",
+      cancel: "取消生成",
+      retry: "重试",
+      download: "保存到手机",
+      saveAsset: "保存到素材库",
+      ready: "视频已生成",
+      timeout: "生成超时，任务仍可重试",
+      failed: "视频生成失败",
+      noResult: "没有获取到视频结果",
+      history: "本地视频历史",
+      emptyHistory: "生成完成的视频会保留在这里",
+      refresh: "刷新能力",
+      selectPrompt: "提示词",
+      unsupported: "当前模型不支持此参数",
+      materialLibrary: "从素材库选择",
+      clearReferences: "清空参考",
+      materialEmpty: "没有适用于当前模型的已同步素材",
+      materialLoading: "正在检查素材更新",
+      materialKinds: { image: "图片", video: "视频", audio: "音频" },
+    },
+    en: {
+      title: "Video creation",
+      image: "Image",
+      video: "Video",
+      group: "Video group",
+      model: "Video model",
+      prompt: "Video prompt",
+      placeholder: "Describe the scene, motion, and camera you want",
+      script: "Write with AI",
+      scriptModel: "Script model",
+      scriptFollowing: "Following current chat",
+      scriptNoModel: "No chat text model is available",
+      scripting: "Preparing prompt",
+      scriptFailed: "Could not prepare the prompt",
+      noGroup: "No video group is available for this account",
+      noModel: "No authorized video model is available in this group",
+      groupHint:
+        "Ask an administrator to configure a video model and video pricing.",
+      resolution: "Resolution",
+      ratio: "Aspect ratio",
+      duration: "Duration",
+      seconds: "sec",
+      smartDuration: "Smart duration",
+      audio: "Generate audio",
+      watermark: "Add watermark",
+      reference: "Reference material",
+      choose: "Choose",
+      generate: "Generate video",
+      generating: "Generating",
+      cancel: "Cancel generation",
+      retry: "Retry",
+      download: "Save to device",
+      saveAsset: "Save to materials",
+      ready: "Video ready",
+      timeout: "Generation timed out; you can retry the task",
+      failed: "Video generation failed",
+      noResult: "No video result was returned",
+      history: "Local video history",
+      emptyHistory: "Completed videos will stay here",
+      refresh: "Refresh capabilities",
+      selectPrompt: "Prompt library",
+      unsupported: "This model does not support this option",
+      materialLibrary: "Choose from materials",
+      clearReferences: "Clear references",
+      materialEmpty: "No synced material is supported by this model",
+      materialLoading: "Checking material updates",
+      materialKinds: { image: "Image", video: "Video", audio: "Audio" },
+    },
+    jp: {
+      title: "動画作成",
+      image: "画像",
+      video: "動画",
+      group: "動画グループ",
+      model: "動画モデル",
+      prompt: "動画プロンプト",
+      placeholder: "生成したい場面、動き、カメラを入力してください",
+      script: "AIでプロンプト作成",
+      scriptModel: "脚本モデル",
+      scriptFollowing: "現在のチャットに連動",
+      scriptNoModel: "現在のチャットに利用可能なテキストモデルがありません",
+      scripting: "プロンプトを作成中",
+      scriptFailed: "プロンプトを作成できませんでした",
+      noGroup: "このアカウントで利用できる動画グループがありません",
+      noModel: "このグループに承認済みの動画モデルがありません",
+      groupHint: "管理者に動画モデルと料金の設定を依頼してください。",
+      resolution: "解像度",
+      ratio: "縦横比",
+      duration: "長さ",
+      seconds: "秒",
+      smartDuration: "スマート時間",
+      audio: "音声を生成",
+      watermark: "透かしを追加",
+      reference: "参考素材",
+      choose: "選択",
+      generate: "動画を生成",
+      generating: "生成中",
+      cancel: "生成をキャンセル",
+      retry: "再試行",
+      download: "端末に保存",
+      saveAsset: "素材ライブラリに保存",
+      ready: "動画が完成しました",
+      timeout: "生成がタイムアウトしました。再試行できます",
+      failed: "動画生成に失敗しました",
+      noResult: "動画結果を取得できませんでした",
+      history: "端末内の動画履歴",
+      emptyHistory: "完成した動画がここに保存されます",
+      refresh: "機能を更新",
+      selectPrompt: "プロンプト",
+      unsupported: "このモデルはこの項目に対応していません",
+      materialLibrary: "素材ライブラリから選択",
+      clearReferences: "参考素材を解除",
+      materialEmpty: "このモデルで使える同期済み素材はありません",
+      materialLoading: "素材の更新を確認中",
+      materialKinds: { image: "画像", video: "動画", audio: "音声" },
+    },
+    ko: {
+      title: "동영상 만들기",
+      image: "이미지",
+      video: "동영상",
+      group: "동영상 그룹",
+      model: "동영상 모델",
+      prompt: "동영상 프롬프트",
+      placeholder: "원하는 장면, 움직임, 카메라를 설명하세요",
+      script: "AI로 프롬프트 작성",
+      scriptModel: "스크립트 모델",
+      scriptFollowing: "현재 채팅을 따름",
+      scriptNoModel: "현재 채팅에서 사용할 수 있는 텍스트 모델이 없습니다",
+      scripting: "프롬프트 작성 중",
+      scriptFailed: "프롬프트를 작성할 수 없습니다",
+      noGroup: "이 계정에서 사용할 수 있는 동영상 그룹이 없습니다",
+      noModel: "이 그룹에 승인된 동영상 모델이 없습니다",
+      groupHint: "관리자에게 동영상 모델과 요금 설정을 요청하세요.",
+      resolution: "해상도",
+      ratio: "화면 비율",
+      duration: "길이",
+      seconds: "초",
+      smartDuration: "스마트 길이",
+      audio: "오디오 생성",
+      watermark: "워터마크 추가",
+      reference: "참고 자료",
+      choose: "선택",
+      generate: "동영상 생성",
+      generating: "생성 중",
+      cancel: "생성 취소",
+      retry: "다시 시도",
+      download: "기기에 저장",
+      saveAsset: "자료실에 저장",
+      ready: "동영상이 완성되었습니다",
+      timeout: "생성 시간이 초과되었습니다. 다시 시도할 수 있습니다",
+      failed: "동영상 생성 실패",
+      noResult: "동영상 결과를 받지 못했습니다",
+      history: "로컬 동영상 기록",
+      emptyHistory: "완성된 동영상이 여기에 보관됩니다",
+      refresh: "기능 새로고침",
+      selectPrompt: "프롬프트",
+      unsupported: "이 모델은 이 옵션을 지원하지 않습니다",
+      materialLibrary: "자료실에서 선택",
+      clearReferences: "참고 자료 비우기",
+      materialEmpty: "이 모델에서 사용할 수 있는 동기화된 자료가 없습니다",
+      materialLoading: "자료 업데이트 확인 중",
+      materialKinds: { image: "이미지", video: "동영상", audio: "오디오" },
+    },
+  } as const;
+  return copies[locale] || copies.cn;
+}
+
+function AndroidCreationStudio() {
+  const installedRelease = useInstalledAndroidReleaseVersion();
+  const playDistribution = isPlayDistribution(installedRelease);
+  const [mode, setMode] = useState<"image" | "video">(() => {
+    if (typeof localStorage === "undefined") return "image";
+    return !playDistribution &&
+      localStorage.getItem("jisudeng-mobile-creation-mode") === "video"
+      ? "video"
+      : "image";
+  });
+  useEffect(() => {
+    if (playDistribution && mode === "video") setMode("image");
+  }, [mode, playDistribution]);
+  const setCreationMode = (next: "image" | "video") => {
+    setMode(next);
+    try {
+      localStorage.setItem("jisudeng-mobile-creation-mode", next);
+    } catch {
+      // Private browsing can disable localStorage; the in-memory mode still works.
+    }
+  };
+  const copy = videoStudioCopy();
+  return (
+    <div className={styles["creation-screen"]}>
+      <div className={styles["creation-mode-switch"]} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "image"}
+          className={clsx(styles["creation-mode-button"], {
+            [styles["creation-mode-active"]]: mode === "image",
+          })}
+          onClick={() => setCreationMode("image")}
+        >
+          <span>
+            <ImageIcon />
+            {copy.image}
+          </span>
+        </button>
+        {!playDistribution && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "video"}
+            className={clsx(styles["creation-mode-button"], {
+              [styles["creation-mode-active"]]: mode === "video",
+            })}
+            onClick={() => setCreationMode("video")}
+          >
+            <span>
+              <PlayIcon />
+              {copy.video}
+            </span>
+          </button>
+        )}
+      </div>
+      {!playDistribution && mode === "video" ? (
+        <AndroidVideoStudio />
+      ) : (
+        <AndroidImageStudio />
+      )}
+    </div>
+  );
+}
+
+type MobileVideoServerCapabilities = {
+  operations?: string[];
+  supported_resolutions?: string[];
+  supported_ratios?: string[];
+  supported_durations?: number[];
+  max_reference_images?: number;
+  max_reference_videos?: number;
+  max_reference_audios?: number;
+  generate_audio?: boolean;
+  watermark?: boolean;
+};
+
+type MobileVideoServerGroup = {
+  id: number;
+  name: string;
+  platform?: string;
+  video_available?: boolean;
+  video_unavailable_code?: string;
+  models?: string[];
+  capabilities?: MobileVideoServerCapabilities;
+  model_capabilities?: Record<string, MobileVideoServerCapabilities>;
+};
+
+type MobileVideoServerBootstrap = {
+  groups?: MobileVideoServerGroup[];
+};
+
+type MobileVideoPrompt = {
+  id: number | string;
+  title: string;
+  description?: string;
+  prompt_text?: string;
+  purpose?: string;
+  category?: string;
+  categories?: string[];
+  version?: number;
+  updated_at?: string;
+  media?: Array<{ url?: string; media_type?: string }>;
+  coverUrl?: string;
+};
+
+type MobileVideoServerTask = {
+  id: string;
+  status?:
+    | "queued"
+    | "running"
+    | "streaming"
+    | "completed"
+    | "partial"
+    | "failed"
+    | "cancelled";
+  progress?: number;
+  artifacts?: Array<{
+    url?: string;
+    content_url?: string;
+    content_type?: string;
+    kind?: string;
+  }>;
+  error?: { code?: string; message?: string } | null;
+};
+
+type MobileVideoHistoryItem = LocalVideoEntry & { url: string };
+
+function localPromptCatalogItemToVideoPrompt(
+  item: LocalPromptCatalogItem,
+  coverUrl = "",
+): MobileVideoPrompt {
+  return {
+    // Canvas prompt IDs are stable strings (for example
+    // `gpt-image-2-prompts-598`). Never coerce them to a number: NaN IDs
+    // break React keys, local cover lookups, and delta tombstones.
+    id: item.id,
+    title: item.title,
+    description: item.description,
+    prompt_text: item.prompt_text,
+    purpose: item.purpose,
+    category: item.category,
+    categories: item.categories,
+    version: item.version,
+    updated_at: item.updated_at,
+    coverUrl: coverUrl || undefined,
+    media: item.media,
+  };
+}
+
+function mobileVideoServerGroupsToWorkspace(
+  groups: MobileVideoServerGroup[],
+): ManagedWorkspaceGroup[] {
+  return groups.map((group) => ({
+    id: Number(group.id),
+    name: String(group.name || group.id),
+    platform: group.platform,
+    video_available: group.video_available,
+    video_unavailable_code: group.video_unavailable_code,
+    video_capabilities: group.capabilities,
+    models: (group.models || []).map((name) => ({
+      id: name,
+      name,
+      platform: group.platform,
+      video_capabilities:
+        group.model_capabilities?.[name] || group.capabilities,
+    })),
+  }));
+}
+
+function AndroidVideoStudio() {
+  const managed = useManagedNextChatStore();
+  const mobileStore = useManagedMobileAppStore();
+  const text = useMobileText();
+  const copy = videoStudioCopy();
+  const activeAccountId = String(
+    managed.user?.id ||
+      managed.session?.user_id ||
+      managed.workspace?.user?.id ||
+      "",
+  );
+  const preferenceKey = videoStudioPreferenceKey(activeAccountId);
+  const [preferences, setPreferences] = useState(() =>
+    readStoredJSON(preferenceKey, DEFAULT_VIDEO_STUDIO_PREFERENCES),
+  );
+  const [serverGroups, setServerGroups] = useState<ManagedWorkspaceGroup[]>([]);
+  const [serverBootstrapLoaded, setServerBootstrapLoaded] = useState(false);
+  const [serverBootstrapLoading, setServerBootstrapLoading] = useState(false);
+  const loadServerCapabilities = useCallback(async () => {
+    if (!managed.accessToken) {
+      setServerGroups([]);
+      setServerBootstrapLoaded(false);
+      return;
+    }
+    setServerBootstrapLoading(true);
+    try {
+      const payload =
+        await managedAuthenticatedJsonRequest<MobileVideoServerBootstrap>(
+          "/api/v1/mobile/video/bootstrap",
+        );
+      setServerGroups(
+        mobileVideoServerGroupsToWorkspace(payload?.groups || []),
+      );
+      setServerBootstrapLoaded(true);
+    } catch {
+      // Keep the managed bootstrap as a short-lived compatibility fallback;
+      // creation still uses the server-owned task API and will fail closed if
+      // its capabilities are unavailable.
+      setServerBootstrapLoaded(false);
+    } finally {
+      setServerBootstrapLoading(false);
+    }
+  }, [managed.accessToken]);
+  useEffect(() => {
+    void loadServerCapabilities();
+  }, [loadServerCapabilities]);
+  const groups = useMemo(
+    () => (serverBootstrapLoaded ? serverGroups : []),
+    [serverBootstrapLoaded, serverGroups],
+  );
+  const preferredGroup = groups.find(
+    (group) => group.id === Number(preferences.groupId),
+  );
+  const selectedGroup = preferredGroup || groups[0];
+  const videoModels = (selectedGroup?.models || []).filter((model) =>
+    managedVideoCapabilities(model, selectedGroup),
+  );
+  const fallbackModel = videoModels[0];
+  const selectedModel =
+    videoModels.find((model) => modelValue(model) === preferences.model) ||
+    fallbackModel;
+  const capabilities = managedVideoCapabilities(selectedModel, selectedGroup);
+  const resolutions: string[] =
+    capabilities?.resolutions || capabilities?.supported_resolutions || [];
+  const ratios: string[] =
+    capabilities?.ratios || capabilities?.supported_ratios || [];
+  const durations: number[] =
+    capabilities?.durations || capabilities?.supported_durations || [];
+  const [prompt, setPrompt] = useState("");
+  const [scriptRunning, setScriptRunning] = useState(false);
+  const [references, setReferences] = useState<string[]>([]);
+  const [referenceAssetIDs, setReferenceAssetIDs] = useState<string[]>([]);
+  const [referenceAssetKinds, setReferenceAssetKinds] = useState<
+    Record<string, LocalMaterialKind>
+  >({});
+  const [referenceMaterials, setReferenceMaterials] = useState<LocalMaterial[]>(
+    [],
+  );
+  const [referenceMaterialsLoading, setReferenceMaterialsLoading] =
+    useState(false);
+  const [referenceLibraryOpen, setReferenceLibraryOpen] = useState(false);
+  const [status, setStatus] = useState<
+    "idle" | "running" | "completed" | "failed" | "cancelled"
+  >("idle");
+  const [progress, setProgress] = useState(0);
+  const [resultUrl, setResultUrl] = useState("");
+  const [taskID, setTaskID] = useState("");
+  const [error, setError] = useState("");
+  const [videoPrompts, setVideoPrompts] = useState<MobileVideoPrompt[]>([]);
+  const [videoPromptCategories, setVideoPromptCategories] = useState<
+    Array<{ id: string; label: string }>
+  >([]);
+  const [videoPromptCategory, setVideoPromptCategory] = useState("all");
+  const [videoPromptQuery, setVideoPromptQuery] = useState("");
+  const [history, setHistory] = useState<MobileVideoHistoryItem[]>([]);
+  const historyObjectURLsRef = useRef<string[]>([]);
+  const videoPromptObjectURLsRef = useRef<string[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+  const referenceInputRef = useRef<HTMLInputElement | null>(null);
+  const referenceObjectURLsRef = useRef<string[]>([]);
+  const resultObjectURLRef = useRef<string>("");
+  const scriptAbortRef = useRef<AbortController | null>(null);
+
+  const referenceLimitForKind = useCallback(
+    (kind: LocalMaterialKind) => {
+      switch (kind) {
+        case "image":
+          return Math.max(
+            0,
+            Number(
+              capabilities?.max_reference_images ??
+                (capabilities?.image_to_video ? 1 : 0),
+            ),
+          );
+        case "video":
+          return Math.max(
+            0,
+            Number(
+              capabilities?.max_reference_videos ??
+                (capabilities?.video_reference ? 1 : 0),
+            ),
+          );
+        case "audio":
+          return Math.max(
+            0,
+            Number(
+              capabilities?.max_reference_audios ??
+                (capabilities?.audio_reference ? 1 : 0),
+            ),
+          );
+        default:
+          return 0;
+      }
+    },
+    [capabilities],
+  );
+
+  const selectableReferenceMaterials = useMemo(
+    () =>
+      referenceMaterials.filter(
+        (material) =>
+          Boolean(material.remoteId) &&
+          referenceLimitForKind(material.kind) > 0,
+      ),
+    [referenceLimitForKind, referenceMaterials],
+  );
+
+  const refreshReferenceMaterials = useCallback(async () => {
+    if (!activeAccountId) {
+      setReferenceMaterials([]);
+      return;
+    }
+    setReferenceMaterialsLoading(true);
+    try {
+      const items =
+        managed.accessToken && managed.backendBaseUrl
+          ? (
+              await syncLocalMaterials(
+                activeAccountId,
+                managed.backendBaseUrl,
+                managed.accessToken,
+              )
+            ).materials
+          : await listLocalMaterials(activeAccountId);
+      setReferenceMaterials(items);
+    } catch {
+      // The current device cache remains selectable if a lightweight delta
+      // check is offline or temporarily unavailable.
+      setReferenceMaterials(await listLocalMaterials(activeAccountId));
+    } finally {
+      setReferenceMaterialsLoading(false);
+    }
+  }, [activeAccountId, managed.accessToken, managed.backendBaseUrl]);
+
+  const scriptSelection = useMemo(
+    () =>
+      resolveMobileVideoScriptSelection({
+        workspace: managed.workspace,
+        chatSessions: mobileStore.chatSessions,
+        currentChatId: mobileStore.currentChatId,
+        preference: readChatPreference(),
+      }),
+    [managed.workspace, mobileStore.chatSessions, mobileStore.currentChatId],
+  );
+  const scriptGroup = useMemo(
+    () =>
+      scriptSelection.groupId
+        ? managed.workspace?.models?.groups?.find(
+            (group) => group.id === scriptSelection.groupId,
+          )
+        : undefined,
+    [managed.workspace, scriptSelection.groupId],
+  );
+
+  useEffect(() => {
+    setPreferences(
+      readStoredJSON(preferenceKey, DEFAULT_VIDEO_STUDIO_PREFERENCES),
+    );
+  }, [preferenceKey]);
+
+  useEffect(() => {
+    void refreshReferenceMaterials();
+  }, [refreshReferenceMaterials]);
+
+  useEffect(() => {
+    referenceObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    referenceObjectURLsRef.current = [];
+    setReferences([]);
+    setReferenceAssetIDs([]);
+    setReferenceAssetKinds({});
+    setReferenceLibraryOpen(false);
+  }, [activeAccountId]);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadHistory = async () => {
+      historyObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      historyObjectURLsRef.current = [];
+      setHistory([]);
+      if (!activeAccountId) return;
+      const cachedEntries = await listLocalVideosWithBlobs(activeAccountId);
+      const hydrated: MobileVideoHistoryItem[] = [];
+      for (const { entry, blob } of cachedEntries) {
+        const url = URL.createObjectURL(blob);
+        historyObjectURLsRef.current.push(url);
+        hydrated.push({ ...entry, url });
+      }
+      if (!disposed) setHistory(hydrated);
+
+      // Reconcile completed server tasks so a result generated on another
+      // session/device is downloaded once into this account's local cache.
+      if (!managed.accessToken || disposed) return;
+      try {
+        const page = await managedAuthenticatedJsonRequest<{
+          items?: MobileVideoServerTask[];
+        }>("/api/v1/mobile/video/jobs?page=1&page_size=24");
+        // The index can survive Android/WebView storage eviction while an
+        // individual IndexedDB blob does not. Only entries returned with a
+        // binary are actually cached, so missing blobs get one authenticated
+        // repair download below.
+        const known = new Set(cachedEntries.map(({ entry }) => entry.taskId));
+        const next = [...hydrated];
+        for (const task of page?.items || []) {
+          const state = String(task.status || "").toLowerCase();
+          if (
+            !task.id ||
+            known.has(task.id) ||
+            !["completed", "partial"].includes(state)
+          )
+            continue;
+          const artifact = task.artifacts?.find(
+            (item) => item.url || item.content_url,
+          );
+          const artifactURL = artifact?.url || artifact?.content_url;
+          if (!artifactURL) continue;
+          const blob = await managedDownloadBlob(
+            managed.backendBaseUrl,
+            artifactURL,
+            managed.accessToken,
+          );
+          const entry = await saveLocalVideo(activeAccountId, task.id, blob, {
+            prompt: "",
+            createdAt:
+              Date.parse(String((task as any).created_at || "")) || Date.now(),
+          });
+          const url = URL.createObjectURL(blob);
+          historyObjectURLsRef.current.push(url);
+          next.push({ ...entry, url });
+          known.add(task.id);
+        }
+        if (!disposed) setHistory(next.slice(0, 24));
+      } catch {
+        // Local history remains usable when the server is temporarily offline.
+      }
+    };
+    void loadHistory();
+    return () => {
+      disposed = true;
+      historyObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      historyObjectURLsRef.current = [];
+    };
+  }, [activeAccountId, managed.accessToken, managed.backendBaseUrl]);
+
+  useEffect(() => {
+    return () => {
+      scriptAbortRef.current?.abort();
+      referenceObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      referenceObjectURLsRef.current = [];
+      if (resultObjectURLRef.current)
+        URL.revokeObjectURL(resultObjectURLRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const appLocale = mobileTextLocale(text);
+    const locale =
+      appLocale === "cn" ? "zh" : appLocale === "jp" ? "ja" : appLocale;
+    const releasePromptObjectURLs = () => {
+      videoPromptObjectURLsRef.current.forEach((url) =>
+        URL.revokeObjectURL(url),
+      );
+      videoPromptObjectURLsRef.current = [];
+    };
+    const applyCatalog = async (catalog: LocalPromptCatalog) => {
+      const entries = await Promise.all(
+        catalog.items.map(async (item) => ({
+          item,
+          coverUrl: await createLocalPromptCoverObjectURL(
+            catalog.accountId,
+            catalog.locale,
+            "video",
+            item.id,
+            catalog.source,
+          ),
+        })),
+      );
+      if (disposed) {
+        entries.forEach(({ coverUrl }) => {
+          if (coverUrl) URL.revokeObjectURL(coverUrl);
+        });
+        return;
+      }
+      releasePromptObjectURLs();
+      videoPromptObjectURLsRef.current = entries
+        .map(({ coverUrl }) => coverUrl)
+        .filter(Boolean);
+      setVideoPrompts(
+        entries.map(({ item, coverUrl }) => ({
+          ...localPromptCatalogItemToVideoPrompt(item, coverUrl),
+          id: item.id,
+        })),
+      );
+      setVideoPromptCategories([
+        { id: "all", label: copy.selectPrompt },
+        ...catalog.categories.map((category) => ({
+          id: category.id,
+          label: category.label,
+        })),
+      ]);
+    };
+    const loadPromptCatalog = async () => {
+      releasePromptObjectURLs();
+      setVideoPrompts([]);
+      setVideoPromptCategories([]);
+      setVideoPromptCategory("all");
+      if (!activeAccountId) return;
+      // Video creation reuses the same published Creation Space prompt
+      // directory as the image studio. The Canvas mirror owns the prompt
+      // bodies and covers, so it must be synced in the canvas namespace.
+      const cached = await readLocalPromptCatalog(
+        activeAccountId,
+        locale,
+        "video",
+        "canvas",
+      );
+      if (cached) await applyCatalog(cached);
+      if (!managed.accessToken || !managed.backendBaseUrl || disposed) return;
+      try {
+        const synced = await syncLocalPromptCatalog(
+          activeAccountId,
+          locale,
+          "video",
+          managed.backendBaseUrl,
+          managed.accessToken,
+          undefined,
+          "canvas",
+        );
+        await applyCatalog(synced.catalog);
+      } catch {
+        // The cached catalog remains usable while the server is unavailable.
+      }
+    };
+    void loadPromptCatalog();
+    return () => {
+      disposed = true;
+      releasePromptObjectURLs();
+    };
+  }, [
+    activeAccountId,
+    managed.accessToken,
+    managed.backendBaseUrl,
+    text,
+    copy.selectPrompt,
+  ]);
+
+  const visibleVideoPrompts = useMemo(() => {
+    const query = videoPromptQuery.trim().toLowerCase();
+    return videoPrompts.filter((item) => {
+      const categories = [
+        item.category,
+        item.purpose,
+        ...(item.categories || []),
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      if (
+        videoPromptCategory !== "all" &&
+        !categories.includes(videoPromptCategory.toLowerCase())
+      ) {
+        return false;
+      }
+      if (!query) return true;
+      return [item.title, item.description, item.prompt_text]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [videoPromptCategory, videoPromptQuery, videoPrompts]);
+
+  useEffect(() => {
+    const next = {
+      ...preferences,
+      groupId: selectedGroup?.id || 0,
+      model: modelValue(selectedModel),
+      resolution: resolutions.includes(preferences.resolution)
+        ? preferences.resolution
+        : resolutions[0],
+      ratio: ratios.includes(preferences.ratio) ? preferences.ratio : ratios[0],
+      duration: durations.includes(Number(preferences.duration))
+        ? Number(preferences.duration)
+        : durations[0],
+    };
+    setPreferences(next);
+    writeStoredJSON(preferenceKey, next);
+    // The dependency list intentionally follows server capability changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    preferenceKey,
+    selectedGroup?.id,
+    selectedModel?.id,
+    resolutions.join(","),
+    ratios.join(","),
+    durations.join(","),
+  ]);
+
+  function clearSelectedReferences() {
+    referenceObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    referenceObjectURLsRef.current = [];
+    setReferences([]);
+    setReferenceAssetIDs([]);
+    setReferenceAssetKinds({});
+  }
+
+  function toggleReferenceMaterial(material: LocalMaterial) {
+    const id = String(material.remoteId || "").trim();
+    if (!id) return;
+    if (referenceAssetIDs.includes(id)) {
+      setReferenceAssetIDs((items) => items.filter((item) => item !== id));
+      setReferenceAssetKinds((items) => {
+        const next = { ...items };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+    const count = Object.values(referenceAssetKinds).filter(
+      (kind) => kind === material.kind,
+    ).length;
+    if (count >= referenceLimitForKind(material.kind)) {
+      setError(copy.unsupported);
+      return;
+    }
+    setReferenceAssetIDs((items) => [...items, id]);
+    setReferenceAssetKinds((items) => ({ ...items, [id]: material.kind }));
+    setError("");
+  }
+
+  async function chooseReferences(event: ChangeEvent<HTMLInputElement>) {
+    const currentTotal = referenceAssetIDs.length;
+    const maxReferences = ["image", "video", "audio"]
+      .map((kind) => referenceLimitForKind(kind as LocalMaterialKind))
+      .reduce((total, value) => total + value, 0);
+    const files = Array.from(event.currentTarget.files || []).slice(
+      0,
+      Math.max(0, maxReferences - currentTotal),
+    );
+    try {
+      const counts = files.reduce(
+        (result, file) => {
+          const kind = localMaterialKind(file);
+          result[kind] = (result[kind] || 0) + 1;
+          return result;
+        },
+        Object.values(referenceAssetKinds).reduce(
+          (result, kind) => ({ ...result, [kind]: (result[kind] || 0) + 1 }),
+          {} as Record<string, number>,
+        ),
+      );
+      if (
+        !files.length ||
+        (counts.image || 0) > referenceLimitForKind("image") ||
+        (counts.video || 0) > referenceLimitForKind("video") ||
+        (counts.audio || 0) > referenceLimitForKind("audio")
+      ) {
+        throw new Error(copy.unsupported);
+      }
+      const objectURLs = files.map((file) => URL.createObjectURL(file));
+      const uploaded = await Promise.all(
+        files.map(async (file) => {
+          const form = new FormData();
+          form.append("file", file, file.name);
+          form.append("kind", localMaterialKind(file));
+          form.append("source", "upload");
+          return managedFormDataRequest<{ id?: string }>(
+            "/api/v1/mobile/assets",
+            form,
+            text,
+            { idempotencyKey: clientRequestID("mobile-video-asset") },
+          );
+        }),
+      );
+      const ids = uploaded
+        .map((asset) => String(asset?.id || ""))
+        .filter(Boolean);
+      if (ids.length !== files.length) throw new Error(copy.failed);
+      referenceObjectURLsRef.current.push(...objectURLs);
+      setReferences((items) => [...items, ...objectURLs]);
+      setReferenceAssetIDs((items) => [...new Set([...items, ...ids])]);
+      setReferenceAssetKinds((items) => {
+        const next = { ...items };
+        ids.forEach((id, index) => {
+          next[id] = localMaterialKind(files[index]);
+        });
+        return next;
+      });
+      await refreshReferenceMaterials();
+      setError("");
+    } catch (referenceError) {
+      setError(
+        referenceError instanceof Error &&
+          referenceError.message === copy.unsupported
+          ? copy.unsupported
+          : copy.failed,
+      );
+    } finally {
+      event.currentTarget.value = "";
+    }
+  }
+
+  async function writeVideoPromptWithChatModel() {
+    const brief = prompt.trim();
+    if (!brief) {
+      setError(copy.placeholder);
+      return;
+    }
+    if (
+      !scriptSelection.groupId ||
+      !scriptSelection.model ||
+      !managed.session
+    ) {
+      setError(copy.scriptNoModel);
+      return;
+    }
+    const modelIsStillAvailable = scriptGroup?.models?.some(
+      (model) =>
+        isChatModel(model) && modelValue(model) === scriptSelection.model,
+    );
+    if (!modelIsStillAvailable) {
+      setError(copy.scriptNoModel);
+      return;
+    }
+
+    const controller = new AbortController();
+    scriptAbortRef.current?.abort();
+    scriptAbortRef.current = controller;
+    setScriptRunning(true);
+    setError("");
+    const requestID = clientRequestID("mobile-video-script");
+    try {
+      let activeManaged = useManagedNextChatStore.getState();
+      if (shouldRefreshManagedSession(activeManaged.session)) {
+        await managed.bootstrap({ silent: true });
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (!activeManaged.session?.api_key)
+        throw new Error(text.errors.loginRequired);
+      if (currentGroupID(activeManaged.workspace) !== scriptSelection.groupId) {
+        await managed.switchGroup(scriptSelection.groupId);
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (controller.signal.aborted) return;
+      const chatAPIKey = activeManaged.session?.api_key;
+      if (!chatAPIKey) throw new Error(text.errors.loginRequired);
+      const response = await managedGatewayRequestText(
+        activeManaged.backendBaseUrl,
+        "/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "Idempotency-Key": requestID,
+            "X-Request-ID": requestID,
+            "X-Client-Request-ID": requestID,
+          },
+          body: JSON.stringify({
+            model: scriptSelection.model,
+            stream: false,
+            messages: [
+              {
+                role: "user",
+                content: buildMobileVideoScriptPrompt(brief, text.dateLocale),
+              },
+            ],
+          }),
+          signal: controller.signal,
+        },
+        chatAPIKey,
+        text,
+      );
+      if (!response.ok) {
+        throw new Error(
+          parseOpenAIError(
+            response.text,
+            response.status,
+            "/v1/chat/completions",
+            response.requestId || requestID,
+          ),
+        );
+      }
+      let output = "";
+      try {
+        output = extractChatContent(JSON.parse(response.text || "{}"));
+      } catch {
+        output = response.text;
+      }
+      if (!output.trim()) throw new Error(copy.scriptFailed);
+      setPrompt(output.trim());
+    } catch (scriptError) {
+      if (!controller.signal.aborted) {
+        setError(
+          scriptError instanceof Error
+            ? localizedMobileErrorMessage(scriptError, copy.scriptFailed)
+            : copy.scriptFailed,
+        );
+      }
+    } finally {
+      if (scriptAbortRef.current === controller) scriptAbortRef.current = null;
+      if (!controller.signal.aborted) setScriptRunning(false);
+    }
+  }
+
+  async function waitForVideoTask(
+    initialTask: MobileVideoServerTask,
+    requestID: string,
+    controller: AbortController,
+  ) {
+    const id = String(initialTask?.id || "");
+    if (!id) throw new Error(copy.noResult);
+    setTaskID(id);
+    const deadline = Date.now() + MOBILE_VIDEO_POLL_TIMEOUT_MS;
+    let latest: MobileVideoServerTask = initialTask;
+    let attempt = 0;
+    while (Date.now() < deadline) {
+      if (controller.signal.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const state = String(latest.status || "").toLowerCase();
+      const artifact = latest.artifacts?.find(
+        (item) => item.url || item.content_url,
+      );
+      if (artifact && ["completed", "partial"].includes(state)) break;
+      if (["failed", "cancelled"].includes(state)) {
+        throw new Error(latest.error?.message || copy.failed);
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, MOBILE_VIDEO_POLL_INTERVAL_MS),
+      );
+      latest = await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}`,
+        {
+          method: "GET",
+          headers: { "X-Request-ID": requestID },
+          signal: controller.signal,
+        },
+      );
+      setProgress(Math.min(94, 12 + Math.min(80, ++attempt * 5)));
+    }
+    if (Date.now() >= deadline) throw new Error(copy.timeout);
+    const artifact = latest.artifacts?.find(
+      (item) => item.url || item.content_url,
+    );
+    const url =
+      artifact?.url ||
+      artifact?.content_url ||
+      `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}/content`;
+    if (!url || !managed.accessToken) throw new Error(copy.noResult);
+    const blob = await managedDownloadBlob(
+      managed.backendBaseUrl,
+      url,
+      managed.accessToken,
+      controller.signal,
+    );
+    const localEntry = await saveLocalVideo(activeAccountId, id, blob, {
+      prompt: prompt.trim(),
+      createdAt: Date.now(),
+    });
+    // The result is now durable in this account's device cache. Release the
+    // private relay copy in the background; a transient acknowledgement error
+    // never turns a successful local save into a failed generation.
+    void managedAuthenticatedJsonRequest(
+      `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}/content/acknowledge`,
+      { method: "POST" },
+    ).catch(() => undefined);
+    if (resultObjectURLRef.current) {
+      URL.revokeObjectURL(resultObjectURLRef.current);
+    }
+    resultObjectURLRef.current = URL.createObjectURL(blob);
+    setResultUrl(resultObjectURLRef.current);
+    setStatus("completed");
+    setProgress(100);
+    const historyURL = URL.createObjectURL(blob);
+    historyObjectURLsRef.current.push(historyURL);
+    const entry: MobileVideoHistoryItem = { ...localEntry, url: historyURL };
+    setHistory((items) =>
+      [entry, ...items.filter((item) => item.taskId !== id)].slice(0, 24),
+    );
+  }
+
+  function handleVideoRunError(controller: AbortController, runError: unknown) {
+    if (controller.signal.aborted) {
+      setStatus("cancelled");
+      setError(text.errors.requestCancelled);
+      return;
+    }
+    setStatus("failed");
+    setError(runError instanceof Error ? runError.message : copy.failed);
+  }
+
+  async function runVideo() {
+    if (!selectedGroup || !selectedModel || !capabilities) {
+      setError(groups.length ? copy.noModel : copy.noGroup);
+      return;
+    }
+    if (!prompt.trim()) {
+      setError(copy.placeholder);
+      return;
+    }
+    if (!managed.accessToken || !serverBootstrapLoaded) {
+      setError(copy.noGroup);
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const requestID = clientRequestID("mobile-video");
+    setStatus("running");
+    setProgress(8);
+    setTaskID("");
+    setResultUrl("");
+    setError("");
+    try {
+      const createData = await managedAuthenticatedJsonRequest<{
+        task?: MobileVideoServerTask;
+      }>("/api/v1/mobile/video/jobs", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": requestID,
+          "X-Request-ID": requestID,
+        },
+        body: JSON.stringify({
+          group_id: Number(selectedGroup.id),
+          model: modelValue(selectedModel),
+          prompt: prompt.trim(),
+          resolution: preferences.resolution,
+          ratio: preferences.ratio,
+          duration_seconds: Number(preferences.duration),
+          reference_asset_ids: referenceAssetIDs,
+          generate_audio: Boolean(
+            capabilities.generate_audio && preferences.generateAudio,
+          ),
+          watermark: Boolean(capabilities.watermark && preferences.watermark),
+          client_request_id: requestID,
+        }),
+        signal: controller.signal,
+      });
+      await waitForVideoTask(
+        createData?.task || (createData as unknown as MobileVideoServerTask),
+        requestID,
+        controller,
+      );
+    } catch (runError) {
+      handleVideoRunError(controller, runError);
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }
+
+  async function retryVideo() {
+    if (!taskID || !managed.accessToken) {
+      await runVideo();
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const requestID = clientRequestID("mobile-video-retry");
+    setStatus("running");
+    setProgress(8);
+    setResultUrl("");
+    setError("");
+    try {
+      const current =
+        await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
+          `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}`,
+          {
+            method: "GET",
+            headers: { "X-Request-ID": requestID },
+            signal: controller.signal,
+          },
+        );
+      const currentState = String(current.status || "").toLowerCase();
+      if (!["failed", "cancelled"].includes(currentState)) {
+        // A client-side polling timeout must not submit a second provider job.
+        // Resume the durable server task first; only a terminal retryable task
+        // is allowed to create a new task.
+        await waitForVideoTask(current, requestID, controller);
+      } else {
+        const retry =
+          await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
+            `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/retry`,
+            {
+              method: "POST",
+              headers: {
+                "Idempotency-Key": requestID,
+                "X-Request-ID": requestID,
+              },
+              body: JSON.stringify({ client_request_id: requestID }),
+              signal: controller.signal,
+            },
+          );
+        await waitForVideoTask(retry, requestID, controller);
+      }
+    } catch (retryError) {
+      handleVideoRunError(controller, retryError);
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }
+
+  function cancelVideo() {
+    abortRef.current?.abort();
+    if (taskID && managed.accessToken) {
+      void managedAuthenticatedJsonRequest(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/cancel`,
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      ).catch(() => undefined);
+    }
+  }
+
+  async function removeHistoryItem(item: MobileVideoHistoryItem) {
+    try {
+      await deleteLocalVideos(activeAccountId, [item.id]);
+      URL.revokeObjectURL(item.url);
+      historyObjectURLsRef.current = historyObjectURLsRef.current.filter(
+        (url) => url !== item.url,
+      );
+      setHistory((items) =>
+        items.filter((candidate) => candidate.id !== item.id),
+      );
+      if (item.taskId === taskID) {
+        setResultUrl("");
+        setTaskID("");
+      }
+    } catch {
+      setError(copy.failed);
+    }
+  }
+
+  async function downloadVideo(url: string, id: string) {
+    try {
+      // Local history is played from an IndexedDB blob URL. Android's
+      // DownloadManager cannot consume blob: URLs, so it downloads the same
+      // server-owned task artifact with the active account's short-lived JWT.
+      // The token remains a request header and is never put in a URL or file.
+      const useAuthenticatedTaskDownload = Boolean(
+        isNativeAndroid() &&
+          id &&
+          managed.accessToken &&
+          managed.backendBaseUrl,
+      );
+      const downloadURL = useAuthenticatedTaskDownload
+        ? managedApiUrl(
+            managed.backendBaseUrl,
+            `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}/content`,
+          )
+        : url;
+      await startNativeDownload(
+        downloadURL,
+        `jisudeng-video-${id}.mp4`,
+        copy.title,
+        useAuthenticatedTaskDownload
+          ? { authorization: `Bearer ${managed.accessToken}` }
+          : undefined,
+      );
+    } catch {
+      setError(text.errors.downloadFailed);
+    }
+  }
+
+  async function saveVideoAsAsset() {
+    if (!taskID || !managed.accessToken) return;
+    try {
+      const requestID = clientRequestID("mobile-video-save-asset");
+      const localVideo = (await listLocalVideosWithBlobs(activeAccountId)).find(
+        ({ entry }) => entry.taskId === taskID,
+      );
+      if (!localVideo) throw new Error(copy.noResult);
+      const form = new FormData();
+      form.append("file", localVideo.blob, `video-${taskID}.mp4`);
+      form.append("kind", "video");
+      form.append("source", "video_result");
+      await managedFormDataRequest("/api/v1/mobile/assets", form, text, {
+        requestId: requestID,
+        idempotencyKey: requestID,
+      });
+      await refreshReferenceMaterials();
+      setError("");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : copy.failed);
+    }
+  }
+
+  const noCapability =
+    !selectedGroup ||
+    !selectedModel ||
+    !capabilities ||
+    resolutions.length === 0 ||
+    ratios.length === 0 ||
+    durations.length === 0;
+  return (
+    <AndroidAppShell active="create" text={text}>
+      <header className={styles["app-header"]}>
+        <div>
+          <span>{selectedGroup?.name || copy.video}</span>
+          <h1>{copy.title}</h1>
+        </div>
+        <IconButton
+          label={copy.refresh}
+          disabled={serverBootstrapLoading}
+          onClick={() => {
+            void Promise.all([managed.bootstrap(), loadServerCapabilities()]);
+          }}
+        >
+          <ReloadIcon />
+        </IconButton>
+      </header>
+      <section className={styles["image-panel"]}>
+        {noCapability && (
+          <div className={styles["image-routing-hint"]}>
+            <div>
+              <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
+              <span>{copy.groupHint}</span>
+            </div>
+          </div>
+        )}
+        <div className={styles["form-grid"]}>
+          <label>
+            <span>{copy.group}</span>
+            <select
+              value={String(selectedGroup?.id || "")}
+              onChange={(event) => {
+                const group = groups.find(
+                  (item) => String(item.id) === event.currentTarget.value,
+                );
+                setPreferences((current) => ({
+                  ...current,
+                  groupId: group?.id || 0,
+                  model: "",
+                }));
+              }}
+              disabled={!groups.length}
+            >
+              {groups.length ? (
+                groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))
+              ) : (
+                <option value="">{copy.noGroup}</option>
+              )}
+            </select>
+          </label>
+          <label>
+            <span>{copy.model}</span>
+            <select
+              value={modelValue(selectedModel)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  model: event.currentTarget.value,
+                }))
+              }
+              disabled={!videoModels.length}
+            >
+              {videoModels.length ? (
+                videoModels.map((model) => (
+                  <option key={modelValue(model)} value={modelValue(model)}>
+                    {modelLabel(model)}
+                  </option>
+                ))
+              ) : (
+                <option value="">{copy.noModel}</option>
+              )}
+            </select>
+          </label>
+          <label>
+            <span>{copy.resolution}</span>
+            <select
+              value={String(preferences.resolution)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  resolution: event.currentTarget.value,
+                }))
+              }
+              disabled={noCapability}
+            >
+              {resolutions.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>{copy.ratio}</span>
+            <select
+              value={String(preferences.ratio)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  ratio: event.currentTarget.value,
+                }))
+              }
+              disabled={noCapability}
+            >
+              {ratios.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>{copy.duration}</span>
+            <select
+              value={String(preferences.duration)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  duration: Number(event.currentTarget.value),
+                }))
+              }
+              disabled={noCapability}
+            >
+              {durations.map((value) => (
+                <option key={value} value={value}>
+                  {value === -1
+                    ? copy.smartDuration
+                    : `${value} ${copy.seconds}`}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <textarea
+          aria-label="video-prompt"
+          value={prompt}
+          onChange={(event) => setPrompt(event.currentTarget.value)}
+          placeholder={copy.placeholder}
+          disabled={noCapability}
+        />
+        <div className={styles["video-script-helper"]}>
+          <span>
+            <small>{copy.scriptModel}</small>
+            <strong>
+              {scriptSelection.model
+                ? `${groupNameByID(
+                    managed.workspace,
+                    scriptSelection.groupId,
+                    text,
+                  )} · ${scriptSelection.model}`
+                : copy.scriptNoModel}
+            </strong>
+            <em>{copy.scriptFollowing}</em>
+          </span>
+          <button
+            type="button"
+            onClick={() => void writeVideoPromptWithChatModel()}
+            disabled={!prompt.trim() || !scriptSelection.model || scriptRunning}
+          >
+            <PromptIcon />
+            {scriptRunning ? copy.scripting : copy.script}
+          </button>
+        </div>
+        {videoPrompts.length > 0 && (
+          <div
+            className={styles["video-prompt-library"]}
+            aria-label={copy.selectPrompt}
+          >
+            <span>{copy.selectPrompt}</span>
+            <div className={styles["video-prompt-filters"]}>
+              <select
+                aria-label={copy.selectPrompt}
+                value={videoPromptCategory}
+                onChange={(event) =>
+                  setVideoPromptCategory(event.currentTarget.value)
+                }
+              >
+                {(videoPromptCategories.length
+                  ? videoPromptCategories
+                  : [{ id: "all", label: text.common.all }]
+                ).map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.id === "all" ? text.common.all : category.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="search"
+                aria-label={copy.selectPrompt}
+                value={videoPromptQuery}
+                onChange={(event) =>
+                  setVideoPromptQuery(event.currentTarget.value)
+                }
+                placeholder={copy.selectPrompt}
+              />
+            </div>
+            <div className={styles["video-prompt-scroller"]}>
+              {visibleVideoPrompts.map((item) => {
+                return (
+                  <button
+                    type="button"
+                    key={String(item.id)}
+                    onClick={() => setPrompt(item.prompt_text || item.title)}
+                    disabled={noCapability}
+                  >
+                    {item.coverUrl && (
+                      <img src={item.coverUrl} alt="" loading="lazy" />
+                    )}
+                    <strong>{item.title}</strong>
+                    <small>{item.prompt_text || item.description}</small>
+                  </button>
+                );
+              })}
+              {!visibleVideoPrompts.length && <span>{text.common.empty}</span>}
+            </div>
+          </div>
+        )}
+        <div className={styles["library-action-row"]}>
+          <button
+            type="button"
+            onClick={() => referenceInputRef.current?.click()}
+            disabled={noCapability}
+          >
+            <UploadIcon />
+            <span>{copy.reference}</span>
+            <strong>
+              {referenceAssetIDs.length
+                ? `${referenceAssetIDs.length}`
+                : copy.choose}
+            </strong>
+          </button>
+          <button
+            type="button"
+            onClick={() => setReferenceLibraryOpen((open) => !open)}
+            disabled={noCapability || referenceMaterialsLoading}
+            aria-expanded={referenceLibraryOpen}
+          >
+            <UploadIcon />
+            <span>{copy.materialLibrary}</span>
+            <strong>
+              {referenceMaterialsLoading
+                ? copy.materialLoading
+                : selectableReferenceMaterials.length}
+            </strong>
+          </button>
+          <button
+            type="button"
+            onClick={clearSelectedReferences}
+            disabled={!referenceAssetIDs.length}
+          >
+            <DeleteIcon />
+            <span>{copy.clearReferences}</span>
+            <strong>{referenceAssetIDs.length || ""}</strong>
+          </button>
+          <input
+            ref={referenceInputRef}
+            type="file"
+            accept="image/*,video/*,audio/*"
+            multiple
+            hidden
+            onChange={(event) => void chooseReferences(event)}
+          />
+        </div>
+        {referenceLibraryOpen && (
+          <div
+            className={styles["video-reference-library"]}
+            aria-label={copy.materialLibrary}
+          >
+            {referenceMaterialsLoading ? (
+              <span>{copy.materialLoading}</span>
+            ) : selectableReferenceMaterials.length ? (
+              selectableReferenceMaterials.map((material) => {
+                const id = String(material.remoteId || "");
+                const selected = referenceAssetIDs.includes(id);
+                const kind = material.kind as "image" | "video" | "audio";
+                return (
+                  <button
+                    key={material.id}
+                    type="button"
+                    aria-pressed={selected}
+                    className={clsx({
+                      [styles["reference-selected"]]: selected,
+                    })}
+                    onClick={() => toggleReferenceMaterial(material)}
+                  >
+                    <UploadIcon />
+                    <span>
+                      <strong>{material.name}</strong>
+                      <small>{copy.materialKinds[kind]}</small>
+                    </span>
+                    <b>{selected ? "-" : "+"}</b>
+                  </button>
+                );
+              })
+            ) : (
+              <span>{copy.materialEmpty}</span>
+            )}
+          </div>
+        )}
+        <div className={styles["form-grid"]}>
+          <label className={styles["checkbox-row"]}>
+            <input
+              type="checkbox"
+              checked={Boolean(preferences.generateAudio)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  generateAudio: event.currentTarget.checked,
+                }))
+              }
+              disabled={!capabilities?.generate_audio}
+            />
+            <span>{copy.audio}</span>
+          </label>
+          <label className={styles["checkbox-row"]}>
+            <input
+              type="checkbox"
+              checked={Boolean(preferences.watermark)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  watermark: event.currentTarget.checked,
+                }))
+              }
+              disabled={!capabilities?.watermark}
+            />
+            <span>{copy.watermark}</span>
+          </label>
+        </div>
+        {error && <div className={styles["form-error"]}>{error}</div>}
+        {status === "running" && (
+          <div className={styles["content-kit-preflight"]}>
+            <span>
+              {copy.generating} · {progress}%
+            </span>
+            <button type="button" onClick={cancelVideo}>
+              {copy.cancel}
+            </button>
+          </div>
+        )}
+        {(status === "failed" || status === "cancelled") && taskID && (
+          <div className={styles["content-kit-preflight"]}>
+            <span>{error || copy.failed}</span>
+            <button type="button" onClick={() => void retryVideo()}>
+              {copy.retry}
+            </button>
+          </div>
+        )}
+        <button
+          type="button"
+          className={styles["primary-action"]}
+          disabled={noCapability || status === "running"}
+          onClick={() => void runVideo()}
+        >
+          <PlayIcon />
+          {status === "running" ? copy.generating : copy.generate}
+        </button>
+        {resultUrl && status === "completed" && (
+          <div className={styles["video-result-card"]}>
+            <video controls playsInline src={resultUrl} />
+            <div>
+              <strong>{copy.ready}</strong>
+              <button
+                type="button"
+                onClick={() => void downloadVideo(resultUrl, taskID)}
+              >
+                <DownloadIcon />
+                {copy.download}
+              </button>
+              <button type="button" onClick={() => void saveVideoAsAsset()}>
+                <UploadIcon />
+                {copy.saveAsset}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+      <section className={styles["section"]}>
+        <div className={styles["section-head"]}>
+          <h2>{copy.history}</h2>
+          <span>{history.length}</span>
+        </div>
+        {history.length === 0 && (
+          <p className={styles["empty-copy"]}>{copy.emptyHistory}</p>
+        )}
+        <div className={styles["content-kit-project-list"]}>
+          {history.map((item) => (
+            <div className={styles["content-kit-project"]} key={item.id}>
+              <video muted playsInline src={item.url} />
+              <span>
+                <strong>{item.prompt.slice(0, 50) || item.taskId}</strong>
+                <small>{new Date(item.createdAt).toLocaleString()}</small>
+              </span>
+              <button
+                type="button"
+                onClick={() => void downloadVideo(item.url, item.taskId)}
+              >
+                <DownloadIcon />
+              </button>
+              <button
+                type="button"
+                aria-label={text.common.delete}
+                onClick={() => void removeHistoryItem(item)}
+              >
+                <DeleteIcon />
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </AndroidAppShell>
+  );
+}
+
 function AndroidImageStudio() {
   const managed = useManagedNextChatStore();
   const text = useMobileText();
@@ -15103,6 +17127,9 @@ function AndroidImageStudio() {
         open={promptSheetOpen}
         text={text}
         currentModel={selectedModel}
+        accountId={activeAccountId}
+        backendBaseUrl={managed.backendBaseUrl}
+        accessToken={managed.accessToken}
         onClose={() => setPromptSheetOpen(false)}
         onApply={applyPromptTemplate}
         onAdapt={adaptPromptTemplate}
@@ -15268,7 +17295,16 @@ function AndroidGallery() {
     }
     setLocalMaterialsLoading(true);
     try {
-      setLocalMaterials(await listLocalMaterials(activeAccountId));
+      if (managed.accessToken && managed.backendBaseUrl) {
+        const synced = await syncLocalMaterials(
+          activeAccountId,
+          managed.backendBaseUrl,
+          managed.accessToken,
+        );
+        setLocalMaterials(synced.materials);
+      } else {
+        setLocalMaterials(await listLocalMaterials(activeAccountId));
+      }
       setError("");
     } catch {
       setError(text.platform.materialRefreshFailed);
@@ -15290,6 +17326,46 @@ function AndroidGallery() {
     try {
       const imported = await importLocalMaterials(activeAccountId, files);
       setLocalMaterials((items) => [...imported, ...items]);
+      // A local import remains available if the network fails, but an online
+      // import must also become a server-owned asset. Otherwise it cannot be
+      // selected by video jobs, synced to a second device, or removed remotely.
+      if (managed.accessToken && managed.backendBaseUrl) {
+        const uploadedAssets = await Promise.all(
+          files.map((file) => uploadMaterial(file, file.name, "upload")),
+        );
+        const synced = await syncLocalMaterials(
+          activeAccountId,
+          managed.backendBaseUrl,
+          managed.accessToken,
+        );
+        // Do not remove the device copy until every upload is visible in the
+        // authoritative sync response. A successful upload followed by a
+        // transient sync/ETag race must never turn into local data loss.
+        const uploadedIDs = uploadedAssets
+          .map((asset) => String(asset?.id || "").trim())
+          .filter(Boolean);
+        const syncedIDs = new Set(
+          synced.materials
+            .map((material) => String(material.remoteId || "").trim())
+            .filter(Boolean),
+        );
+        if (
+          uploadedIDs.length !== files.length ||
+          uploadedIDs.some((id) => !syncedIDs.has(id))
+        ) {
+          throw new Error(text.platform.materialRefreshFailed);
+        }
+        // The server copy is now cached under its remote ID. Remove only the
+        // temporary local import records to avoid showing duplicate material.
+        await deleteLocalMaterials(
+          activeAccountId,
+          imported.map((material) => material.id),
+        );
+        setLocalMaterials(await listLocalMaterials(activeAccountId));
+        if (!synced.materials.length && imported.length) {
+          throw new Error(text.platform.materialRefreshFailed);
+        }
+      }
       showNotice(text.platform.uploadReady);
     } catch {
       setError(text.platform.uploadFailedHint);
@@ -15302,6 +17378,12 @@ function AndroidGallery() {
   async function deleteLocalMaterial(material: LocalMaterial) {
     if (!window.confirm(text.platform.deleteAssetConfirm)) return;
     try {
+      if (material.remoteId) {
+        const client = await mobilePlatformClient();
+        await client.assets.delete(material.remoteId, {
+          headers: { "X-Request-ID": clientRequestID("mobile-asset-delete") },
+        });
+      }
       await deleteLocalMaterials(activeAccountId, [material.id]);
       setLocalMaterials((items) =>
         items.filter((item) => item.id !== material.id),
@@ -16820,19 +18902,19 @@ function AndroidSystemSettings() {
       <section className={styles["account-menu-group"]}>
         <div className={styles["account-menu-list"]}>
           <AccountMenuItem
-            icon={<SettingsIcon />}
+            icon={<PaletteIcon />}
             title={text.account.appearance}
             detail={text.account.appearanceModes}
             onClick={() => navigate(Path.AccountAppearance)}
           />
           <AccountMenuItem
-            icon={<ChatIcon />}
+            icon={<PromptIcon />}
             title={text.account.appLanguage}
             detail={text.account.languageSystem}
             onClick={() => navigate(Path.AccountLanguage)}
           />
           <AccountMenuItem
-            icon={<SettingsIcon />}
+            icon={<DiscoveryIcon />}
             title={text.account.webOpenMode}
             detail={text.account.webOpenInApp}
             onClick={() => navigate(Path.AccountWebOpenMode)}
@@ -17352,6 +19434,8 @@ function AndroidAccountSettings() {
         );
       }
       await clearLocalMaterials(activeAccountId).catch(() => undefined);
+      await clearLocalPromptCatalogs(activeAccountId).catch(() => undefined);
+      await clearLocalVideos(activeAccountId).catch(() => undefined);
       clearAccountScopedLocalStorage(activeAccountId);
       mobileStore.clearActiveAccount();
       sdStore.clearActiveAccount();
@@ -23585,18 +25669,6 @@ function AndroidAccountSettings() {
           </div>
           <div className={styles["account-menu-list"]}>
             <AccountMenuItem
-              icon={<ShareIcon />}
-              title={text.account.inviteGrowth}
-              detail={text.account.inviteGrowthHint}
-              onClick={() => navigate(Path.AccountInvite)}
-            />
-            <AccountMenuItem
-              icon={<FavoriteIcon />}
-              title={text.account.welfare}
-              detail={text.account.welfareHint}
-              onClick={() => navigate(Path.AccountWelfare)}
-            />
-            <AccountMenuItem
               icon={<HistoryIcon />}
               title={text.account.orders}
               detail={text.shortCount(accountData.orders?.length || 0)}
@@ -23933,6 +26005,111 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
 
   useMobileCrashLog();
 
+  // Warm the account-scoped material cache when the app becomes active. The
+  // sync endpoint returns only metadata deltas and a 304 when nothing changed;
+  // binary files are therefore downloaded once per device/account and only
+  // revalidated after an app restart or resume.
+  useEffect(() => {
+    const accountID = String(
+      managed.user?.id || managed.session?.user_id || "",
+    ).trim();
+    // The domestic release owns the server material library. Keep the Play
+    // distribution isolated until its separate asset/policy contract is
+    // explicitly enabled; it must not silently start downloading domestic
+    // library data after an account login.
+    if (
+      !accountID ||
+      !managed.accessToken ||
+      !backendBaseUrl ||
+      isPlayDistribution(installedRelease)
+    ) {
+      return;
+    }
+    const sync = () => {
+      if (document.visibilityState !== "visible") return;
+      void syncLocalMaterials(
+        accountID,
+        backendBaseUrl,
+        useManagedNextChatStore.getState().accessToken,
+      ).catch(() => undefined);
+    };
+    sync();
+    window.addEventListener("jisudeng-native-resume", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("jisudeng-native-resume", sync);
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [
+    backendBaseUrl,
+    installedRelease,
+    managed.accessToken,
+    managed.session?.user_id,
+    managed.user?.id,
+  ]);
+
+  // Prompt covers and text follow the same account-scoped local-cache policy
+  // as user materials. Warm both catalogs after login; subsequent resumes only
+  // perform the small manifest/ETag probe and fetch changed entries.
+  useEffect(() => {
+    const accountID = String(
+      managed.user?.id || managed.session?.user_id || "",
+    ).trim();
+    if (
+      !accountID ||
+      !managed.accessToken ||
+      !backendBaseUrl ||
+      isPlayDistribution(installedRelease)
+    ) {
+      return;
+    }
+    const appLocale = mobileTextLocale(text);
+    const locale =
+      appLocale === "cn"
+        ? "zh"
+        : appLocale === "jp"
+        ? "ja"
+        : appLocale === "ko"
+        ? "ko"
+        : "en";
+    const sync = () => {
+      if (document.visibilityState !== "visible") return;
+      const token = useManagedNextChatStore.getState().accessToken;
+      if (!token) return;
+      void Promise.all(
+        (["image", "video"] as const).map((kind) =>
+          syncLocalPromptCatalog(
+            accountID,
+            locale,
+            kind,
+            backendBaseUrl,
+            token,
+            undefined,
+            // Both creation modes share the published Creation Space prompt
+            // mirror. Keep this warm-up source identical to the video page so
+            // a first login downloads the actual video inspiration cards and
+            // every later resume can use the same manifest/ETag delta.
+            "canvas",
+          ),
+        ),
+      ).catch(() => undefined);
+    };
+    sync();
+    window.addEventListener("jisudeng-native-resume", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("jisudeng-native-resume", sync);
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [
+    backendBaseUrl,
+    installedRelease,
+    managed.accessToken,
+    managed.session?.user_id,
+    managed.user?.id,
+    text,
+  ]);
+
   useEffect(() => {
     const userId = managed.user?.id || managed.session?.user_id;
     void configureNativeCrashlyticsUser(userId).catch(() => undefined);
@@ -24205,73 +26382,6 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   }, [managed._hasHydrated, managed.backendBaseUrl, backendBaseUrl]);
 
   useEffect(() => {
-    if (!managed._hasHydrated || !backendBaseUrl || !installedRelease.name)
-      return;
-    const appVersion = installedRelease.name;
-    const reportOpen = () => {
-      void reportMobileAttributionEvent({
-        baseUrl: backendBaseUrl,
-        eventType: "open",
-        appVersion,
-        locale: text.dateLocale,
-        metadata: { surface: "android_app" },
-      });
-    };
-    reportOpen();
-    const onResume = () => {
-      if (document.visibilityState === "visible") reportOpen();
-    };
-    document.addEventListener("visibilitychange", onResume);
-    window.addEventListener("jisudeng-native-resume", reportOpen);
-    return () => {
-      document.removeEventListener("visibilitychange", onResume);
-      window.removeEventListener("jisudeng-native-resume", reportOpen);
-    };
-  }, [
-    managed._hasHydrated,
-    backendBaseUrl,
-    installedRelease.name,
-    text.dateLocale,
-  ]);
-
-  useEffect(() => {
-    if (
-      !managed.accessToken ||
-      !managed.backendBaseUrl ||
-      !installedRelease.name
-    )
-      return;
-    const appVersion = installedRelease.name;
-    const userScope = managed.user?.id || managed.session?.user_id;
-    if (!userScope) return;
-    void reportMobileAttributionEvent({
-      baseUrl: managed.backendBaseUrl,
-      eventType: "login",
-      appVersion,
-      locale: text.dateLocale,
-      accessToken: managed.accessToken,
-      userScope,
-      metadata: { surface: "android_app", event_name: "login" },
-    });
-    void reportMobileAttributionEvent({
-      baseUrl: managed.backendBaseUrl,
-      eventType: "active",
-      appVersion,
-      locale: text.dateLocale,
-      accessToken: managed.accessToken,
-      userScope,
-      metadata: { surface: "android_app", event_name: "active" },
-    });
-  }, [
-    installedRelease.name,
-    managed.accessToken,
-    managed.backendBaseUrl,
-    managed.session?.user_id,
-    managed.user?.id,
-    text.dateLocale,
-  ]);
-
-  useEffect(() => {
     if (
       managed._hasHydrated &&
       backendBaseUrl &&
@@ -24489,7 +26599,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   if (location.pathname === Path.Sd || location.pathname === Path.SdNew) {
     return (
       <>
-        <AndroidImageStudio />
+        <AndroidCreationStudio />
         <AndroidGlobalUpdatePrompt />
       </>
     );

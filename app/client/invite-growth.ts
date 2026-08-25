@@ -1,4 +1,3 @@
-import QRCode from "qrcode";
 import { managedJsonRequest } from "./managed-nextchat";
 
 export const INVITE_REFERRAL_STORAGE_KEY = "jisudeng-invite-referral-v1";
@@ -420,6 +419,7 @@ export async function createInvitePosterDataUrl(
   if (typeof document === "undefined") {
     throw new Error("invite poster requires a browser");
   }
+  const { default: QRCode } = await import("qrcode");
   const payload = buildInvitePosterPayload(input);
   const [registerQr, appQr] = await Promise.all([
     QRCode.toDataURL(payload.registerQrValue, { width: 360, margin: 2 }),

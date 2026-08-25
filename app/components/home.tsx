@@ -30,7 +30,6 @@ import { type ClientApi, getClientApi } from "../client/api";
 import { useAccessStore } from "../store";
 import clsx from "clsx";
 import { initializeMcpSystem, isMcpEnabled } from "@/app/mcp/actions";
-import { AndroidManagedGate } from "./mobile-app";
 import { withBasePath } from "../utils/api-path";
 
 export function Loading(props: { noLogo?: boolean }) {
@@ -41,6 +40,13 @@ export function Loading(props: { noLogo?: boolean }) {
     </div>
   );
 }
+
+const AndroidManagedGate = dynamic(
+  async () => (await import("./mobile-app")).AndroidManagedGate,
+  {
+    loading: () => <Loading noLogo />,
+  },
+);
 
 const Artifacts = dynamic(async () => (await import("./artifacts")).Artifacts, {
   loading: () => <Loading noLogo />,

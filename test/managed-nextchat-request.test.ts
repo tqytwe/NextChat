@@ -68,6 +68,7 @@ describe("managed NextChat API requests", () => {
       "https://api.jisudeng.com/api/v1/nextchat/mobile/bootstrap",
       expect.objectContaining({
         headers: expect.any(Headers),
+        cache: "no-store",
       }),
     );
     expect(CapacitorHttp.request).not.toHaveBeenCalled();

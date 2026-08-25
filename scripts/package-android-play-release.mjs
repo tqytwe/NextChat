@@ -18,6 +18,15 @@ function gitOutput(args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf-8" }).trim();
 }
 
+function gitSourceIsDirty() {
+  return Boolean(
+    execFileSync("git", ["status", "--porcelain=v1"], {
+      cwd: root,
+      encoding: "utf-8",
+    }).trim(),
+  );
+}
+
 function verifyAabSigningCertificate(aabPath) {
   const jarsigner = String(process.env.JARSIGNER_PATH || "jarsigner").trim();
   const keytool = String(process.env.KEYTOOL_PATH || "keytool").trim();
@@ -72,7 +81,7 @@ function parseNotes(raw) {
 function parseLocalizedNotes() {
   return Object.fromEntries(
     [
-      ["zh-CN", process.env.ANDROID_RELEASE_NOTES_ZH],
+      ["zh", process.env.ANDROID_RELEASE_NOTES_ZH],
       ["en", process.env.ANDROID_RELEASE_NOTES_EN],
       ["ja", process.env.ANDROID_RELEASE_NOTES_JA],
       ["ko", process.env.ANDROID_RELEASE_NOTES_KO],
@@ -80,6 +89,33 @@ function parseLocalizedNotes() {
       .map(([locale, raw]) => [locale, parseNotes(raw)])
       .filter(([, notes]) => notes.length),
   );
+}
+
+const defaultLocalizedNotes = {
+  zh: ["平台账号登录", "余额、分组和模型自动同步", "生图结果保存在 APP 本机"],
+  en: ["Account login", "Balance, groups, and models sync automatically", "Image results stay on this device"],
+  ja: ["アカウントログイン", "残高・グループ・モデルを自動同期", "画像結果は端末に保存"],
+  ko: ["계정 로그인", "잔액·그룹·모델 자동 동기화", "이미지 결과는 기기에 저장"],
+};
+
+function notesByLocaleForClient(notes) {
+  return {
+    "zh-CN": notes.zh,
+    en: notes.en,
+    ja: notes.ja,
+    ko: notes.ko,
+  };
+}
+
+function requireLocalizedNotes(notes) {
+  const missing = ["zh", "en", "ja", "ko"].filter(
+    (locale) => !notes[locale]?.length,
+  );
+  if (missing.length) {
+    throw new Error(
+      `Play release requires localized notes for: ${missing.join(", ")}`,
+    );
+  }
 }
 
 function resolveBuildOutput(configured, candidates) {
@@ -128,8 +164,10 @@ if (!existsSync(aabSource)) {
 }
 
 const sourceCommit = gitOutput(["rev-parse", "HEAD"]);
+const sourceDirty = gitSourceIsDirty();
 const signingCertificateSha256 = verifyAabSigningCertificate(aabSource);
-const localizedNotes = parseLocalizedNotes();
+const localizedNotes = { ...defaultLocalizedNotes, ...parseLocalizedNotes() };
+requireLocalizedNotes(localizedNotes);
 
 const outputDir = path.join(root, "dist/android/play");
 mkdirSync(outputDir, { recursive: true });
@@ -154,13 +192,13 @@ const manifest = {
   signingCertificateSha256,
   sourceCommit,
   builtFromCommit: sourceCommit,
+  sourceDirty,
   notes: parseNotes(
     process.env.ANDROID_RELEASE_NOTES ||
       process.env.NEXT_PUBLIC_ANDROID_RELEASE_NOTES,
   ),
-  ...(Object.keys(localizedNotes).length
-    ? { notesByLocale: localizedNotes }
-    : {}),
+  notes_i18n: localizedNotes,
+  notesByLocale: notesByLocaleForClient(localizedNotes),
   builtAt: new Date().toISOString(),
 };
 

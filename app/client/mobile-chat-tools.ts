@@ -158,6 +158,20 @@ export function createMobileCompletionStreamAccumulator(
 
 function localizedToolError(locale: string, message: string) {
   const language = locale.toLowerCase();
+  const normalized = message.toLowerCase();
+  const isToolLimit = normalized.includes("tool call limit reached");
+  if (isToolLimit) {
+    if (language.startsWith("zh")) {
+      return "联网搜索暂时不可用，请稍后重试。";
+    }
+    if (language.startsWith("ja") || language.startsWith("jp")) {
+      return "ウェブ検索は一時的に利用できません。しばらくしてから再試行してください。";
+    }
+    if (language.startsWith("ko")) {
+      return "웹 검색을 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+    }
+    return "Web search is temporarily unavailable. Please try again later.";
+  }
   if (language.startsWith("zh")) return `联网搜索未完成：${message}`;
   if (language.startsWith("ja") || language.startsWith("jp")) {
     return `ウェブ検索を完了できませんでした: ${message}`;

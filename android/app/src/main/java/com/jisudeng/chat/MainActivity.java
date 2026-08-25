@@ -1304,6 +1304,9 @@ public class MainActivity extends Activity {
                         options.optString("text", "")
                     );
                     break;
+                case "copyText":
+                    copyText(requestId, options.optString("text", ""));
+                    break;
                 case "showNotification":
                     showNotification(
                         requestId,
@@ -1316,7 +1319,8 @@ public class MainActivity extends Activity {
                         requestId,
                         options.optString("url"),
                         options.optString("fileName", "jisudengchat-download"),
-                        options.optString("title", "JisudengChat")
+                        options.optString("title", "JisudengChat"),
+                        options.optString("authorization")
                     );
                     break;
                 case "getDownloadStatus":
@@ -2827,6 +2831,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void copyText(String requestId, String text) {
+        try {
+            android.content.ClipboardManager clipboard =
+                (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) throw new IllegalStateException("clipboard unavailable");
+            clipboard.setPrimaryClip(ClipData.newPlainText("JisudengChat", text));
+            resolve(requestId, new JSONObject());
+        } catch (Exception error) {
+            reject(requestId, error.getMessage());
+        }
+    }
+
     private void showNotification(String requestId, String title, String body) {
         try {
             if (Build.VERSION.SDK_INT >= 33 &&
@@ -2859,9 +2875,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void downloadFile(String requestId, String url, String fileName, String title) {
+    private void downloadFile(String requestId, String url, String fileName, String title, String rawAuthorization) {
         try {
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            String authorization = safeDownloadAuthorization(rawAuthorization);
+            if (!authorization.isEmpty()) {
+                request.addRequestHeader("Authorization", authorization);
+            }
             request.setTitle(title);
             request.setDescription(fileName);
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
@@ -2878,6 +2898,15 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             reject(requestId, error.getMessage());
         }
+    }
+
+    private String safeDownloadAuthorization(String rawAuthorization) {
+        String authorization = rawAuthorization == null ? "" : rawAuthorization.trim();
+        if (!authorization.startsWith("Bearer ") || authorization.length() > 8192 ||
+            authorization.contains("\r") || authorization.contains("\n")) {
+            return "";
+        }
+        return authorization;
     }
 
     private void getDownloadStatus(String requestId, String rawId) {
