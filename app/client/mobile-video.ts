@@ -1,4 +1,5 @@
 import type {
+  ManagedModelModality,
   ManagedSession,
   ManagedWorkspaceBootstrap,
   ManagedWorkspaceGroup,
@@ -7,7 +8,11 @@ import type {
 } from "./managed-nextchat";
 import { resolveMobileChatPreference } from "./mobile-chat-preference";
 import type { MobileChatPreference } from "./mobile-chat-preference";
-import { isChatModel } from "./mobile-model-kind";
+import {
+  isChatModel,
+  isVideoModel,
+  modelHasDeclaredModality,
+} from "./mobile-model-kind";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -17,6 +22,48 @@ type JsonRecord = Record<string, unknown>;
 // the app is closed or the request is cancelled locally.
 export const MOBILE_VIDEO_POLL_INTERVAL_MS = 5_000;
 export const MOBILE_VIDEO_POLL_TIMEOUT_MS = 20 * 60 * 1_000;
+
+export type MobileVideoServerCapabilities = NonNullable<
+  ManagedWorkspaceModel["video_capabilities"]
+>;
+
+export type MobileVideoServerModel =
+  | string
+  | {
+      id?: string;
+      name?: string;
+      display_name?: string;
+      platform?: string;
+      modalities?: ManagedModelModality[];
+      video_capabilities?: MobileVideoServerCapabilities;
+      /** Compatibility shape used by the original mobile endpoint. */
+      capabilities?: MobileVideoServerCapabilities;
+    };
+
+export type MobileVideoServerGroup = {
+  id: number;
+  name: string;
+  platform?: string;
+  modalities?: ManagedModelModality[];
+  video_available?: boolean;
+  video_unavailable_code?: string;
+  models?: MobileVideoServerModel[];
+  /** Compatibility group field used before video_capabilities was named. */
+  capabilities?: MobileVideoServerCapabilities;
+  video_capabilities?: MobileVideoServerCapabilities;
+  model_capabilities?: Record<string, MobileVideoServerCapabilities>;
+};
+
+export type MobileVideoServerBootstrap = {
+  groups?: MobileVideoServerGroup[];
+};
+
+export type ManagedVideoGroupSource = "server" | "workspace" | "unavailable";
+
+export type ResolvedManagedVideoGroups = {
+  source: ManagedVideoGroupSource;
+  groups: ManagedWorkspaceGroup[];
+};
 
 function record(value: unknown): JsonRecord | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -49,19 +96,156 @@ export function managedVideoWorkspaceModels(
   return workspace?.workspaces?.video?.models;
 }
 
+function groupHasDeclaredVideoModality(group: ManagedWorkspaceGroup) {
+  return modelHasDeclaredModality(group, "video") === true;
+}
+
+function isManagedVideoGroup(group: ManagedWorkspaceGroup) {
+  if (group.video_available === false) return false;
+  return Boolean(
+    group.video_available ||
+      groupHasDeclaredVideoModality(group) ||
+      group.video_capabilities ||
+      (group.models || []).some(
+        (model) =>
+          modelHasDeclaredModality(model, "video") === true ||
+          Boolean(model.video_capabilities) ||
+          isVideoModel(model),
+      ),
+  );
+}
+
 /** Return only groups explicitly or structurally declared as video-capable. */
+export function filterManagedVideoGroups(
+  groups?: ManagedWorkspaceGroup[],
+): ManagedWorkspaceGroup[] {
+  return (groups || []).filter(isManagedVideoGroup);
+}
+
 export function managedVideoGroups(
   workspace?: ManagedWorkspaceBootstrap | null,
 ): ManagedWorkspaceGroup[] {
-  const groups = managedVideoWorkspaceModels(workspace)?.groups || [];
-  return groups.filter((group) => {
-    if (group.video_available === false) return false;
+  const groups = managedVideoWorkspaceModels(workspace)?.groups;
+  return filterManagedVideoGroups(groups);
+}
+
+/**
+ * A model belongs to the video workbench when the platform explicitly says so.
+ * Older bootstraps that lack per-model modalities can still use the already
+ * declared video workspace/group capability, but a contradictory declaration
+ * always wins and is filtered out.
+ */
+export function managedVideoModels(
+  group?: ManagedWorkspaceGroup,
+): ManagedWorkspaceModel[] {
+  if (!group || group.video_available === false) return [];
+  return (group.models || []).filter((model) => {
+    if (!managedVideoCapabilities(model, group)) return false;
+    const declared = modelHasDeclaredModality(model, "video");
+    if (declared !== undefined) return declared;
     return Boolean(
       group.video_available ||
+        groupHasDeclaredVideoModality(group) ||
         group.video_capabilities ||
-        (group.models || []).some((model) => model.video_capabilities),
+        isVideoModel(model),
     );
   });
+}
+
+function normalizeServerModalities(
+  modalities?: ManagedModelModality[],
+): ManagedModelModality[] | undefined {
+  if (!Array.isArray(modalities)) return undefined;
+  return modalities.filter((modality): modality is ManagedModelModality =>
+    ["chat", "image", "video", "audio"].includes(modality),
+  );
+}
+
+function normalizeServerVideoModel(
+  model: MobileVideoServerModel,
+  group: MobileVideoServerGroup,
+): ManagedWorkspaceModel | undefined {
+  if (typeof model === "string") {
+    const name = model.trim();
+    if (!name) return undefined;
+    return {
+      id: name,
+      name,
+      platform: group.platform,
+      video_capabilities:
+        group.model_capabilities?.[name] ||
+        group.video_capabilities ||
+        group.capabilities,
+    };
+  }
+
+  const id = String(model.id || model.name || "").trim();
+  if (!id) return undefined;
+  const name = String(model.name || id).trim();
+  return {
+    id,
+    name,
+    display_name: model.display_name,
+    platform: model.platform || group.platform,
+    modalities: normalizeServerModalities(model.modalities),
+    video_capabilities:
+      model.video_capabilities ||
+      model.capabilities ||
+      group.model_capabilities?.[name] ||
+      group.model_capabilities?.[id] ||
+      group.video_capabilities ||
+      group.capabilities,
+  };
+}
+
+/** Convert both the old string-list and new typed video bootstrap payloads. */
+export function normalizeMobileVideoBootstrapGroups(
+  groups?: MobileVideoServerGroup[],
+): ManagedWorkspaceGroup[] {
+  return (groups || []).flatMap((group) => {
+    const id = Number(group.id);
+    if (!Number.isFinite(id)) return [];
+    const sourceModels = group.models?.length
+      ? group.models
+      : Object.keys(group.model_capabilities || {});
+    return [
+      {
+        id,
+        name: String(group.name || group.id),
+        platform: group.platform,
+        modalities: normalizeServerModalities(group.modalities),
+        video_available: group.video_available,
+        video_unavailable_code: group.video_unavailable_code,
+        video_capabilities: group.video_capabilities || group.capabilities,
+        models: sourceModels.flatMap((model) => {
+          const normalized = normalizeServerVideoModel(model, group);
+          return normalized ? [normalized] : [];
+        }),
+      },
+    ];
+  });
+}
+
+/**
+ * Server video bootstrap is authoritative when it succeeds, including an
+ * intentionally empty group list. If that endpoint is unavailable, reuse only
+ * the separately declared video workspace and never the chat workspace.
+ */
+export function resolveManagedVideoGroups(input: {
+  serverBootstrapLoaded: boolean;
+  serverGroups?: ManagedWorkspaceGroup[];
+  workspace?: ManagedWorkspaceBootstrap | null;
+}): ResolvedManagedVideoGroups {
+  if (input.serverBootstrapLoaded) {
+    return {
+      source: "server",
+      groups: filterManagedVideoGroups(input.serverGroups),
+    };
+  }
+  const workspaceGroups = managedVideoGroups(input.workspace);
+  return workspaceGroups.length
+    ? { source: "workspace", groups: workspaceGroups }
+    : { source: "unavailable", groups: [] };
 }
 
 export function managedVideoCapabilities(

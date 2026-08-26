@@ -99,10 +99,14 @@ import type {
 import {
   buildMobileVideoScriptPrompt,
   managedVideoCapabilities,
+  managedVideoModels,
   MOBILE_VIDEO_POLL_INTERVAL_MS,
   MOBILE_VIDEO_POLL_TIMEOUT_MS,
+  normalizeMobileVideoBootstrapGroups,
   resolveMobileVideoScriptSelection,
+  resolveManagedVideoGroups,
 } from "../client/mobile-video";
+import type { MobileVideoServerBootstrap } from "../client/mobile-video";
 import {
   formatManagedMobileError,
   getManagedMobileLocale,
@@ -3262,8 +3266,52 @@ function firstReferenceImageModel(
   );
 }
 
-function imageSizeOptionsForModel(model: string) {
-  const normalized = model.toLowerCase();
+function greatestCommonDivisor(left: number, right: number): number {
+  let dividend = Math.abs(left);
+  let divisor = Math.abs(right);
+  while (divisor) {
+    const remainder = dividend % divisor;
+    dividend = divisor;
+    divisor = remainder;
+  }
+  return dividend || 1;
+}
+
+function imageSizeOption(size: string) {
+  const known = IMAGE_SIZE_OPTIONS.find((item) => item.id === size);
+  if (known) return known;
+  const match = /^(\d{2,5})x(\d{2,5})$/i.exec(size);
+  if (!match) return { id: size, tier: "", aspect: "" };
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const divisor = greatestCommonDivisor(width, height);
+  const longestEdge = Math.max(width, height);
+  const tier =
+    longestEdge >= 1024
+      ? `${Math.round((longestEdge / 1024) * 10) / 10}K`
+      : `${longestEdge}px`;
+  return {
+    id: size,
+    tier,
+    aspect: `${width / divisor}:${height / divisor}`,
+  };
+}
+
+function imageSizeOptionsForModel(model?: ManagedWorkspaceModel | string) {
+  const capabilities =
+    typeof model === "string" ? undefined : model?.image_capabilities;
+  const declaredSizes = Array.from(
+    new Set(
+      (capabilities?.supported_sizes || [])
+        .map((size) => String(size).trim())
+        .filter(Boolean),
+    ),
+  );
+  if (declaredSizes.length) return declaredSizes.map(imageSizeOption);
+
+  const normalized = String(
+    typeof model === "string" ? model : modelValue(model),
+  ).toLowerCase();
   if (/dall-e-3/.test(normalized)) {
     return IMAGE_SIZE_OPTIONS.filter((item) =>
       ["1024x1024", "1024x1792", "1792x1024"].includes(item.id),
@@ -13876,6 +13924,14 @@ function videoStudioCopy() {
       noGroup: "当前账号没有可用的视频分组",
       noModel: "当前视频分组没有已授权的视频模型",
       groupHint: "请让管理员为该分组配置视频模型和视频价格后再生成。",
+      loadingCapabilities: "正在获取服务端视频能力",
+      compatibilityTitle: "正在使用已同步的视频能力",
+      compatibilityHint:
+        "服务端视频能力接口暂不可用，将使用本次登录已声明的视频工作区。刷新后会重新检查。",
+      capabilitiesUnavailable: "暂时无法获取视频能力",
+      capabilitiesUnavailableHint:
+        "当前设备没有收到可用的视频工作区。请刷新重试；若持续失败，请检查服务端视频能力接口。",
+      retryCapabilities: "重新获取",
       resolution: "分辨率",
       ratio: "画面比例",
       duration: "时长",
@@ -13924,6 +13980,14 @@ function videoStudioCopy() {
       noModel: "No authorized video model is available in this group",
       groupHint:
         "Ask an administrator to configure a video model and video pricing.",
+      loadingCapabilities: "Loading server video capabilities",
+      compatibilityTitle: "Using synchronized video capabilities",
+      compatibilityHint:
+        "The server video-capabilities endpoint is unavailable, so this session is using its declared video workspace. Refresh to check again.",
+      capabilitiesUnavailable: "Video capabilities are temporarily unavailable",
+      capabilitiesUnavailableHint:
+        "This device did not receive an available video workspace. Refresh to retry; if it continues, check the server video-capabilities endpoint.",
+      retryCapabilities: "Try again",
       resolution: "Resolution",
       ratio: "Aspect ratio",
       duration: "Duration",
@@ -13971,6 +14035,14 @@ function videoStudioCopy() {
       noGroup: "このアカウントで利用できる動画グループがありません",
       noModel: "このグループに承認済みの動画モデルがありません",
       groupHint: "管理者に動画モデルと料金の設定を依頼してください。",
+      loadingCapabilities: "サーバーの動画機能を取得中",
+      compatibilityTitle: "同期済みの動画機能を使用中",
+      compatibilityHint:
+        "サーバーの動画機能エンドポイントを利用できないため、このログインで宣言済みの動画ワークスペースを使用しています。更新して再確認できます。",
+      capabilitiesUnavailable: "動画機能を一時的に取得できません",
+      capabilitiesUnavailableHint:
+        "この端末は利用可能な動画ワークスペースを受信していません。更新して再試行し、継続する場合はサーバーの動画機能エンドポイントを確認してください。",
+      retryCapabilities: "再取得",
       resolution: "解像度",
       ratio: "縦横比",
       duration: "長さ",
@@ -14018,6 +14090,14 @@ function videoStudioCopy() {
       noGroup: "이 계정에서 사용할 수 있는 동영상 그룹이 없습니다",
       noModel: "이 그룹에 승인된 동영상 모델이 없습니다",
       groupHint: "관리자에게 동영상 모델과 요금 설정을 요청하세요.",
+      loadingCapabilities: "서버 동영상 기능을 불러오는 중",
+      compatibilityTitle: "동기화된 동영상 기능 사용 중",
+      compatibilityHint:
+        "서버 동영상 기능 엔드포인트를 사용할 수 없어 이번 로그인에서 선언된 동영상 작업 영역을 사용합니다. 새로고침하여 다시 확인할 수 있습니다.",
+      capabilitiesUnavailable: "동영상 기능을 일시적으로 가져올 수 없습니다",
+      capabilitiesUnavailableHint:
+        "이 기기에서 사용 가능한 동영상 작업 영역을 받지 못했습니다. 새로고침하여 재시도하고 계속되면 서버 동영상 기능 엔드포인트를 확인하세요.",
+      retryCapabilities: "다시 가져오기",
       resolution: "해상도",
       ratio: "화면 비율",
       duration: "길이",
@@ -14117,33 +14197,6 @@ function AndroidCreationStudio() {
   );
 }
 
-type MobileVideoServerCapabilities = {
-  operations?: string[];
-  supported_resolutions?: string[];
-  supported_ratios?: string[];
-  supported_durations?: number[];
-  max_reference_images?: number;
-  max_reference_videos?: number;
-  max_reference_audios?: number;
-  generate_audio?: boolean;
-  watermark?: boolean;
-};
-
-type MobileVideoServerGroup = {
-  id: number;
-  name: string;
-  platform?: string;
-  video_available?: boolean;
-  video_unavailable_code?: string;
-  models?: string[];
-  capabilities?: MobileVideoServerCapabilities;
-  model_capabilities?: Record<string, MobileVideoServerCapabilities>;
-};
-
-type MobileVideoServerBootstrap = {
-  groups?: MobileVideoServerGroup[];
-};
-
 type MobileVideoPrompt = {
   id: number | string;
   title: string;
@@ -14202,26 +14255,6 @@ function localPromptCatalogItemToVideoPrompt(
   };
 }
 
-function mobileVideoServerGroupsToWorkspace(
-  groups: MobileVideoServerGroup[],
-): ManagedWorkspaceGroup[] {
-  return groups.map((group) => ({
-    id: Number(group.id),
-    name: String(group.name || group.id),
-    platform: group.platform,
-    video_available: group.video_available,
-    video_unavailable_code: group.video_unavailable_code,
-    video_capabilities: group.capabilities,
-    models: (group.models || []).map((name) => ({
-      id: name,
-      name,
-      platform: group.platform,
-      video_capabilities:
-        group.model_capabilities?.[name] || group.capabilities,
-    })),
-  }));
-}
-
 function AndroidVideoStudio() {
   const managed = useManagedNextChatStore();
   const mobileStore = useManagedMobileAppStore();
@@ -14252,9 +14285,7 @@ function AndroidVideoStudio() {
         await managedAuthenticatedJsonRequest<MobileVideoServerBootstrap>(
           "/api/v1/mobile/video/bootstrap",
         );
-      setServerGroups(
-        mobileVideoServerGroupsToWorkspace(payload?.groups || []),
-      );
+      setServerGroups(normalizeMobileVideoBootstrapGroups(payload?.groups));
       setServerBootstrapLoaded(true);
     } catch {
       // Keep the managed bootstrap as a short-lived compatibility fallback;
@@ -14268,17 +14299,22 @@ function AndroidVideoStudio() {
   useEffect(() => {
     void loadServerCapabilities();
   }, [loadServerCapabilities]);
-  const groups = useMemo(
-    () => (serverBootstrapLoaded ? serverGroups : []),
-    [serverBootstrapLoaded, serverGroups],
+  const resolvedVideoGroups = useMemo(
+    () =>
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded,
+        serverGroups,
+        workspace: managed.workspace,
+      }),
+    [managed.workspace, serverBootstrapLoaded, serverGroups],
   );
+  const groups = resolvedVideoGroups.groups;
+  const videoGroupSource = resolvedVideoGroups.source;
   const preferredGroup = groups.find(
     (group) => group.id === Number(preferences.groupId),
   );
   const selectedGroup = preferredGroup || groups[0];
-  const videoModels = (selectedGroup?.models || []).filter((model) =>
-    managedVideoCapabilities(model, selectedGroup),
-  );
+  const videoModels = managedVideoModels(selectedGroup);
   const fallbackModel = videoModels[0];
   const selectedModel =
     videoModels.find((model) => modelValue(model) === preferences.model) ||
@@ -14955,15 +14991,27 @@ function AndroidVideoStudio() {
 
   async function runVideo() {
     if (!selectedGroup || !selectedModel || !capabilities) {
-      setError(groups.length ? copy.noModel : copy.noGroup);
+      setError(
+        videoGroupSource === "unavailable"
+          ? serverBootstrapLoading
+            ? copy.loadingCapabilities
+            : copy.capabilitiesUnavailable
+          : groups.length
+          ? copy.noModel
+          : copy.noGroup,
+      );
       return;
     }
     if (!prompt.trim()) {
       setError(copy.placeholder);
       return;
     }
-    if (!managed.accessToken || !serverBootstrapLoaded) {
-      setError(copy.noGroup);
+    if (!managed.accessToken || videoGroupSource === "unavailable") {
+      setError(
+        serverBootstrapLoading
+          ? copy.loadingCapabilities
+          : copy.capabilitiesUnavailable,
+      );
       return;
     }
     const controller = new AbortController();
@@ -15173,7 +15221,35 @@ function AndroidVideoStudio() {
         </IconButton>
       </header>
       <section className={styles["image-panel"]}>
-        {noCapability && (
+        {videoGroupSource === "workspace" && (
+          <div className={styles["image-routing-hint"]}>
+            <div>
+              <strong>{copy.compatibilityTitle}</strong>
+              <span>{copy.compatibilityHint}</span>
+            </div>
+          </div>
+        )}
+        {videoGroupSource === "unavailable" && (
+          <div className={styles["image-routing-hint"]}>
+            <div>
+              <strong>
+                {serverBootstrapLoading
+                  ? copy.loadingCapabilities
+                  : copy.capabilitiesUnavailable}
+              </strong>
+              <span>{copy.capabilitiesUnavailableHint}</span>
+            </div>
+            {!serverBootstrapLoading && (
+              <button
+                type="button"
+                onClick={() => void loadServerCapabilities()}
+              >
+                {copy.retryCapabilities}
+              </button>
+            )}
+          </div>
+        )}
+        {noCapability && videoGroupSource !== "unavailable" && (
           <div className={styles["image-routing-hint"]}>
             <div>
               <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
@@ -15620,6 +15696,9 @@ function AndroidImageStudio() {
   const [selectedModel, setSelectedModel] = useState(
     String(imagePrefs.model || modelValue(fallbackModel)),
   );
+  const selectedImageModelInfo =
+    imageModelOptions.find((model) => modelValue(model) === selectedModel) ||
+    fallbackModel;
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState(String(imagePrefs.size || "1024x1024"));
   const [quality, setQuality] = useState(String(imagePrefs.quality || "auto"));
@@ -15705,8 +15784,8 @@ function AndroidImageStudio() {
   }, [location.state, navigate]);
 
   const sizeOptions = useMemo(
-    () => imageSizeOptionsForModel(selectedModel || modelValue(fallbackModel)),
-    [fallbackModel, selectedModel],
+    () => imageSizeOptionsForModel(selectedImageModelInfo || selectedModel),
+    [selectedImageModelInfo, selectedModel],
   );
   const qualityOptions = useMemo(
     () =>
@@ -16567,7 +16646,7 @@ function AndroidImageStudio() {
 
   function adaptPromptTemplate(template: ImagePromptTemplate) {
     const sizeOptionsForCurrentModel = imageSizeOptionsForModel(
-      selectedModel || modelValue(fallbackModel),
+      selectedImageModelInfo || selectedModel,
     );
     const preferredSize =
       template.params.size &&
@@ -16630,9 +16709,6 @@ function AndroidImageStudio() {
     await shareImages(images, shareTextValue);
   }
 
-  const selectedImageModelInfo = imageModelOptions.find(
-    (model) => modelValue(model) === selectedModel,
-  );
   const currentGroupValue = String(effectiveImageGroupId || "");
   const selectedSizeOption = sizeOptions.find((item) => item.id === size);
   const styleOptions = [

@@ -129,6 +129,13 @@ export interface ManagedWorkspaceAPIKey {
   group_platform?: string;
 }
 
+/**
+ * Server-owned media classifications. A workspace model can intentionally
+ * belong to more than one modality (for example, chat plus image input), so
+ * callers must not infer an exclusive mode from its name.
+ */
+export type ManagedModelModality = "chat" | "image" | "video" | "audio";
+
 export interface ManagedWorkspaceModel {
   id: string;
   name: string;
@@ -136,6 +143,8 @@ export interface ManagedWorkspaceModel {
   platform?: string;
   channel?: string;
   use_case?: string;
+  /** Authoritative model modality contract supplied by the platform. */
+  modalities?: ManagedModelModality[];
   sort_order?: number;
   effective_input_price?: number;
   effective_output_price?: number;
@@ -191,6 +200,8 @@ export interface ManagedWorkspaceGroup {
   };
   description?: string;
   platform?: string;
+  /** Optional group-level capability summary for an empty or legacy model list. */
+  modalities?: ManagedModelModality[];
   rate_multiplier?: number;
   sort_order?: number;
   is_current?: boolean;

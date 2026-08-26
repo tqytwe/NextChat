@@ -23,8 +23,8 @@ describe("mobile chat UI state and layout contract", () => {
 
   test("deduplicates session errors when the message already owns the same error", () => {
     expect(app).toContain("const messageError =");
-    expect(app).toContain(
-      "const showChatErrorBar = Boolean(sessionError && sessionError !== messageError)",
+    expect(app).toMatch(
+      /const showChatErrorBar = Boolean\(\s*sessionError && sessionError !== messageError,?\s*\)/,
     );
     expect(app).toContain('role="alert"');
   });

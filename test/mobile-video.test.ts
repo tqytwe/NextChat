@@ -6,13 +6,16 @@ import {
   buildMobileVideoScriptPrompt,
   managedVideoCapabilities,
   managedVideoGroups,
+  managedVideoModels,
   managedVideoWorkspaceModels,
   MOBILE_VIDEO_POLL_INTERVAL_MS,
   MOBILE_VIDEO_POLL_TIMEOUT_MS,
+  normalizeMobileVideoBootstrapGroups,
   parseMobileVideoID,
   parseMobileVideoStatus,
   parseMobileVideoURL,
   resolveMobileVideoScriptSelection,
+  resolveManagedVideoGroups,
   selectManagedVideoSession,
 } from "../app/client/mobile-video";
 
@@ -55,9 +58,9 @@ describe("mobile video capability and response contract", () => {
       resolve(process.cwd(), "app/components/mobile-app.tsx"),
       "utf8",
     );
-    expect(app).toContain('syncLocalPromptCatalog(');
-    expect(app).toContain('readLocalPromptCatalog(');
-    expect(app).toContain('createLocalPromptCoverObjectURL(');
+    expect(app).toContain("syncLocalPromptCatalog(");
+    expect(app).toContain("readLocalPromptCatalog(");
+    expect(app).toContain("createLocalPromptCoverObjectURL(");
     expect(app).not.toContain("jisudeng-video-prompts:");
   });
 
@@ -76,10 +79,16 @@ describe("mobile video capability and response contract", () => {
       resolve(process.cwd(), "app/components/mobile-app.tsx"),
       "utf8",
     );
-    expect(app).toContain("{item.coverUrl && <img src={item.coverUrl}");
-    expect(app).toContain("<small>{item.prompt_text || item.description}</small>");
+    expect(app).toMatch(
+      /\{item\.coverUrl && \(\s*<img\s+src=\{item\.coverUrl\}/,
+    );
+    expect(app).toContain(
+      "<small>{item.prompt_text || item.description}</small>",
+    );
     expect(app).toContain('"video",\n        "canvas",');
-    expect(app).toContain('syncLocalPromptCatalog(\n          activeAccountId,\n          locale,\n          "video",');
+    expect(app).toContain(
+      'syncLocalPromptCatalog(\n          activeAccountId,\n          locale,\n          "video",',
+    );
     expect(app).toContain('undefined,\n          "canvas",');
     expect(app).toContain("id: item.id");
     expect(app).not.toContain("id: Number(item.id)");
@@ -129,10 +138,12 @@ describe("mobile video capability and response contract", () => {
 
     expect(managedVideoWorkspaceModels(workspace)?.groups?.[0]?.id).toBe(2);
     expect(managedVideoGroups(workspace).map((group) => group.id)).toEqual([2]);
-    expect(managedVideoGroups({
-      ...workspace,
-      workspaces: undefined,
-    } as any)).toEqual([]);
+    expect(
+      managedVideoGroups({
+        ...workspace,
+        workspaces: undefined,
+      } as any),
+    ).toEqual([]);
   });
 
   test("uses model capabilities first and group capabilities as the declared fallback", () => {
@@ -147,22 +158,157 @@ describe("mobile video capability and response contract", () => {
     expect(managedVideoCapabilities(videoModel as any, group)).toBe(
       videoModel.video_capabilities,
     );
-    expect(managedVideoCapabilities({ id: "model-without-own-caps" } as any, group)).toEqual(
-      group.video_capabilities,
-    );
+    expect(
+      managedVideoCapabilities({ id: "model-without-own-caps" } as any, group),
+    ).toEqual(group.video_capabilities);
+  });
+
+  test("uses server-declared modalities for opaque video IDs", () => {
+    const group = {
+      id: 2,
+      name: "video",
+      video_available: true,
+      video_capabilities: { supported_durations: [10] },
+      models: [
+        {
+          id: "opaque-provider-id",
+          name: "opaque-provider-id",
+          modalities: ["video"],
+          video_capabilities: { supported_durations: [10] },
+        },
+        {
+          id: "misleading-video-name",
+          name: "misleading-video-name",
+          modalities: ["chat"],
+          video_capabilities: { supported_durations: [10] },
+        },
+      ],
+    } as any;
+
+    expect(managedVideoModels(group).map((model) => model.id)).toEqual([
+      "opaque-provider-id",
+    ]);
+  });
+
+  test("normalizes typed and legacy video bootstrap models without losing capabilities", () => {
+    const groups = normalizeMobileVideoBootstrapGroups([
+      {
+        id: 21,
+        name: "video视频",
+        video_available: true,
+        video_capabilities: { supported_durations: [5] },
+        models: [
+          {
+            id: "provider-video-1",
+            display_name: "Provider video 1",
+            modalities: ["video"],
+            video_capabilities: { supported_durations: [10] },
+          },
+          "legacy-video-2",
+        ],
+        model_capabilities: {
+          "legacy-video-2": { supported_durations: [8] },
+        },
+      },
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ id: 21, name: "video视频" });
+    expect(groups[0].models).toEqual([
+      expect.objectContaining({
+        id: "provider-video-1",
+        modalities: ["video"],
+        video_capabilities: { supported_durations: [10] },
+      }),
+      expect.objectContaining({
+        id: "legacy-video-2",
+        video_capabilities: { supported_durations: [8] },
+      }),
+    ]);
+  });
+
+  test("uses the video workspace only when video bootstrap is unavailable", () => {
+    const workspace = {
+      user: { id: 7, balance: 0 },
+      managed_api_key: { id: 1, name: "chat" },
+      models: {
+        groups: [
+          {
+            id: 1,
+            name: "chat",
+            models: [{ id: "chat-video-looking", modalities: ["chat"] }],
+          },
+        ],
+      },
+      workspaces: {
+        video: {
+          models: {
+            groups: [
+              {
+                id: 91,
+                name: "Grok Heavy",
+                video_available: true,
+                models: [
+                  {
+                    id: "opaque-video",
+                    modalities: ["video"],
+                    video_capabilities: { supported_durations: [8] },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    } as any;
+
+    expect(
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded: false,
+        workspace,
+      }),
+    ).toMatchObject({ source: "workspace", groups: [{ id: 91 }] });
+    expect(
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded: true,
+        serverGroups: [],
+        workspace,
+      }),
+    ).toEqual({ source: "server", groups: [] });
+    expect(
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded: false,
+        workspace: { ...workspace, workspaces: undefined },
+      }),
+    ).toEqual({ source: "unavailable", groups: [] });
   });
 
   test("does not reuse chat credentials when the video session is absent or mislabelled", () => {
-    const chat = { user_id: 7, api_key: "chat-key", api_key_id: 1, purpose: "chat" } as any;
+    const chat = {
+      user_id: 7,
+      api_key: "chat-key",
+      api_key_id: 1,
+      purpose: "chat",
+    } as any;
     expect(selectManagedVideoSession({ chat } as any)).toBeNull();
     expect(
       selectManagedVideoSession({
-        video: { user_id: 7, api_key: "chat-key", api_key_id: 1, purpose: "chat" },
+        video: {
+          user_id: 7,
+          api_key: "chat-key",
+          api_key_id: 1,
+          purpose: "chat",
+        },
       } as any),
     ).toBeNull();
     expect(
       selectManagedVideoSession({
-        video: { user_id: 7, api_key: "video-key", api_key_id: 2, purpose: "video" },
+        video: {
+          user_id: 7,
+          api_key: "video-key",
+          api_key_id: 2,
+          purpose: "video",
+        },
       } as any),
     ).toMatchObject({ api_key: "video-key", purpose: "video" });
   });
@@ -180,7 +326,9 @@ describe("mobile video capability and response contract", () => {
 
     expect(parseMobileVideoID(status)).toBe("video_123");
     expect(parseMobileVideoStatus(status)).toBe("completed");
-    expect(parseMobileVideoURL(status)).toBe("https://cdn.example/video_123.mp4");
+    expect(parseMobileVideoURL(status)).toBe(
+      "https://cdn.example/video_123.mp4",
+    );
   });
 
   test("accepts nested content URLs used by status/content responses", () => {
@@ -293,7 +441,10 @@ describe("mobile video capability and response contract", () => {
   });
 
   test("builds a model-agnostic script prompt and preserves the supplied brief", () => {
-    const prompt = buildMobileVideoScriptPrompt("A train crossing a rainy city", "zh-CN");
+    const prompt = buildMobileVideoScriptPrompt(
+      "A train crossing a rainy city",
+      "zh-CN",
+    );
     expect(prompt).toContain("A train crossing a rainy city");
     expect(prompt).toContain("unsupported model parameters");
     expect(prompt).toContain("Chinese");
