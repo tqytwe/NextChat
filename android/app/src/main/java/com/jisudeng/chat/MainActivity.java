@@ -13,6 +13,8 @@ import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -26,6 +28,8 @@ import android.net.Network;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.widget.Toast;
 import android.provider.OpenableColumns;
 import android.provider.MediaStore;
@@ -52,6 +56,24 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import androidx.core.content.FileProvider;
+import androidx.core.content.ContextCompat;
+import com.android.billingclient.api.AcknowledgePurchaseParams;
+import com.android.billingclient.api.BillingClient;
+import com.android.billingclient.api.BillingClientStateListener;
+import com.android.billingclient.api.BillingFlowParams;
+import com.android.billingclient.api.BillingResult;
+import com.android.billingclient.api.ConsumeParams;
+import com.android.billingclient.api.PendingPurchasesParams;
+import com.android.billingclient.api.ProductDetails;
+import com.android.billingclient.api.Purchase;
+import com.android.billingclient.api.QueryProductDetailsParams;
+import com.android.billingclient.api.QueryPurchasesParams;
+import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.Task;
+import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.firebase.crashlytics.FirebaseCrashlytics;
+import com.google.firebase.perf.FirebasePerformance;
+import com.google.firebase.perf.metrics.Trace;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -71,10 +93,12 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -91,6 +115,21 @@ public class MainActivity extends Activity {
     private static final int CAMERA_REQUEST = 6200;
     private static final int SPEECH_REQUEST = 6201;
     private static final String CHANNEL_ID = "jisudengchat_status";
+    public static final String PUSH_CHANNEL_ID = "jisudengchat_push";
+    public static final String PUSH_ACTION_OPEN = "com.jisudeng.chat.PUSH_OPEN";
+    public static final String FCM_TOKEN_REFRESH_ACTION = "com.jisudeng.chat.FCM_TOKEN_REFRESH";
+    public static final String PUSH_INBOX_CHANGED_ACTION = "com.jisudeng.chat.PUSH_INBOX_CHANGED";
+    public static final String PUSH_PREFERENCES = "jisudengchat_push";
+    public static final String PUSH_LAST_FCM_TOKEN = "last_fcm_token";
+    public static final String PUSH_INBOX_KEY = "notification_inbox_v1";
+    public static final String PUSH_EXTRA_EVENT_TYPE = "jisudeng_push_event_type";
+    public static final String PUSH_EXTRA_SOURCE_TYPE = "jisudeng_push_source_type";
+    public static final String PUSH_EXTRA_SOURCE_ID = "jisudeng_push_source_id";
+    public static final String PUSH_EXTRA_TICKET_ID = "jisudeng_push_ticket_id";
+    public static final String PUSH_EXTRA_MESSAGE_ID = "jisudeng_push_message_id";
+    public static final String PUSH_EXTRA_KIND = "jisudeng_push_kind";
+    public static final String PUSH_EXTRA_STATUS = "jisudeng_push_status";
+    private static final long PUSH_DUPLICATE_WINDOW_MS = 2_000L;
     private static final String LOCAL_ORIGIN = "https://localhost";
     private static final String APP_IMAGE_ROUTE = "/__jisudeng_app_images/";
     private static final String APP_IMAGE_FOLDER = "generated-images";
@@ -100,6 +139,7 @@ public class MainActivity extends Activity {
     private static final int MAX_SHARED_FILE_COUNT = 8;
     private static final int COPY_BUFFER_BYTES = 32 * 1024;
     private static final int STREAM_EVENT_CHUNK_CHARS = 32 * 1024;
+    private static final long FCM_TOKEN_TIMEOUT_MS = 20_000L;
     private static final String CREDENTIAL_KEY_ALIAS = "jisudengchat_login_credentials_v1";
     private static final String CREDENTIAL_PREFS = "jisudengchat_secure_credentials";
     private static final String CREDENTIAL_PAYLOAD = "encrypted_payload";
@@ -115,6 +155,8 @@ public class MainActivity extends Activity {
     private final Map<Integer, PendingPermission> pendingPermissions = new HashMap<>();
     private PermissionRequest pendingWebMicrophoneRequest;
     private int pendingWebMicrophoneRequestCode = -1;
+    private BillingClient billingClient;
+    private String pendingBillingPurchaseRequestId;
     private String pendingCameraRequestId;
     private Uri pendingCameraUri;
     private ContentValues pendingCameraValues;
@@ -144,11 +186,33 @@ public class MainActivity extends Activity {
     private JSONObject lastSharePayload;
     private boolean hasResumedOnce = false;
     private boolean initialIntentsDispatched = false;
+    private String lastPushIntentSignature = "";
+    private long lastPushIntentDispatchedAtMs = 0L;
+    private boolean fcmTokenRefreshReceiverRegistered = false;
+    private int crashlyticsConsoleLogCount = 0;
+    private Trace appColdStartTrace;
+    private Trace webViewFirstLoadTrace;
+    private final Map<String, Trace> activePerformanceTraces = new ConcurrentHashMap<>();
+    private final BroadcastReceiver fcmTokenRefreshReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null) return;
+            if (FCM_TOKEN_REFRESH_ACTION.equals(intent.getAction())) {
+                dispatchSimpleWindowEvent("jisudeng:fcm-token-refresh");
+            } else if (PUSH_INBOX_CHANGED_ACTION.equals(intent.getAction())) {
+                dispatchSimpleWindowEvent("jisudeng:push-inbox-change");
+            }
+        }
+    };
 
     @Override
     @SuppressLint("SetJavaScriptEnabled")
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        configureCrashlytics();
+        startStartupPerformanceTraces();
+        registerFcmTokenRefreshReceiver();
 
         textToSpeech = new TextToSpeech(this, status -> {
             textToSpeechReady = status == TextToSpeech.SUCCESS;
@@ -213,6 +277,7 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new NativeBridge(), "JisudengNativeBridge");
 
         setContentView(webView);
+        ensurePushNotificationChannel(this);
         registerNetworkRecoveryCallback();
         webView.loadUrl(
             LOCAL_ORIGIN + "/?nativeBridgeToken=" + Uri.encode(bridgeToken)
@@ -226,6 +291,7 @@ public class MainActivity extends Activity {
         dispatchIncomingShare(intent);
         dispatchPaymentReturn(intent);
         dispatchIncomingDeepLink(intent);
+        dispatchPushOpen(intent);
     }
 
     @Override
@@ -261,7 +327,9 @@ public class MainActivity extends Activity {
         Uri uri = intent.getData();
         if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return;
         String host = uri.getHost() == null ? "" : uri.getHost();
-        if (!("jisudeng.com".equalsIgnoreCase(host) || "www.jisudeng.com".equalsIgnoreCase(host))) return;
+        if (!("jisudeng.com".equalsIgnoreCase(host)
+            || "www.jisudeng.com".equalsIgnoreCase(host)
+            || "api.jisudeng.com".equalsIgnoreCase(host))) return;
         if (!"/payment/result".equals(uri.getPath())) return;
         try {
             JSONObject detail = new JSONObject();
@@ -277,8 +345,23 @@ public class MainActivity extends Activity {
         Uri uri = intent.getData();
         if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) return;
         String host = uri.getHost() == null ? "" : uri.getHost();
-        if (!("jisudeng.com".equalsIgnoreCase(host) || "www.jisudeng.com".equalsIgnoreCase(host))) return;
+        if (!("jisudeng.com".equalsIgnoreCase(host)
+            || "www.jisudeng.com".equalsIgnoreCase(host)
+            || "api.jisudeng.com".equalsIgnoreCase(host))) return;
         String path = uri.getPath() == null ? "" : uri.getPath();
+        boolean isOAuthCallbackPath = path.equals("/auth/oauth/callback")
+            || path.equals("/auth/callback");
+        if (isOAuthCallbackPath) {
+            try {
+                JSONObject detail = new JSONObject();
+                detail.put("url", uri.toString());
+                detail.put("path", path);
+                String script = "localStorage.setItem('jisudeng-native-pending-oauth',JSON.stringify(" + detail.toString() + "));window.dispatchEvent(new CustomEvent('jisudeng-oauth-callback',{detail:" + detail.toString() + "}));";
+                webView.post(() -> webView.evaluateJavascript(script, null));
+            } catch (JSONException ignored) {
+            }
+            return;
+        }
         boolean isInvitePath = path.equals("/register")
             || path.equals("/affiliate")
             || path.startsWith("/invite")
@@ -294,6 +377,165 @@ public class MainActivity extends Activity {
             webView.post(() -> webView.evaluateJavascript(script, null));
         } catch (JSONException ignored) {
         }
+    }
+
+    public static Intent createPushOpenIntent(
+        Context context,
+        Map<String, String> data,
+        String messageId
+    ) {
+        Intent intent = new Intent(context, MainActivity.class);
+        intent.setAction(PUSH_ACTION_OPEN);
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        copyPushExtra(intent, data, "event_type", PUSH_EXTRA_EVENT_TYPE);
+        copyPushExtra(intent, data, "source_type", PUSH_EXTRA_SOURCE_TYPE);
+        copyPushExtra(intent, data, "source_id", PUSH_EXTRA_SOURCE_ID);
+        copyPushExtra(intent, data, "ticket_id", PUSH_EXTRA_TICKET_ID);
+        copyPushExtra(intent, data, "kind", PUSH_EXTRA_KIND);
+        copyPushExtra(intent, data, "status", PUSH_EXTRA_STATUS);
+        if (messageId != null && !messageId.trim().isEmpty()) {
+            intent.putExtra(PUSH_EXTRA_MESSAGE_ID, messageId.trim());
+        }
+        return intent;
+    }
+
+    public static void ensurePushNotificationChannel(Context context) {
+        if (context == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager =
+            (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return;
+        NotificationChannel channel = new NotificationChannel(
+            PUSH_CHANNEL_ID,
+            "Jisudeng push",
+            NotificationManager.IMPORTANCE_DEFAULT
+        );
+        channel.setDescription("Jisudeng account, support, and payment updates");
+        manager.createNotificationChannel(channel);
+    }
+
+    private static void copyPushExtra(
+        Intent intent,
+        Map<String, String> data,
+        String dataKey,
+        String extraKey
+    ) {
+        if (intent == null || data == null) return;
+        String value = data.get(dataKey);
+        if (value != null && !value.trim().isEmpty()) {
+            intent.putExtra(dataKey, value.trim());
+            intent.putExtra(extraKey, value.trim());
+        }
+    }
+
+    private void dispatchPushOpen(Intent intent) {
+        if (intent == null || webView == null) return;
+        JSONObject detail = pushDetailFromIntent(intent);
+        if (detail.length() == 0) return;
+        String signature = pushIntentSignature(detail);
+        long now = System.currentTimeMillis();
+        if (
+            signature.equals(lastPushIntentSignature) &&
+            now - lastPushIntentDispatchedAtMs < PUSH_DUPLICATE_WINDOW_MS
+        ) {
+            return;
+        }
+        lastPushIntentSignature = signature;
+        lastPushIntentDispatchedAtMs = now;
+        String openedMessageId = detail.optString("messageId", "");
+        if (!openedMessageId.isEmpty()) {
+            JSONArray openedIds = new JSONArray();
+            openedIds.put(openedMessageId);
+            JisudengFirebaseMessagingService.markPushInboxRead(this, openedIds, false);
+        }
+        Log.i(
+            LOG_TAG,
+            "push open dispatched event_type=" +
+            detail.optString("eventType", "") +
+            " source_type=" +
+            detail.optString("sourceType", "") +
+            " source_id=" +
+            detail.optString("sourceId", "")
+        );
+        String script =
+            "window.dispatchEvent(new CustomEvent('jisudeng:push-open',{detail:" +
+            detail.toString() +
+            "}));";
+        webView.post(() -> webView.evaluateJavascript(script, null));
+        clearPushIntent();
+    }
+
+    private JSONObject pushDetailFromIntent(Intent intent) {
+        JSONObject detail = new JSONObject();
+        String eventType = pushIntentString(intent, PUSH_EXTRA_EVENT_TYPE, "event_type");
+        String sourceType = pushIntentString(intent, PUSH_EXTRA_SOURCE_TYPE, "source_type");
+        String sourceId = pushIntentString(intent, PUSH_EXTRA_SOURCE_ID, "source_id");
+        String ticketId = pushIntentString(intent, PUSH_EXTRA_TICKET_ID, "ticket_id");
+        String kind = pushIntentString(intent, PUSH_EXTRA_KIND, "kind");
+        String status = pushIntentString(intent, PUSH_EXTRA_STATUS, "status");
+        String messageId = pushIntentString(
+            intent,
+            PUSH_EXTRA_MESSAGE_ID,
+            "google.message_id",
+            "gcm.message_id"
+        );
+        if (
+            eventType.isEmpty() &&
+            sourceType.isEmpty() &&
+            sourceId.isEmpty() &&
+            ticketId.isEmpty() &&
+            kind.isEmpty() &&
+            status.isEmpty() &&
+            messageId.isEmpty() &&
+            !PUSH_ACTION_OPEN.equals(intent.getAction())
+        ) {
+            return detail;
+        }
+        try {
+            detail.put("eventType", eventType);
+            detail.put("sourceType", sourceType);
+            detail.put("sourceId", sourceId);
+            detail.put("ticketId", ticketId);
+            detail.put("kind", kind);
+            detail.put("status", status);
+            detail.put("messageId", messageId);
+        } catch (JSONException ignored) {
+        }
+        return detail;
+    }
+
+    private void clearPushIntent() {
+        Intent current = getIntent();
+        if (current == null || !PUSH_ACTION_OPEN.equals(current.getAction())) return;
+        Intent cleanIntent = new Intent(Intent.ACTION_MAIN);
+        cleanIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        cleanIntent.setClass(this, MainActivity.class);
+        setIntent(cleanIntent);
+    }
+
+    private String pushIntentString(Intent intent, String... keys) {
+        if (intent == null || keys == null) return "";
+        Bundle extras = intent.getExtras();
+        if (extras == null) return "";
+        for (String key : keys) {
+            if (key == null) continue;
+            Object raw = extras.get(key);
+            if (raw == null) continue;
+            String value = String.valueOf(raw).trim();
+            if (!value.isEmpty()) return value;
+        }
+        return "";
+    }
+
+    private String pushIntentSignature(JSONObject detail) {
+        String messageId = detail.optString("messageId", "");
+        if (!messageId.isEmpty()) return "message:" + messageId;
+        return detail.optString("eventType", "") +
+            "|" +
+            detail.optString("sourceType", "") +
+            "|" +
+            detail.optString("sourceId", "") +
+            "|" +
+            detail.optString("ticketId", "");
     }
 
     @Override
@@ -321,6 +563,22 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         cancelActiveSpeechSessions("activity_destroyed");
+        stopStartupPerformanceTraces();
+        for (Trace trace : activePerformanceTraces.values()) {
+            try {
+                trace.putAttribute("outcome", "activity_destroyed");
+                trace.stop();
+            } catch (Exception ignored) {
+            }
+        }
+        activePerformanceTraces.clear();
+        if (fcmTokenRefreshReceiverRegistered) {
+            try {
+                unregisterReceiver(fcmTokenRefreshReceiver);
+            } catch (Exception ignored) {
+            }
+            fcmTokenRefreshReceiverRegistered = false;
+        }
         if (textToSpeech != null) {
             try {
                 textToSpeech.stop();
@@ -361,6 +619,180 @@ public class MainActivity extends Activity {
             }
         };
         connectivityManager.registerDefaultNetworkCallback(networkCallback);
+    }
+
+    private void configureCrashlytics() {
+        FirebaseCrashlytics crashlytics = FirebaseCrashlytics.getInstance();
+        crashlytics.setCustomKey("distribution_channel", BuildConfig.DISTRIBUTION_CHANNEL);
+        crashlytics.setCustomKey("android_sdk", Build.VERSION.SDK_INT);
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            crashlytics.setCustomKey("app_version", info.versionName == null ? "" : info.versionName);
+            crashlytics.setCustomKey(
+                "app_version_code",
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode
+            );
+        } catch (Exception error) {
+            crashlytics.log("Unable to resolve Android package version: " + error.getClass().getSimpleName());
+        }
+    }
+
+    private void startStartupPerformanceTraces() {
+        try {
+            appColdStartTrace = FirebasePerformance.getInstance().newTrace("app_cold_start");
+            appColdStartTrace.putAttribute("distribution", BuildConfig.DISTRIBUTION_CHANNEL);
+            appColdStartTrace.start();
+            webViewFirstLoadTrace = FirebasePerformance.getInstance().newTrace("webview_first_load");
+            webViewFirstLoadTrace.putAttribute("distribution", BuildConfig.DISTRIBUTION_CHANNEL);
+            webViewFirstLoadTrace.start();
+        } catch (Exception error) {
+            FirebaseCrashlytics.getInstance().log(
+                "Unable to start startup performance traces: " + error.getClass().getSimpleName()
+            );
+            appColdStartTrace = null;
+            webViewFirstLoadTrace = null;
+        }
+    }
+
+    private void stopStartupPerformanceTraces() {
+        if (webViewFirstLoadTrace != null) {
+            try {
+                webViewFirstLoadTrace.stop();
+            } catch (Exception ignored) {
+            }
+            webViewFirstLoadTrace = null;
+        }
+        if (appColdStartTrace != null) {
+            try {
+                appColdStartTrace.stop();
+            } catch (Exception ignored) {
+            }
+            appColdStartTrace = null;
+        }
+    }
+
+    private void startPerformanceTrace(String requestId, JSONObject options) {
+        String name = safePerformanceValue(options.optString("name", "app_operation"), 80)
+            .replaceAll("[^A-Za-z0-9_]", "_");
+        if (name.isEmpty()) name = "app_operation";
+        if (activePerformanceTraces.size() >= 24) {
+            reject(requestId, "too many active performance traces");
+            return;
+        }
+        try {
+            Trace trace = FirebasePerformance.getInstance().newTrace(name);
+            trace.putAttribute("distribution", BuildConfig.DISTRIBUTION_CHANNEL);
+            JSONObject attributes = options.optJSONObject("attributes");
+            if (attributes != null) {
+                int added = 0;
+                Iterator<String> keys = attributes.keys();
+                while (keys.hasNext() && added < 3) {
+                    String rawKey = keys.next();
+                    String key = safePerformanceValue(rawKey, 40)
+                        .replaceAll("[^A-Za-z0-9_]", "_");
+                    String value = safePerformanceValue(attributes.optString(rawKey, ""), 100);
+                    if (
+                        key.isEmpty() ||
+                        value.isEmpty() ||
+                        "distribution".equals(key) ||
+                        "outcome".equals(key)
+                    ) {
+                        continue;
+                    }
+                    trace.putAttribute(key, value);
+                    added += 1;
+                }
+            }
+            String traceId = UUID.randomUUID().toString();
+            trace.start();
+            activePerformanceTraces.put(traceId, trace);
+            JSONObject payload = new JSONObject();
+            payload.put("traceId", traceId);
+            resolve(requestId, payload);
+        } catch (Exception error) {
+            reject(requestId, "performance trace start failed");
+        }
+    }
+
+    private void stopPerformanceTrace(String requestId, JSONObject options) {
+        String traceId = options.optString("traceId", "").trim();
+        Trace trace = activePerformanceTraces.remove(traceId);
+        if (trace != null) {
+            try {
+                String outcome = safePerformanceValue(options.optString("outcome", "unknown"), 80);
+                trace.putAttribute("outcome", outcome.isEmpty() ? "unknown" : outcome);
+                trace.stop();
+            } catch (Exception ignored) {
+            }
+        }
+        resolve(requestId, new JSONObject());
+    }
+
+    private String safePerformanceValue(String value, int maxLength) {
+        String normalized = value == null ? "" : value.replaceAll("[\\r\\n]+", " ").trim();
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
+    }
+
+    private void registerFcmTokenRefreshReceiver() {
+        if (fcmTokenRefreshReceiverRegistered) return;
+        IntentFilter filter = new IntentFilter(FCM_TOKEN_REFRESH_ACTION);
+        filter.addAction(PUSH_INBOX_CHANGED_ACTION);
+        ContextCompat.registerReceiver(
+            this,
+            fcmTokenRefreshReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        );
+        fcmTokenRefreshReceiverRegistered = true;
+    }
+
+    private void dispatchSimpleWindowEvent(String eventName) {
+        if (webView == null || eventName == null || eventName.trim().isEmpty()) return;
+        String script = "window.dispatchEvent(new Event(" + JSONObject.quote(eventName.trim()) + "));";
+        webView.post(() -> webView.evaluateJavascript(script, null));
+    }
+
+    private void configureCrashlyticsUser(String requestId, String userId) {
+        FirebaseCrashlytics.getInstance().setUserId(userId == null ? "" : userId.trim());
+        resolve(requestId, new JSONObject());
+    }
+
+    private void recordCrashlyticsException(String requestId, JSONObject options) {
+        String category = clippedCrashValue(options.optString("category", "javascript"), 80);
+        String message = clippedCrashValue(options.optString("message", "client error"), 1000);
+        String stack = clippedCrashValue(options.optString("stack", ""), 4000);
+        FirebaseCrashlytics crashlytics = FirebaseCrashlytics.getInstance();
+        crashlytics.setCustomKey("last_js_error_category", category);
+        crashlytics.recordException(new RuntimeException(category + ": " + message + (stack.isEmpty() ? "" : "\n" + stack)));
+        resolve(requestId, new JSONObject());
+    }
+
+    private void getPushInbox(String requestId) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("items", JisudengFirebaseMessagingService.readPushInbox(this));
+        } catch (JSONException ignored) {
+        }
+        resolve(requestId, payload);
+    }
+
+    private void markPushInboxRead(String requestId, JSONObject options) {
+        JisudengFirebaseMessagingService.markPushInboxRead(
+            this,
+            options.optJSONArray("ids"),
+            options.optBoolean("all", false)
+        );
+        getPushInbox(requestId);
+    }
+
+    private void clearPushInbox(String requestId) {
+        JisudengFirebaseMessagingService.clearPushInbox(this);
+        getPushInbox(requestId);
+    }
+
+    private String clippedCrashValue(String value, int maxLength) {
+        String normalized = value == null ? "" : value.replaceAll("[\\r\\n]+", " ").trim();
+        return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
     }
 
     private void dispatchIncomingShare(Intent intent) {
@@ -872,6 +1304,9 @@ public class MainActivity extends Activity {
                         options.optString("text", "")
                     );
                     break;
+                case "copyText":
+                    copyText(requestId, options.optString("text", ""));
+                    break;
                 case "showNotification":
                     showNotification(
                         requestId,
@@ -884,7 +1319,8 @@ public class MainActivity extends Activity {
                         requestId,
                         options.optString("url"),
                         options.optString("fileName", "jisudengchat-download"),
-                        options.optString("title", "JisudengChat")
+                        options.optString("title", "JisudengChat"),
+                        options.optString("authorization")
                     );
                     break;
                 case "getDownloadStatus":
@@ -906,6 +1342,61 @@ public class MainActivity extends Activity {
                     break;
                 case "getDeviceInfo":
                     resolve(requestId, getDeviceInfoPayload());
+                    break;
+                case "getFcmToken":
+                    getFcmToken(requestId);
+                    break;
+                case "configureCrashlyticsUser":
+                    configureCrashlyticsUser(requestId, options.optString("userId", ""));
+                    break;
+                case "recordCrashlyticsException":
+                    recordCrashlyticsException(requestId, options);
+                    break;
+                case "startPerformanceTrace":
+                    startPerformanceTrace(requestId, options);
+                    break;
+                case "stopPerformanceTrace":
+                    stopPerformanceTrace(requestId, options);
+                    break;
+                case "getPushInbox":
+                    getPushInbox(requestId);
+                    break;
+                case "markPushInboxRead":
+                    markPushInboxRead(requestId, options);
+                    break;
+                case "clearPushInbox":
+                    clearPushInbox(requestId);
+                    break;
+                case "getPlayBillingStatus":
+                    getPlayBillingStatus(requestId);
+                    break;
+                case "queryPlayBillingProducts":
+                    queryPlayBillingProducts(
+                        requestId,
+                        options.optJSONArray("productIds"),
+                        options.optString("productType", BillingClient.ProductType.INAPP)
+                    );
+                    break;
+                case "launchPlayBillingPurchase":
+                    launchPlayBillingPurchase(requestId, options);
+                    break;
+                case "queryPlayBillingPurchases":
+                    queryPlayBillingPurchases(
+                        requestId,
+                        options.optString("productType", BillingClient.ProductType.INAPP)
+                    );
+                    break;
+                case "consumePlayBillingPurchase":
+                    consumePlayBillingPurchase(
+                        requestId,
+                        options.optString("purchaseToken", "")
+                    );
+                    break;
+                case "acknowledgePlayBillingPurchase":
+                    acknowledgePlayBillingPurchase(
+                        requestId,
+                        options.optString("purchaseToken", "")
+                    );
                     break;
                 case "showToast":
                     Toast.makeText(
@@ -2340,6 +2831,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void copyText(String requestId, String text) {
+        try {
+            android.content.ClipboardManager clipboard =
+                (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard == null) throw new IllegalStateException("clipboard unavailable");
+            clipboard.setPrimaryClip(ClipData.newPlainText("JisudengChat", text));
+            resolve(requestId, new JSONObject());
+        } catch (Exception error) {
+            reject(requestId, error.getMessage());
+        }
+    }
+
     private void showNotification(String requestId, String title, String body) {
         try {
             if (Build.VERSION.SDK_INT >= 33 &&
@@ -2372,9 +2875,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void downloadFile(String requestId, String url, String fileName, String title) {
+    private void downloadFile(String requestId, String url, String fileName, String title, String rawAuthorization) {
         try {
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+            String authorization = safeDownloadAuthorization(rawAuthorization);
+            if (!authorization.isEmpty()) {
+                request.addRequestHeader("Authorization", authorization);
+            }
             request.setTitle(title);
             request.setDescription(fileName);
             request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
@@ -2391,6 +2898,15 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             reject(requestId, error.getMessage());
         }
+    }
+
+    private String safeDownloadAuthorization(String rawAuthorization) {
+        String authorization = rawAuthorization == null ? "" : rawAuthorization.trim();
+        if (!authorization.startsWith("Bearer ") || authorization.length() > 8192 ||
+            authorization.contains("\r") || authorization.contains("\n")) {
+            return "";
+        }
+        return authorization;
     }
 
     private void getDownloadStatus(String requestId, String rawId) {
@@ -2626,6 +3142,438 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             reject(requestId, error.getMessage());
         }
+    }
+
+    private interface BillingReadyCallback {
+        void run(BillingClient client);
+    }
+
+    private BillingClient getOrCreateBillingClient() {
+        if (billingClient == null) {
+            billingClient = BillingClient.newBuilder(this)
+                .enablePendingPurchases(
+                    PendingPurchasesParams
+                        .newBuilder()
+                        .enableOneTimeProducts()
+                        .build()
+                )
+                .setListener(this::handlePurchasesUpdated)
+                .enableAutoServiceReconnection()
+                .build();
+        }
+        return billingClient;
+    }
+
+    private void withBillingClient(String requestId, BillingReadyCallback callback) {
+        BillingClient client = getOrCreateBillingClient();
+        if (client.isReady()) {
+            callback.run(client);
+            return;
+        }
+        client.startConnection(new BillingClientStateListener() {
+            @Override
+            public void onBillingSetupFinished(BillingResult billingResult) {
+                runOnUiThread(() -> {
+                    if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK) {
+                        callback.run(client);
+                        return;
+                    }
+                    reject(
+                        requestId,
+                        "play_billing_unavailable:" +
+                            billingResult.getResponseCode() +
+                            ":" +
+                            billingResult.getDebugMessage()
+                    );
+                });
+            }
+
+            @Override
+            public void onBillingServiceDisconnected() {
+                // The next explicit billing call reconnects. Purchases are also
+                // recoverable through queryPlayBillingPurchases.
+            }
+        });
+    }
+
+    private String normalizePlayBillingProductType(String rawType) {
+        if (BillingClient.ProductType.SUBS.equals(rawType)) {
+            return BillingClient.ProductType.SUBS;
+        }
+        return BillingClient.ProductType.INAPP;
+    }
+
+    private List<QueryProductDetailsParams.Product> playBillingProducts(
+        JSONArray productIds,
+        String productType
+    ) throws JSONException {
+        if (productIds == null || productIds.length() == 0) {
+            throw new JSONException("productIds are required");
+        }
+        ArrayList<QueryProductDetailsParams.Product> products = new ArrayList<>();
+        for (int i = 0; i < productIds.length(); i += 1) {
+            String productId = productIds.optString(i, "").trim();
+            if (productId.isEmpty()) continue;
+            products.add(
+                QueryProductDetailsParams.Product
+                    .newBuilder()
+                    .setProductId(productId)
+                    .setProductType(productType)
+                    .build()
+            );
+        }
+        if (products.isEmpty()) {
+            throw new JSONException("productIds are required");
+        }
+        return products;
+    }
+
+    private void getPlayBillingStatus(String requestId) {
+        withBillingClient(requestId, client -> {
+            JSONObject payload = billingPayload(
+                true,
+                true,
+                BillingClient.BillingResponseCode.OK,
+                "ready"
+            );
+            resolve(requestId, payload);
+        });
+    }
+
+    private void queryPlayBillingProducts(
+        String requestId,
+        JSONArray productIds,
+        String rawProductType
+    ) {
+        String productType = normalizePlayBillingProductType(rawProductType);
+        List<QueryProductDetailsParams.Product> products;
+        try {
+            products = playBillingProducts(productIds, productType);
+        } catch (JSONException error) {
+            reject(requestId, error.getMessage());
+            return;
+        }
+        withBillingClient(requestId, client -> {
+            QueryProductDetailsParams params = QueryProductDetailsParams
+                .newBuilder()
+                .setProductList(products)
+                .build();
+            client.queryProductDetailsAsync(params, (billingResult, result) -> runOnUiThread(() -> {
+                try {
+                    JSONObject payload = billingPayload(
+                        billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK,
+                        client.isReady(),
+                        billingResult.getResponseCode(),
+                        billingResult.getDebugMessage()
+                    );
+                    JSONArray items = new JSONArray();
+                    for (ProductDetails details : result.getProductDetailsList()) {
+                        items.put(playBillingProductPayload(details));
+                    }
+                    payload.put("products", items);
+                    payload.put("unfetchedCount", result.getUnfetchedProductList().size());
+                    resolve(requestId, payload);
+                } catch (JSONException error) {
+                    reject(requestId, error.getMessage());
+                }
+            }));
+        });
+    }
+
+    private ProductDetails findProductDetails(
+        List<ProductDetails> detailsList,
+        String productId
+    ) {
+        for (ProductDetails details : detailsList) {
+            if (productId.equals(details.getProductId())) return details;
+        }
+        return null;
+    }
+
+    private void launchPlayBillingPurchase(String requestId, JSONObject options) {
+        String productId = options.optString("productId", "").trim();
+        if (productId.isEmpty()) {
+            reject(requestId, "productId is required");
+            return;
+        }
+        if (pendingBillingPurchaseRequestId != null) {
+            reject(requestId, "play billing purchase already in progress");
+            return;
+        }
+        String productType = normalizePlayBillingProductType(
+            options.optString("productType", BillingClient.ProductType.INAPP)
+        );
+        JSONArray productIds = new JSONArray();
+        productIds.put(productId);
+        List<QueryProductDetailsParams.Product> products;
+        try {
+            products = playBillingProducts(productIds, productType);
+        } catch (JSONException error) {
+            reject(requestId, error.getMessage());
+            return;
+        }
+        withBillingClient(requestId, client -> {
+            QueryProductDetailsParams params = QueryProductDetailsParams
+                .newBuilder()
+                .setProductList(products)
+                .build();
+            client.queryProductDetailsAsync(params, (billingResult, result) -> runOnUiThread(() -> {
+                if (billingResult.getResponseCode() != BillingClient.BillingResponseCode.OK) {
+                    reject(
+                        requestId,
+                        "play_billing_product_query_failed:" +
+                            billingResult.getResponseCode() +
+                            ":" +
+                            billingResult.getDebugMessage()
+                    );
+                    return;
+                }
+                ProductDetails productDetails = findProductDetails(
+                    result.getProductDetailsList(),
+                    productId
+                );
+                if (productDetails == null) {
+                    reject(requestId, "play billing product not found: " + productId);
+                    return;
+                }
+                BillingFlowParams.ProductDetailsParams.Builder detailsParams =
+                    BillingFlowParams.ProductDetailsParams
+                        .newBuilder()
+                        .setProductDetails(productDetails);
+                String offerToken = options.optString("offerToken", "").trim();
+                if (!offerToken.isEmpty()) {
+                    detailsParams.setOfferToken(offerToken);
+                }
+                BillingFlowParams.Builder flowParams = BillingFlowParams
+                    .newBuilder()
+                    .setProductDetailsParamsList(
+                        Collections.singletonList(detailsParams.build())
+                    );
+                String accountId = options.optString("obfuscatedAccountId", "").trim();
+                if (!accountId.isEmpty()) {
+                    flowParams.setObfuscatedAccountId(accountId);
+                }
+                String profileId = options.optString("obfuscatedProfileId", "").trim();
+                if (!profileId.isEmpty()) {
+                    flowParams.setObfuscatedProfileId(profileId);
+                }
+                pendingBillingPurchaseRequestId = requestId;
+                BillingResult launchResult = client.launchBillingFlow(
+                    MainActivity.this,
+                    flowParams.build()
+                );
+                if (launchResult.getResponseCode() != BillingClient.BillingResponseCode.OK) {
+                    pendingBillingPurchaseRequestId = null;
+                    reject(
+                        requestId,
+                        "play_billing_launch_failed:" +
+                            launchResult.getResponseCode() +
+                            ":" +
+                            launchResult.getDebugMessage()
+                    );
+                }
+            }));
+        });
+    }
+
+    private void queryPlayBillingPurchases(String requestId, String rawProductType) {
+        String productType = normalizePlayBillingProductType(rawProductType);
+        withBillingClient(requestId, client -> {
+            QueryPurchasesParams params = QueryPurchasesParams
+                .newBuilder()
+                .setProductType(productType)
+                .build();
+            client.queryPurchasesAsync(params, (billingResult, purchases) -> runOnUiThread(() -> {
+                try {
+                    JSONObject payload = playBillingPurchaseResultPayload(
+                        billingResult,
+                        purchases == null ? Collections.emptyList() : purchases
+                    );
+                    payload.put("status", "purchased");
+                    resolve(requestId, payload);
+                } catch (JSONException error) {
+                    reject(requestId, error.getMessage());
+                }
+            }));
+        });
+    }
+
+    private void consumePlayBillingPurchase(String requestId, String purchaseToken) {
+        if (purchaseToken == null || purchaseToken.trim().isEmpty()) {
+            reject(requestId, "purchaseToken is required");
+            return;
+        }
+        withBillingClient(requestId, client -> {
+            ConsumeParams params = ConsumeParams
+                .newBuilder()
+                .setPurchaseToken(purchaseToken.trim())
+                .build();
+            client.consumeAsync(params, (billingResult, token) -> runOnUiThread(() -> {
+                JSONObject payload = billingPayload(
+                    billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK,
+                    client.isReady(),
+                    billingResult.getResponseCode(),
+                    billingResult.getDebugMessage()
+                );
+                resolve(requestId, payload);
+            }));
+        });
+    }
+
+    private void acknowledgePlayBillingPurchase(String requestId, String purchaseToken) {
+        if (purchaseToken == null || purchaseToken.trim().isEmpty()) {
+            reject(requestId, "purchaseToken is required");
+            return;
+        }
+        withBillingClient(requestId, client -> {
+            AcknowledgePurchaseParams params = AcknowledgePurchaseParams
+                .newBuilder()
+                .setPurchaseToken(purchaseToken.trim())
+                .build();
+            client.acknowledgePurchase(params, billingResult -> runOnUiThread(() -> {
+                JSONObject payload = billingPayload(
+                    billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK,
+                    client.isReady(),
+                    billingResult.getResponseCode(),
+                    billingResult.getDebugMessage()
+                );
+                resolve(requestId, payload);
+            }));
+        });
+    }
+
+    private JSONObject billingPayload(
+        boolean available,
+        boolean ready,
+        int responseCode,
+        String debugMessage
+    ) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("available", available);
+            payload.put("ready", ready);
+            payload.put("responseCode", responseCode);
+            payload.put("debugMessage", debugMessage == null ? "" : debugMessage);
+        } catch (JSONException ignored) {
+        }
+        return payload;
+    }
+
+    private JSONObject playBillingProductPayload(ProductDetails details) throws JSONException {
+        JSONObject payload = new JSONObject();
+        payload.put("productId", details.getProductId());
+        payload.put("productType", details.getProductType());
+        payload.put("title", details.getTitle());
+        payload.put("name", details.getName());
+        payload.put("description", details.getDescription());
+        ProductDetails.OneTimePurchaseOfferDetails offer =
+            details.getOneTimePurchaseOfferDetails();
+        if (
+            offer == null &&
+            details.getOneTimePurchaseOfferDetailsList() != null &&
+            !details.getOneTimePurchaseOfferDetailsList().isEmpty()
+        ) {
+            offer = details.getOneTimePurchaseOfferDetailsList().get(0);
+        }
+        if (offer != null) {
+            payload.put("formattedPrice", offer.getFormattedPrice());
+            payload.put("priceCurrencyCode", offer.getPriceCurrencyCode());
+            payload.put("priceAmountMicros", offer.getPriceAmountMicros());
+            payload.put("offerToken", offer.getOfferToken());
+        }
+        return payload;
+    }
+
+    private JSONObject playBillingPurchasePayload(Purchase purchase) throws JSONException {
+        JSONObject payload = new JSONObject();
+        payload.put("purchaseToken", purchase.getPurchaseToken());
+        payload.put("orderId", purchase.getOrderId());
+        payload.put("packageName", purchase.getPackageName());
+        payload.put("purchaseTime", purchase.getPurchaseTime());
+        payload.put("purchaseState", purchase.getPurchaseState());
+        payload.put("acknowledged", purchase.isAcknowledged());
+        payload.put("autoRenewing", purchase.isAutoRenewing());
+        payload.put("quantity", purchase.getQuantity());
+        payload.put("originalJson", purchase.getOriginalJson());
+        payload.put("signature", purchase.getSignature());
+        JSONArray products = new JSONArray();
+        for (String product : purchase.getProducts()) {
+            products.put(product);
+        }
+        payload.put("productIds", products);
+        return payload;
+    }
+
+    private JSONObject playBillingPurchaseResultPayload(
+        BillingResult billingResult,
+        List<Purchase> purchases
+    ) throws JSONException {
+        JSONObject payload = billingPayload(
+            billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK,
+            billingClient != null && billingClient.isReady(),
+            billingResult.getResponseCode(),
+            billingResult.getDebugMessage()
+        );
+        JSONArray items = new JSONArray();
+        boolean hasPending = false;
+        for (Purchase purchase : purchases) {
+            items.put(playBillingPurchasePayload(purchase));
+            if (purchase.getPurchaseState() == Purchase.PurchaseState.PENDING) {
+                hasPending = true;
+            }
+        }
+        payload.put("status", hasPending ? "pending" : "purchased");
+        payload.put("purchases", items);
+        return payload;
+    }
+
+    private void handlePurchasesUpdated(
+        BillingResult billingResult,
+        List<Purchase> purchases
+    ) {
+        String requestId = pendingBillingPurchaseRequestId;
+        pendingBillingPurchaseRequestId = null;
+        if (requestId == null || requestId.isEmpty()) return;
+        runOnUiThread(() -> {
+            try {
+                if (
+                    billingResult.getResponseCode() ==
+                        BillingClient.BillingResponseCode.USER_CANCELED
+                ) {
+                    JSONObject payload = billingPayload(
+                        true,
+                        billingClient != null && billingClient.isReady(),
+                        billingResult.getResponseCode(),
+                        billingResult.getDebugMessage()
+                    );
+                    payload.put("status", "cancelled");
+                    payload.put("purchases", new JSONArray());
+                    resolve(requestId, payload);
+                    return;
+                }
+                if (billingResult.getResponseCode() != BillingClient.BillingResponseCode.OK) {
+                    JSONObject payload = billingPayload(
+                        false,
+                        billingClient != null && billingClient.isReady(),
+                        billingResult.getResponseCode(),
+                        billingResult.getDebugMessage()
+                    );
+                    payload.put("status", "failed");
+                    payload.put("purchases", new JSONArray());
+                    resolve(requestId, payload);
+                    return;
+                }
+                resolve(
+                    requestId,
+                    playBillingPurchaseResultPayload(
+                        billingResult,
+                        purchases == null ? Collections.emptyList() : purchases
+                    )
+                );
+            } catch (JSONException error) {
+                reject(requestId, error.getMessage());
+            }
+        });
     }
 
     private void streamRequest(String requestId, JSONObject options) {
@@ -2897,6 +3845,48 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void getFcmToken(String requestId) {
+        Log.i(LOG_TAG, "FCM token request started");
+        AtomicBoolean completed = new AtomicBoolean(false);
+        Handler handler = new Handler(Looper.getMainLooper());
+        handler.postDelayed(() -> {
+            if (!completed.compareAndSet(false, true)) return;
+            String message = "FCM token request timed out after " + FCM_TOKEN_TIMEOUT_MS + "ms";
+            Log.e(LOG_TAG, message);
+            reject(requestId, message);
+        }, FCM_TOKEN_TIMEOUT_MS);
+        FirebaseMessaging.getInstance().setAutoInitEnabled(true);
+        FirebaseMessaging.getInstance().getToken()
+            .addOnCompleteListener(new OnCompleteListener<String>() {
+                @Override
+                public void onComplete(Task<String> task) {
+                    if (!completed.compareAndSet(false, true)) return;
+                    if (!task.isSuccessful()) {
+                        Exception error = task.getException();
+                        String message = error == null
+                            ? "FCM token request failed"
+                            : safeErrorMessage(error);
+                        Log.e(LOG_TAG, "FCM token request failed message=" + message);
+                        reject(requestId, message);
+                        return;
+                    }
+                    String token = task.getResult();
+                    if (token == null || token.trim().isEmpty()) {
+                        Log.e(LOG_TAG, "FCM token request returned an empty token");
+                        reject(requestId, "FCM token is empty");
+                        return;
+                    }
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("token", token);
+                    } catch (JSONException ignored) {
+                    }
+                    Log.i(LOG_TAG, "FCM token request succeeded length=" + token.length());
+                    resolve(requestId, payload);
+                }
+            });
+    }
+
     private JSONObject getDeviceInfoPayload() {
         JSONObject payload = new JSONObject();
         try {
@@ -2908,6 +3898,7 @@ public class MainActivity extends Activity {
             payload.put("product", Build.PRODUCT);
             payload.put("androidVersion", Build.VERSION.RELEASE);
             payload.put("sdkInt", Build.VERSION.SDK_INT);
+            payload.put("distributionChannel", BuildConfig.DISTRIBUTION_CHANNEL);
             PackageInfo info;
             if (Build.VERSION.SDK_INT >= 33) {
                 info = getPackageManager().getPackageInfo(
@@ -3517,6 +4508,21 @@ public class MainActivity extends Activity {
 
         @Override
         public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+            if (
+                consoleMessage != null &&
+                consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR &&
+                crashlyticsConsoleLogCount < 20
+            ) {
+                crashlyticsConsoleLogCount += 1;
+                FirebaseCrashlytics.getInstance().log(
+                    "WebView console error at " +
+                    clippedCrashValue(consoleMessage.sourceId(), 160) +
+                    ":" +
+                    consoleMessage.lineNumber() +
+                    " " +
+                    clippedCrashValue(consoleMessage.message(), 500)
+                );
+            }
             return super.onConsoleMessage(consoleMessage);
         }
     }
@@ -3549,10 +4555,12 @@ public class MainActivity extends Activity {
             if (initialIntentsDispatched || url == null || !url.startsWith(LOCAL_ORIGIN)) {
                 return;
             }
+            stopStartupPerformanceTraces();
             initialIntentsDispatched = true;
             dispatchIncomingDeepLink(getIntent());
             dispatchPaymentReturn(getIntent());
             dispatchIncomingShare(getIntent());
+            dispatchPushOpen(getIntent());
         }
 
         @Override

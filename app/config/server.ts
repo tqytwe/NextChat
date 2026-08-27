@@ -17,6 +17,8 @@ declare global {
       BUILD_MODE?: "standalone" | "export";
       BUILD_APP?: string; // is building desktop app
       BUILD_ANDROID?: string; // is building android app
+      NEXT_PUBLIC_ANDROID_DISTRIBUTION?: "play" | "direct";
+      NEXT_PUBLIC_ANDROID_DIRECT_REDEEM_SHOP_URL?: string;
       NEXT_PUBLIC_SUB2API_BASE_URL?: string;
       NEXT_PUBLIC_NEXTCHAT_WEB_URL?: string;
       NEXT_PUBLIC_ANDROID_APK_URL?: string;

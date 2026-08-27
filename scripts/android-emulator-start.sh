@@ -4,7 +4,7 @@ set -euo pipefail
 SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/dell/Android/Sdk}}"
 ADB="${ADB:-$SDK_ROOT/platform-tools/adb}"
 EMULATOR="${EMULATOR:-$SDK_ROOT/emulator/emulator}"
-AVD_NAME="${ANDROID_AVD_NAME:-Jisudeng_API35}"
+AVD_NAME="${ANDROID_AVD_NAME:-Jisudeng_Play_API35}"
 AVD_HOME="${ANDROID_AVD_HOME:-/home/codex/.android/avd}"
 BOOT_TIMEOUT_SECONDS="${ANDROID_BOOT_TIMEOUT_SECONDS:-180}"
 EMULATOR_LOG="${ANDROID_EMULATOR_LOG:-/tmp/jisudeng-android-emulator.log}"

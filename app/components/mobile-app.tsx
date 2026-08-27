@@ -1,7 +1,10 @@
 "use client";
 
 import {
+  Fragment,
   createContext,
+  lazy,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -16,6 +19,7 @@ import clsx from "clsx";
 import styles from "./mobile-app.module.scss";
 import AddIcon from "../icons/add.svg";
 import ChatIcon from "../icons/chat.svg";
+import CloudFailIcon from "../icons/cloud-fail.svg";
 import CloseIcon from "../icons/close.svg";
 import CopyIcon from "../icons/copy.svg";
 import DeleteIcon from "../icons/delete.svg";
@@ -28,6 +32,9 @@ import ImageIcon from "../icons/image.svg";
 import LeftIcon from "../icons/left.svg";
 import MaxIcon from "../icons/max.svg";
 import PromptIcon from "../icons/prompt.svg";
+import PaletteIcon from "../icons/palette.svg";
+import PlayIcon from "../icons/play.svg";
+import DiscoveryIcon from "../icons/discovery.svg";
 import ReloadIcon from "../icons/reload.svg";
 import SDIcon from "../icons/sd.svg";
 import SendIcon from "../icons/send-white.svg";
@@ -64,27 +71,69 @@ import type {
   AndroidReleaseManifest,
   AndroidReleaseVersion,
 } from "../client/android-release-version";
-import { compressImage, removeImage } from "../utils/chat";
+import {
+  compressMobileImage as compressImage,
+  removeMobileImage as removeImage,
+} from "../client/mobile-image";
 import {
   ManagedApiError,
   ManagedTransportError,
   managedJsonRequest as managedApiJsonRequest,
+  managedDownloadBlob,
   managedApiUrl,
   managedGatewayBaseUrl,
   managedRequestText,
   getManagedRequestDiagnostics,
   isManagedAuthError,
+  managedWorkspaceModelID,
+  managedWorkspaceModelMatches,
   normalizeManagedBaseUrl,
   diagnosticCategory,
   diagnosticErrorMessage,
   recordManagedRequestDiagnostic,
   shouldRefreshManagedSession,
 } from "../client/managed-nextchat";
-import type { ManagedWorkspaceModel } from "../client/managed-nextchat";
+import type {
+  ManagedAuthResponse,
+  ManagedWorkspaceGroup,
+  ManagedWorkspaceModel,
+} from "../client/managed-nextchat";
+import {
+  isExecutableManagedImageModel,
+  isManagedImageSizeSupported,
+  managedImageReferenceLimit,
+  selectManagedImageSession,
+  selectManagedImageSessionForGroup,
+  validateManagedImageRequest,
+  validateManagedVideoRequest,
+} from "../client/mobile-media-contract";
+import {
+  buildMobileVideoScriptPrompt,
+  classifyMobileVideoBootstrapFailure,
+  managedVideoCapabilities,
+  managedVideoModels,
+  MOBILE_VIDEO_POLL_INTERVAL_MS,
+  MOBILE_VIDEO_POLL_TIMEOUT_MS,
+  normalizeMobileVideoBootstrapGroups,
+  resolveMobileVideoScriptSelection,
+  resolveManagedVideoGroups,
+  selectManagedVideoSession,
+  selectManagedVideoSessionForGroup,
+} from "../client/mobile-video";
+import type {
+  MobileVideoBootstrapFailure,
+  MobileVideoServerBootstrap,
+} from "../client/mobile-video";
 import {
   formatManagedMobileError,
+  getManagedMobileLocale,
   getManagedMobileText,
   localizeManagedMobileError,
+  setManagedMobileLocale,
+} from "../client/managed-mobile-i18n";
+import type {
+  ManagedMobileLocale,
+  ManagedMobileText,
 } from "../client/managed-mobile-i18n";
 import {
   CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT,
@@ -121,8 +170,11 @@ import {
   planUsageInfo,
   subscriptionUsagePeriods,
 } from "../client/mobile-subscription";
-import type { ManagedMobileText } from "../client/managed-mobile-i18n";
-import { MobileAdminWorkspace } from "./mobile-admin-workspace";
+const MobileAdminWorkspace = lazy(() =>
+  import("./mobile-admin-workspace").then((module) => ({
+    default: module.MobileAdminWorkspace,
+  })),
+);
 import {
   getNativeDownloadStatus,
   getNativeDeviceInfo,
@@ -140,7 +192,6 @@ import {
   requestMicrophonePermission,
   requestNotificationPermission,
   cancelForegroundPttSession,
-  cancelAllForegroundWakeWordSessions,
   notifyForegroundPttRouteChange,
   recognizeSpeech,
   saveImageToAppStorage,
@@ -148,39 +199,75 @@ import {
   shareImage,
   shareImages,
   shareText,
+  copyTextToClipboard,
   showNativeNotification,
   isDirectNativeStreamAvailable,
   startDirectNativeStreamRequest,
   startForegroundPttSession,
-  startForegroundWakeWordSession,
   startNativeDownload,
-  speakNativeText,
   stopForegroundPttSession,
-  stopNativeSpeech,
   readNativeSharedMaterial,
+  isNativeAndroid,
   loadLoginCredentials,
   saveLoginCredentials,
   clearLoginCredentials,
   finishNativeApp,
   showNativeToast,
+  queryPlayBillingProducts,
+  launchPlayBillingPurchase,
+  consumePlayBillingPurchase,
+  acknowledgePlayBillingPurchase,
+  configureNativeCrashlyticsUser,
+  recordNativeCrashlyticsException,
+  startNativePerformanceTrace,
+  stopNativePerformanceTrace,
+  getNativePushInbox,
+  markNativePushInboxRead,
+  clearNativePushInbox,
 } from "../client/android-native";
 import type {
   NativeAppImage,
   NativeForegroundPttSession,
+  NativePlayBillingProduct,
+  NativePlayBillingProductType,
+  NativePlayBillingPurchase,
+  NativePushInboxItem,
   NativeSharedMaterial,
-  NativeWakeWordSession,
 } from "../client/android-native";
 import {
   deleteLocalMaterials,
   importLocalMaterials,
   listLocalMaterials,
+  syncLocalMaterials,
   readLocalMaterialBlob,
   readLocalMaterialDataUrl,
   clearLocalMaterials,
+  localMaterialKind,
 } from "../client/local-materials";
-import type { LocalMaterial } from "../client/local-materials";
+import type {
+  LocalMaterial,
+  LocalMaterialKind,
+} from "../client/local-materials";
+import {
+  clearLocalPromptCatalogs,
+  createLocalPromptCoverObjectURL,
+  readLocalPromptCatalog,
+  syncLocalPromptCatalog,
+} from "../client/local-prompt-library";
+import type {
+  LocalPromptCatalog,
+  LocalPromptCatalogItem,
+} from "../client/local-prompt-library";
+import {
+  clearLocalVideos,
+  deleteLocalVideos,
+  listLocalVideosWithBlobs,
+  saveLocalVideo,
+} from "../client/local-video-cache";
+import type { LocalVideoEntry } from "../client/local-video-cache";
 import {
   createMobilePlatformClient,
+  mergeMobileTaskPages,
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
 import { searchMobileWeb } from "../client/mobile-web-search";
@@ -190,11 +277,7 @@ import {
   MOBILE_WEB_SEARCH_TOOL,
   runMobileWebSearchToolLoop,
 } from "../client/mobile-chat-tools";
-import {
-  isMobileLiveWebRTCAvailable,
-  startMobileLiveSession,
-} from "../client/mobile-live";
-import type { MobileLiveSession, MobileLiveState } from "../client/mobile-live";
+import { isChatModel } from "../client/mobile-model-kind";
 import {
   inferLocalChatAttachmentMimeType,
   isLocalChatImage,
@@ -243,11 +326,11 @@ import type {
 import {
   mobileAttributionAffiliateCode,
   mobileAttributionToken,
-  reportMobileAttributionEvent,
 } from "../client/mobile-attribution";
 import type {
   MobileAsset,
   MobilePaymentOrder,
+  MobileProject,
   MobileSkill,
   MobileSupportTicket,
   MobileSupportTicketDetail,
@@ -543,6 +626,52 @@ async function mobilePlatformClient() {
         requestWithManagedAuth(({ baseUrl, accessToken }) =>
           makeClient(baseUrl, accessToken).tasks.status(...args),
         ),
+      delete: (...args: Parameters<MobilePlatformClient["tasks"]["delete"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.delete(...args),
+        ),
+      bulkDelete: (
+        ...args: Parameters<MobilePlatformClient["tasks"]["bulkDelete"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.bulkDelete(...args),
+        ),
+      bulkCancel: (
+        ...args: Parameters<MobilePlatformClient["tasks"]["bulkCancel"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).tasks.bulkCancel(...args),
+        ),
+    },
+    projects: {
+      create: (
+        ...args: Parameters<MobilePlatformClient["projects"]["create"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).projects.create(...args),
+        ),
+      list: (...args: Parameters<MobilePlatformClient["projects"]["list"]>) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).projects.list(...args),
+        ),
+      detail: (
+        ...args: Parameters<MobilePlatformClient["projects"]["detail"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).projects.detail(...args),
+        ),
+      update: (
+        ...args: Parameters<MobilePlatformClient["projects"]["update"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).projects.update(...args),
+        ),
+      delete: (
+        ...args: Parameters<MobilePlatformClient["projects"]["delete"]>
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).projects.delete(...args),
+        ),
     },
     payments: {
       create: (
@@ -560,6 +689,16 @@ async function mobilePlatformClient() {
       sync: (...args: Parameters<MobilePlatformClient["payments"]["sync"]>) =>
         requestWithManagedAuth(({ baseUrl, accessToken }) =>
           makeClient(baseUrl, accessToken).payments.sync(...args),
+        ),
+    },
+    playBilling: {
+      submitPurchase: (
+        ...args: Parameters<
+          MobilePlatformClient["playBilling"]["submitPurchase"]
+        >
+      ) =>
+        requestWithManagedAuth(({ baseUrl, accessToken }) =>
+          makeClient(baseUrl, accessToken).playBilling.submitPurchase(...args),
         ),
     },
     support: {
@@ -665,6 +804,74 @@ function mobileTaskStatusLabel(
   return text.platform.taskStatuses[status] || text.notSynced;
 }
 
+function mobileTaskOperationLabel(task: MobileTask, text: ManagedMobileText) {
+  const explicitTitle = localizedMobileDisplay(task, {
+    defaultFields: ["title", "name"],
+  });
+  if (explicitTitle) return explicitTitle;
+  const operation = String(task.operation || "")
+    .trim()
+    .toLowerCase();
+  const locale = getManagedMobileLocale();
+  const labels: Record<string, Record<ManagedMobileLocale, string>> = {
+    "chat.completions": {
+      cn: "AI 对话",
+      en: "AI conversation",
+      jp: "AI チャット",
+      ko: "AI 대화",
+    },
+    "images.generations": {
+      cn: "图片生成",
+      en: "Image generation",
+      jp: "画像生成",
+      ko: "이미지 생성",
+    },
+    "images.edits": {
+      cn: "图片编辑",
+      en: "Image editing",
+      jp: "画像編集",
+      ko: "이미지 편집",
+    },
+    content_kit: {
+      cn: "内容创作",
+      en: "Content creation",
+      jp: "コンテンツ制作",
+      ko: "콘텐츠 제작",
+    },
+    "files.upload": {
+      cn: "文件上传",
+      en: "File upload",
+      jp: "ファイルアップロード",
+      ko: "파일 업로드",
+    },
+  };
+  if (labels[operation]) return labels[operation][locale];
+  if (task.kind === "image") {
+    return {
+      cn: "图片任务",
+      en: "Image task",
+      jp: "画像タスク",
+      ko: "이미지 작업",
+    }[locale];
+  }
+  if (task.kind === "file") {
+    return {
+      cn: "文件任务",
+      en: "File task",
+      jp: "ファイルタスク",
+      ko: "파일 작업",
+    }[locale];
+  }
+  return (
+    {
+      cn: "对话任务",
+      en: "Conversation task",
+      jp: "チャットタスク",
+      ko: "대화 작업",
+    }[locale] || text.platform.tasks
+  );
+}
+
 function mobileAssetTitle(asset: MobileAsset, text: ManagedMobileText) {
   const fileName = asset.metadata?.file_name;
   return localizedMobileDisplay(asset, {
@@ -711,24 +918,50 @@ function skillCategoryLabel(
   category: string | undefined,
   text: ManagedMobileText,
 ) {
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
   const normalized = normalizedSkillCategory(category);
   const labels: Record<string, LocalizedString> = {
-    document: { cn: "文档处理", en: "Document" },
-    image: { cn: "图片与提示词", en: "Image" },
-    marketing: { cn: "营销内容", en: "Marketing" },
-    business: { cn: "商业经营", en: "Business" },
-    code: { cn: "代码开发", en: "Code" },
-    support: { cn: "客服售后", en: "Support" },
-    legal: { cn: "合同法务", en: "Legal" },
-    education: { cn: "学习教育", en: "Education" },
-    office: { cn: "办公协作", en: "Office" },
-    translation: { cn: "翻译本地化", en: "Translation" },
+    document: { cn: "文档处理", en: "Document", jp: "文書", ko: "문서" },
+    image: { cn: "图片与提示词", en: "Image", jp: "画像", ko: "이미지" },
+    marketing: {
+      cn: "营销内容",
+      en: "Marketing",
+      jp: "マーケティング",
+      ko: "마케팅",
+    },
+    business: {
+      cn: "商业经营",
+      en: "Business",
+      jp: "ビジネス",
+      ko: "비즈니스",
+    },
+    code: { cn: "代码开发", en: "Code", jp: "コード", ko: "코드" },
+    support: {
+      cn: "客服售后",
+      en: "Support",
+      jp: "サポート",
+      ko: "지원",
+    },
+    legal: { cn: "合同法务", en: "Legal", jp: "法務", ko: "법무" },
+    education: { cn: "学习教育", en: "Education", jp: "学習", ko: "학습" },
+    office: {
+      cn: "办公协作",
+      en: "Office",
+      jp: "オフィス",
+      ko: "오피스",
+    },
+    translation: {
+      cn: "翻译本地化",
+      en: "Translation",
+      jp: "翻訳",
+      ko: "번역",
+    },
   };
   return localizedValue(
     labels[normalized] || {
       cn: category || "通用技能",
       en: category || "General",
+      jp: category || "汎用スキル",
+      ko: category || "일반 스킬",
     },
     text,
   );
@@ -742,57 +975,85 @@ function localSkillInputHint(
     document: {
       cn: "请提供文档正文、会议记录、PDF 摘录或要总结的长文本；如果有目标读者和输出长度，请一起说明。",
       en: "Provide document text, meeting notes, PDF excerpts, or long text; add audience and length when useful.",
+      jp: "文書本文、会議メモ、PDF 抜粋、要約したい長文を入力してください。対象読者や希望する長さがあれば一緒に指定してください。",
+      ko: "문서 본문, 회의 기록, PDF 발췌 또는 요약할 긴 텍스트를 입력해 주세요. 대상 독자와 원하는 분량이 있다면 함께 알려 주세요.",
     },
     image: {
       cn: "请提供图片、画面描述、用途、比例、风格偏好和需要避免的内容；有参考图时可一并加入素材。",
       en: "Provide images or scene description, use case, ratio, style preference, and constraints; attach references when available.",
+      jp: "画像、画面説明、用途、比率、スタイルの希望、避けたい内容を入力してください。参考画像があれば素材に追加できます。",
+      ko: "이미지, 장면 설명, 용도, 비율, 스타일 선호와 피해야 할 내용을 입력해 주세요. 참고 이미지가 있으면 소재로 함께 추가할 수 있습니다.",
     },
     marketing: {
       cn: "请提供产品/主题、目标用户、发布平台、语气、卖点和不能触碰的限制词。",
       en: "Provide product/topic, audience, platform, tone, selling points, and restricted wording.",
+      jp: "商品/テーマ、ターゲット、投稿先、トーン、訴求点、避けるべき表現を入力してください。",
+      ko: "상품/주제, 대상 사용자, 게시 플랫폼, 톤, 핵심 장점과 피해야 할 표현을 입력해 주세요.",
     },
     business: {
       cn: "请提供商品、服务、目标人群、平台规则、价格区间和已有素材。",
       en: "Provide product/service, audience, platform rules, price range, and existing materials.",
+      jp: "商品やサービス、対象ユーザー、プラットフォーム規則、価格帯、既存素材を入力してください。",
+      ko: "상품/서비스, 대상 고객, 플랫폼 규칙, 가격대와 기존 소재를 입력해 주세요.",
     },
     code: {
       cn: "请提供报错、相关代码、运行环境、复现步骤和最近改动；缺少日志时会先帮你列排查清单。",
       en: "Provide errors, code, environment, reproduction steps, and recent changes; missing logs will be requested.",
+      jp: "エラー、関連コード、実行環境、再現手順、直近の変更を入力してください。ログが不足している場合は確認項目を整理します。",
+      ko: "오류, 관련 코드, 실행 환경, 재현 절차와 최근 변경 사항을 입력해 주세요. 로그가 부족하면 먼저 확인 목록을 정리합니다.",
     },
     support: {
       cn: "请提供用户原话、订单/场景、已处理步骤、希望承诺的范围和不能承诺的内容。",
       en: "Provide the user's message, order/context, handled steps, allowed promises, and forbidden promises.",
+      jp: "ユーザーの原文、注文/状況、対応済み手順、約束できる範囲とできない内容を入力してください。",
+      ko: "사용자 원문, 주문/상황, 이미 처리한 단계, 약속 가능한 범위와 약속하면 안 되는 내용을 입력해 주세요.",
     },
     legal: {
       cn: "请提供条款正文、签约场景、所在地区和你最担心的问题；输出仅供参考，不替代律师意见。",
       en: "Provide clause text, scenario, region, and concerns; output is informational, not legal advice.",
+      jp: "条項本文、契約状況、地域、最も気になる点を入力してください。出力は参考情報であり、弁護士の助言に代わるものではありません。",
+      ko: "조항 본문, 계약 상황, 지역, 가장 걱정되는 점을 입력해 주세요. 출력은 참고용이며 변호사 조언을 대체하지 않습니다.",
     },
     education: {
       cn: "请提供学习目标、当前基础、每天可用时间、截止日期和偏好的学习方式。",
       en: "Provide learning goal, baseline, available time, deadline, and preferred method.",
+      jp: "学習目標、現在のレベル、毎日使える時間、期限、好みの学習方法を入力してください。",
+      ko: "학습 목표, 현재 수준, 매일 사용할 수 있는 시간, 마감일과 선호하는 학습 방식을 입력해 주세요.",
     },
     office: {
       cn: "请提供会议记录、参会角色、背景、希望产出的格式和重点事项。",
       en: "Provide meeting notes, roles, background, desired format, and key concerns.",
+      jp: "会議メモ、参加者の役割、背景、希望する出力形式、重点事項を入力してください。",
+      ko: "회의 기록, 참석자 역할, 배경, 원하는 출력 형식과 핵심 사항을 입력해 주세요.",
     },
     translation: {
       cn: "请提供原文、目标语言、使用场景、目标读者和语气要求；会保留变量、格式和专有名词。",
       en: "Provide source text, target language, context, audience, and tone; variables and terms are preserved.",
+      jp: "原文、目標言語、利用場面、対象読者、トーンの希望を入力してください。変数、形式、固有名詞は保持します。",
+      ko: "원문, 대상 언어, 사용 상황, 대상 독자와 톤 요구사항을 입력해 주세요. 변수, 형식, 고유명사는 유지합니다.",
     },
   };
   return localizedValue(
     hints[normalizedSkillCategory(skill.category)] || {
       cn: "请提供任务目标、背景、素材和期望输出格式。",
       en: "Provide the goal, context, materials, and desired output format.",
+      jp: "タスク目標、背景、素材、希望する出力形式を入力してください。",
+      ko: "작업 목표, 배경, 소재와 원하는 출력 형식을 입력해 주세요.",
     },
     text,
   );
 }
 
 function localSkillConsumptionHint(text: ManagedMobileText) {
-  return text.dateLocale.toLowerCase().startsWith("zh")
-    ? "技能本身不额外改变模型或分组，实际消耗按当前模型、套餐和生成内容计算。"
-    : "The skill does not change model or group; actual usage follows the current model, plan, and output.";
+  return localizedValue(
+    {
+      cn: "技能本身不额外改变模型或分组，实际消耗按当前模型、套餐和生成内容计算。",
+      en: "The skill does not change model or group; actual usage follows the current model, plan, and output.",
+      jp: "スキル自体はモデルやグループを変更しません。実際の消費は現在のモデル、プラン、出力内容に基づきます。",
+      ko: "스킬 자체는 모델이나 그룹을 변경하지 않습니다. 실제 사용량은 현재 모델, 플랜, 출력 내용에 따라 계산됩니다.",
+    },
+    text,
+  );
 }
 
 function serverSkillConsumptionHint(
@@ -800,28 +1061,43 @@ function serverSkillConsumptionHint(
   text: ManagedMobileText,
 ) {
   const note = skill.version?.consumption_note_zh;
-  if (text.dateLocale.toLowerCase().startsWith("zh") && note) return note;
+  if (isChineseMobileText(text) && note) return note;
   return localSkillConsumptionHint(text);
 }
 
 function serverSkillInputHint(skill: MobileSkill, text: ManagedMobileText) {
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
+  const zh = isChineseMobileText(text);
+  const separator = zh || mobileTextLocale(text) === "jp" ? "、" : ", ";
   const params = skill.parameters || [];
   if (params.length > 0) {
     const labels = params
       .slice(0, 4)
       .map((param) => (zh && param.label_zh ? param.label_zh : param.label))
       .filter(Boolean)
-      .join("、");
+      .join(separator);
     if (labels) {
-      return zh
-        ? `建议提供：${labels}。缺少必要信息时，AI 会先追问补齐。`
-        : `Recommended inputs: ${labels}. The AI will ask for missing required details.`;
+      const locale = mobileTextLocale(text);
+      if (locale === "cn") {
+        return `建议提供：${labels}。缺少必要信息时，AI 会先追问补齐。`;
+      }
+      if (locale === "jp") {
+        return `推奨入力：${labels}。必要な情報が不足している場合、AI が先に確認します。`;
+      }
+      if (locale === "ko") {
+        return `권장 입력: ${labels}. 필요한 정보가 부족하면 AI가 먼저 확인합니다.`;
+      }
+      return `Recommended inputs: ${labels}. The AI will ask for missing required details.`;
     }
   }
-  return zh
-    ? "请提供任务目标、素材、背景和期望输出格式；有文件或图片时可先加入素材。"
-    : "Provide the goal, materials, context, and desired output; attach files or images when needed.";
+  return localizedValue(
+    {
+      cn: "请提供任务目标、素材、背景和期望输出格式；有文件或图片时可先加入素材。",
+      en: "Provide the goal, materials, context, and desired output; attach files or images when needed.",
+      jp: "タスク目標、素材、背景、希望する出力形式を入力してください。ファイルや画像がある場合は先に素材へ追加できます。",
+      ko: "작업 목표, 소재, 배경, 원하는 출력 형식을 입력해 주세요. 파일이나 이미지가 있다면 먼저 소재에 추가할 수 있습니다.",
+    },
+    text,
+  );
 }
 
 type AndroidUpdateManifest = AndroidReleaseManifest & {
@@ -834,10 +1110,14 @@ type AndroidUpdateManifest = AndroidReleaseManifest & {
   sha256?: string;
   notes?: string[] | string;
   releaseNotes?: string[] | string;
+  notesByLocale?: Partial<
+    Record<"zh-CN" | "en" | "ja" | "ko", string[] | string>
+  >;
 };
 
 type InstalledAndroidReleaseVersion = AndroidReleaseVersion & {
   loaded: boolean;
+  distributionChannel?: string;
 };
 
 const AndroidReleaseVersionContext =
@@ -857,7 +1137,13 @@ function AndroidReleaseVersionProvider(props: { children: ReactNode }) {
     void getNativeDeviceInfo()
       .then((device) => {
         if (!active) return;
-        setVersion({ ...normalizeAndroidReleaseVersion(device), loaded: true });
+        setVersion({
+          ...normalizeAndroidReleaseVersion(device),
+          loaded: true,
+          distributionChannel: String(device.distributionChannel || "")
+            .trim()
+            .toLowerCase(),
+        });
       })
       .catch(() => {
         if (active) setVersion({ name: "", loaded: true });
@@ -878,9 +1164,37 @@ function useInstalledAndroidReleaseVersion() {
   return useContext(AndroidReleaseVersionContext);
 }
 
+function isPlayDistribution(version: InstalledAndroidReleaseVersion) {
+  return version.distributionChannel === "play";
+}
+
 const UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const UPDATE_CHECKED_AT_STORAGE_KEY = "managed-mobile-update-checked-at";
 const UPDATE_DISMISSED_VERSION_STORAGE_KEY = "managed-mobile-update-dismissed";
+const WEB_OPEN_MODE_STORAGE_KEY = "managed-mobile-web-open-mode-v1";
+
+type WebOpenMode = "in_app" | "external";
+
+type MobileUserProfile = {
+  id?: number;
+  username?: string;
+  email?: string;
+  avatar_url?: string | null;
+  totp_enabled?: boolean;
+};
+
+type MobileTotpStatus = {
+  enabled?: boolean;
+  enabled_at?: number;
+  feature_enabled?: boolean;
+};
+
+type MobileTotpSetup = {
+  secret?: string;
+  qr_code_url?: string;
+  setup_token?: string;
+  countdown?: number;
+};
 
 type AccountData = {
   orders?: any[];
@@ -1110,12 +1424,14 @@ type QuotedChatMessage = {
 };
 
 type MobileFeedbackCategory =
+  | "ai_content_report"
   | "bug"
   | "experience"
   | "image"
   | "chat"
   | "payment"
   | "account"
+  | "account_deletion_request"
   | "request"
   | "other";
 
@@ -1123,6 +1439,13 @@ type MobileFeedbackScreenshotDraft = {
   id: string;
   dataUrl: string;
   fileName: string;
+};
+
+type MobileReportDraft = {
+  category: "ai_content_report";
+  title: string;
+  content: string;
+  createdAt: number;
 };
 
 type GalleryFilter = "all" | "favorites" | "products" | "posters";
@@ -1139,34 +1462,11 @@ type GalleryPreference = {
 
 type GalleryPreferences = Record<string, GalleryPreference>;
 
-type MobileVoiceConversationPreferences = {
-  enabled: boolean;
-  continuous: boolean;
-  wakeWordEnabled: boolean;
-  wakeWordPhrase: string;
-  ttsRate: number;
-};
-
-type ActiveMobileLiveConversation = {
-  sessionId: string;
-  assistantMessageId: string;
-  model: string;
-  groupId: number;
-  lastUserTranscript: string;
-};
-
-const DEFAULT_VOICE_CONVERSATION_PREFERENCES: MobileVoiceConversationPreferences =
-  {
-    enabled: false,
-    continuous: false,
-    wakeWordEnabled: false,
-    wakeWordPhrase: "极速蹬",
-    ttsRate: 1,
-  };
-
 type LocalizedString = {
   cn: string;
   en: string;
+  jp?: string;
+  ko?: string;
 };
 
 type ImagePromptTemplate = {
@@ -1181,6 +1481,7 @@ type ImagePromptTemplate = {
   domain?: string;
   style?: string;
   subject?: string;
+  coverUrl?: string;
   featured?: boolean;
   needReferenceImages?: boolean;
   params: {
@@ -1197,7 +1498,7 @@ type ImagePromptCategory = {
   axis?: string;
 };
 
-type ImagePromptLanguageMode = "app" | "zh" | "en" | "both";
+type ImagePromptLanguageMode = "app" | "zh" | "en" | "jp" | "ko" | "both";
 
 type ImagePromptLibraryPayload = {
   id: string;
@@ -1241,30 +1542,46 @@ type ChatSkillTemplate = {
   starter?: LocalizedString;
 };
 
+type MobileOAuthProvider = "google" | "github";
+
 const PLACEHOLDER_BACKEND_RE =
   /^https?:\/\/api\.example\.com(?:[:/]|$)|^api\.example\.com(?:[:/]|$)/i;
 
 const PAYMENT_RESULT_FALLBACK_URL = "https://www.jisudeng.com/payment/result";
+const OAUTH_CALLBACK_PATH = "/auth/oauth/callback";
+const NATIVE_PENDING_OAUTH_KEY = "jisudeng-native-pending-oauth";
+const NATIVE_PENDING_OAUTH_PROVIDER_KEY =
+  "jisudeng-native-pending-oauth-provider";
 const GALLERY_PREF_STORAGE_KEY = "jisudengchat-gallery-preferences-v1";
 const IMAGE_PREF_STORAGE_KEY = "jisudengchat-image-preferences-v1";
 const CHAT_PREF_STORAGE_KEY = "jisudengchat-chat-preferences-v1";
-const VOICE_CONVERSATION_STORAGE_KEY = "jisudengchat-voice-conversation-v1";
 const NATIVE_SHARE_DRAFT_KEY = "jisudengchat-native-share-draft-v1";
+const MOBILE_REPORT_DRAFT_STORAGE_KEY = "jisudengchat-mobile-report-draft-v1";
 const CRASH_LOG_STORAGE_KEY = "nextchat-mobile-crash-log";
+const FEEDBACK_DRAFT_STORAGE_KEY = "nextchat-mobile-feedback-draft";
 const DIAGNOSTICS_CURSOR_STORAGE_KEY = "jisudengchat-diagnostics-last-sent-v1";
 
 const IMAGE_PROMPT_TEMPLATES: ImagePromptTemplate[] = [
   {
     id: "portrait-clean",
     category: "portrait",
-    title: { cn: "干净商业头像", en: "Clean business portrait" },
+    title: {
+      cn: "干净商业头像",
+      en: "Clean business portrait",
+      jp: "クリーンなビジネスプロフィール",
+      ko: "깔끔한 비즈니스 프로필",
+    },
     description: {
       cn: "适合个人头像、简历、社媒形象。",
       en: "Good for profile, resume, and social avatar images.",
+      jp: "プロフィール、履歴書、SNS アイコン向け。",
+      ko: "프로필, 이력서, 소셜 아바타에 적합합니다.",
     },
     prompt: {
       cn: "一张高级商业头像，人物自然看向镜头，柔和自然光，干净浅色背景，真实摄影质感，皮肤细节自然，构图简洁，高级感，避免夸张滤镜和过度磨皮",
       en: "A refined business portrait, subject looking naturally at the camera, soft natural light, clean light background, realistic photographic texture, natural skin details, simple composition, premium feel, no heavy filters or over-smoothing",
+      jp: "洗練されたビジネスプロフィール写真。人物は自然にカメラを見る。柔らかな自然光、明るく清潔な背景、リアルな写真質感、自然な肌のディテール、簡潔な構図、高級感。過度なフィルターや肌補正は避ける。",
+      ko: "고급스러운 비즈니스 프로필 사진. 인물이 자연스럽게 카메라를 바라보고, 부드러운 자연광과 깨끗한 밝은 배경, 사실적인 사진 질감, 자연스러운 피부 디테일, 간결한 구도와 프리미엄 분위기. 과한 필터와 과도한 보정은 피합니다.",
     },
     params: {
       size: "1024x1024",
@@ -1276,14 +1593,23 @@ const IMAGE_PROMPT_TEMPLATES: ImagePromptTemplate[] = [
   {
     id: "product-ecommerce",
     category: "product",
-    title: { cn: "电商产品主图", en: "E-commerce product hero" },
+    title: {
+      cn: "电商产品主图",
+      en: "E-commerce product hero",
+      jp: "EC 商品メイン画像",
+      ko: "커머스 상품 대표 이미지",
+    },
     description: {
       cn: "突出产品主体，适合商品首图。",
       en: "Highlights the product for marketplace hero images.",
+      jp: "商品を際立たせる、商品一覧・詳細のメイン画像向け。",
+      ko: "상품을 돋보이게 하는 대표 이미지에 적합합니다.",
     },
     prompt: {
       cn: "电商产品主图，产品居中展示，白色或浅灰背景，专业棚拍灯光，边缘清晰，材质真实，干净阴影，突出卖点，画面高级，适合网店首图",
       en: "E-commerce product hero image, product centered, white or light gray background, professional studio lighting, crisp edges, realistic material, clean shadow, clear selling point, premium look for an online store",
+      jp: "EC 商品のメイン画像。商品を中央に配置し、白または淡いグレーの背景、プロのスタジオ照明、シャープな輪郭、リアルな素材感、清潔な影、売りを強調した高級感のある画面。オンラインストアの主画像向け。",
+      ko: "커머스 상품 대표 이미지. 상품을 중앙에 배치하고 흰색 또는 연한 회색 배경, 전문 스튜디오 조명, 선명한 가장자리, 사실적인 소재감, 깔끔한 그림자와 명확한 장점을 보여 주는 고급스러운 화면. 온라인 스토어 대표 이미지에 적합합니다.",
     },
     params: {
       size: "1536x1024",
@@ -1295,42 +1621,69 @@ const IMAGE_PROMPT_TEMPLATES: ImagePromptTemplate[] = [
   {
     id: "poster-launch",
     category: "poster",
-    title: { cn: "新品发布海报", en: "Launch poster" },
+    title: {
+      cn: "新品发布海报",
+      en: "Launch poster",
+      jp: "新商品ローンチポスター",
+      ko: "신제품 출시 포스터",
+    },
     description: {
       cn: "适合新品、活动、促销海报底图。",
       en: "A base visual for launches, campaigns, and promos.",
+      jp: "新商品、イベント、キャンペーンのポスター背景向け。",
+      ko: "신제품, 이벤트, 프로모션 포스터 배경에 적합합니다.",
     },
     prompt: {
       cn: "新品发布海报视觉，中心留出标题区域，背景有层次但不杂乱，现代商业设计，高级光影，产品展示空间明确，适合添加中文标题和卖点文字",
       en: "New product launch poster visual, leave a clear central title area, layered but uncluttered background, modern commercial design, premium lighting, clear product display space, suitable for adding headline and selling points",
+      jp: "新商品ローンチポスターのビジュアル。中央にタイトル領域を確保し、背景は奥行きがありながら散らからない。現代的な商業デザイン、高級感のある光と影、明確な商品表示スペース。見出しや訴求文を後から追加しやすい構図。",
+      ko: "신제품 출시 포스터 비주얼. 중앙에 제목 영역을 확보하고, 배경은 레이어감이 있으면서도 복잡하지 않게 구성합니다. 현대적인 상업 디자인, 고급스러운 빛과 그림자, 명확한 상품 노출 공간을 두어 제목과 핵심 문구를 추가하기 쉽습니다.",
     },
     params: { size: "1024x1536", quality: "high", style: "vivid", count: 1 },
   },
   {
     id: "cover-short-video",
     category: "cover",
-    title: { cn: "短视频封面", en: "Short video cover" },
+    title: {
+      cn: "短视频封面",
+      en: "Short video cover",
+      jp: "ショート動画カバー",
+      ko: "숏폼 영상 커버",
+    },
     description: {
       cn: "适合小红书、抖音、视频号封面。",
       en: "For social short-video covers.",
+      jp: "SNS やショート動画のカバー画像向け。",
+      ko: "소셜/숏폼 영상 커버 이미지에 적합합니다.",
     },
     prompt: {
       cn: "短视频封面视觉，竖版构图，主体清晰，强视觉焦点，背景简洁有冲击力，预留大标题空间，适合添加醒目的中文标题，高清商业设计",
       en: "Vertical short-video cover visual, clear subject, strong focal point, simple impactful background, large title space reserved, suitable for bold headline text, high-resolution commercial design",
+      jp: "ショート動画カバーの縦型ビジュアル。主体を明確にし、強い視覚的焦点を作る。背景は簡潔で印象的、大きなタイトル領域を確保。目立つ見出しを後から追加しやすい、高解像度の商業デザイン。",
+      ko: "숏폼 영상 커버용 세로 비주얼. 주제가 선명하고 강한 시각적 초점이 있으며, 배경은 간결하지만 임팩트 있게 구성합니다. 큰 제목 영역을 남겨 눈에 띄는 문구를 추가하기 쉬운 고해상도 상업 디자인.",
     },
     params: { size: "1024x1792", quality: "high", style: "vivid", count: 1 },
   },
   {
     id: "interior-warm",
     category: "space",
-    title: { cn: "温暖室内空间", en: "Warm interior space" },
+    title: {
+      cn: "温暖室内空间",
+      en: "Warm interior space",
+      jp: "温かみのある室内空間",
+      ko: "따뜻한 실내 공간",
+    },
     description: {
       cn: "适合装修、家居、民宿视觉。",
       en: "For interior, home, and hospitality visuals.",
+      jp: "インテリア、住まい、宿泊施設のビジュアル向け。",
+      ko: "인테리어, 홈, 숙박 공간 비주얼에 적합합니다.",
     },
     prompt: {
       cn: "温暖现代室内空间，真实摄影风格，自然采光，木质与织物材质细腻，空间整洁舒适，生活气息，高级家居杂志质感",
       en: "Warm modern interior space, realistic photography, natural daylight, refined wood and fabric textures, tidy and comfortable, lived-in atmosphere, premium home magazine look",
+      jp: "温かみのあるモダンな室内空間。リアルな写真スタイル、自然光、繊細な木材と布の質感、整って快適な空間、暮らしの気配、高級インテリア雑誌のような質感。",
+      ko: "따뜻하고 현대적인 실내 공간. 사실적인 사진 스타일, 자연 채광, 섬세한 목재와 패브릭 질감, 정돈되고 편안한 공간, 생활감과 고급 홈 매거진 같은 분위기.",
     },
     params: {
       size: "1536x1024",
@@ -1342,14 +1695,23 @@ const IMAGE_PROMPT_TEMPLATES: ImagePromptTemplate[] = [
   {
     id: "guofeng-illustration",
     category: "illustration",
-    title: { cn: "国风插画", en: "Chinese-style illustration" },
+    title: {
+      cn: "国风插画",
+      en: "Chinese-style illustration",
+      jp: "中国風イラスト",
+      ko: "중국풍 일러스트",
+    },
     description: {
       cn: "适合头像、海报、节日视觉。",
       en: "For avatars, posters, and festival visuals.",
+      jp: "アイコン、ポスター、季節イベントのビジュアル向け。",
+      ko: "프로필, 포스터, 시즌/행사 비주얼에 적합합니다.",
     },
     prompt: {
       cn: "精致国风插画，东方美学，细腻线条，柔和色彩，云纹与山水元素，画面有留白，高级插画质感，适合中文主题设计",
       en: "Refined Chinese-style illustration, eastern aesthetics, delicate linework, soft colors, cloud and landscape elements, elegant negative space, premium illustration quality for Chinese-themed design",
+      jp: "精緻な中国風イラスト。東洋美学、繊細な線、柔らかな色彩、雲文様と山水要素、余白のある構図、高級感のあるイラスト質感。中国風テーマのデザイン向け。",
+      ko: "정교한 중국풍 일러스트. 동양적 미감, 섬세한 선, 부드러운 색감, 구름 무늬와 산수 요소, 여백이 있는 화면, 고급스러운 일러스트 질감. 중국풍 테마 디자인에 적합합니다.",
     },
     params: {
       size: "1024x1024",
@@ -1364,14 +1726,23 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
   {
     id: COLLABORATION_AGENT_ID,
     category: "collaboration",
-    title: { cn: "多专家协作", en: "Multi-expert collaboration" },
+    title: {
+      cn: "多专家协作",
+      en: "Multi-expert collaboration",
+      jp: "複数専門家の協働",
+      ko: "다중 전문가 협업",
+    },
     description: {
       cn: "用产品、技术、运营、风控等多个视角共同拆解问题。",
       en: "Break down a task through product, engineering, operations, and risk perspectives.",
+      jp: "プロダクト、技術、運用、リスク管理など複数の視点で課題を分解します。",
+      ko: "제품, 기술, 운영, 리스크 관점으로 문제를 함께 분해합니다.",
     },
     personality: {
       cn: "多视角、先分工、再汇总",
       en: "Multi-perspective, structured, decisive",
+      jp: "多角的、役割分担、最後に統合",
+      ko: "다각도, 역할 분담, 최종 정리",
     },
     systemPrompt: {
       cn: "你是一个多专家协作组，但不要假装有后台多智能体编排。请在单次回答中模拟多个专业视角协同：产品专家负责用户场景和优先级，技术专家负责实现路径和风险，运营专家负责增长、留存和话术，风控/客服专家负责异常、投诉、合规和兜底。先用简短小节列出各专家判断，再汇总成可执行方案、优先级、验收标准和下一步。用户要求简单回答时保持简洁，不要为了展示协作而冗长。",
@@ -1380,86 +1751,159 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
     starter: {
       cn: "请用多专家协作方式帮我分析：",
       en: "Analyze this with multi-expert collaboration:",
+      jp: "複数専門家の協働方式で分析してください：",
+      ko: "다중 전문가 협업 방식으로 분석해 주세요:",
     },
   },
   {
     id: "writing-editor",
     category: "writing",
-    title: { cn: "写作润色专家", en: "Writing editor" },
+    title: {
+      cn: "写作润色专家",
+      en: "Writing editor",
+      jp: "文章校正エディター",
+      ko: "글쓰기 다듬기 전문가",
+    },
     description: {
       cn: "改写、润色、总结、标题优化。",
       en: "Rewrite, polish, summarize, and improve titles.",
+      jp: "書き換え、校正、要約、タイトル改善。",
+      ko: "문장 수정, 다듬기, 요약, 제목 개선.",
     },
     personality: {
       cn: "清晰、克制、有表达力",
       en: "Clear, restrained, expressive",
+      jp: "明快、控えめ、表現力がある",
+      ko: "명확하고 절제되며 표현력 있음",
     },
     systemPrompt: {
       cn: "你是写作润色专家。先判断用户要的是润色、改写、总结、扩写还是标题方案；保留原意和事实，去掉空话，增强结构、节奏和可读性。必要时给出 2-3 个不同风格版本，并说明差异。",
       en: "You are a writing editor. First infer whether the user needs polishing, rewriting, summarizing, expanding, or title ideas. Preserve intent and facts, remove filler, improve structure and readability, and offer 2-3 style variants when useful.",
     },
-    starter: { cn: "把下面这段内容润色得更自然：", en: "Polish this text:" },
+    starter: {
+      cn: "把下面这段内容润色得更自然：",
+      en: "Polish this text:",
+      jp: "次の文章を自然に整えてください：",
+      ko: "아래 문장을 더 자연스럽게 다듬어 주세요:",
+    },
   },
   {
     id: "code-engineer",
     category: "code",
-    title: { cn: "代码工程师", en: "Software engineer" },
+    title: {
+      cn: "代码工程师",
+      en: "Software engineer",
+      jp: "ソフトウェアエンジニア",
+      ko: "소프트웨어 엔지니어",
+    },
     description: {
       cn: "排查报错、解释代码、生成实现方案。",
       en: "Debug errors, explain code, and plan implementations.",
+      jp: "エラー調査、コード説明、実装計画の作成。",
+      ko: "오류 분석, 코드 설명, 구현 계획 작성.",
     },
     personality: {
       cn: "严谨、直接、可执行",
       en: "Rigorous, direct, actionable",
+      jp: "厳密、率直、実行可能",
+      ko: "엄밀하고 직접적이며 실행 가능",
     },
     systemPrompt: {
       cn: "你是资深软件工程师。先定位问题本质和风险，再给最小可行修复、排查命令、代码示例和验证方法。遇到信息不足时明确假设；不要编造不存在的接口、日志或环境。",
       en: "You are a senior software engineer. Identify the core issue and risk first, then provide the smallest viable fix, diagnostic commands, code examples, and verification steps. State assumptions when context is missing; do not invent APIs, logs, or environments.",
     },
-    starter: { cn: "帮我排查这个问题：", en: "Help me debug this issue:" },
+    starter: {
+      cn: "帮我排查这个问题：",
+      en: "Help me debug this issue:",
+      jp: "この問題を調査してください：",
+      ko: "이 문제를 디버그해 주세요:",
+    },
   },
   {
     id: "code-reviewer",
     category: "code",
-    title: { cn: "代码审查专家", en: "Code reviewer" },
+    title: {
+      cn: "代码审查专家",
+      en: "Code reviewer",
+      jp: "コードレビュー専門家",
+      ko: "코드 리뷰 전문가",
+    },
     description: {
       cn: "找缺陷、回归风险和测试缺口。",
       en: "Find defects, regressions, and test gaps.",
+      jp: "欠陥、回帰リスク、テスト不足を見つけます。",
+      ko: "결함, 회귀 위험, 테스트 공백을 찾습니다.",
     },
-    personality: { cn: "挑剔、证据优先", en: "Exacting, evidence-first" },
+    personality: {
+      cn: "挑剔、证据优先",
+      en: "Exacting, evidence-first",
+      jp: "厳格、証拠優先",
+      ko: "꼼꼼하고 증거 우선",
+    },
     systemPrompt: {
       cn: "你是代码审查专家。优先指出会导致线上故障、数据错误、安全风险、性能退化或兼容性问题的缺陷。结论要按严重程度排序，并给出具体修复建议和需要补充的测试。没有发现问题时明确说明残余风险。",
       en: "You are a code reviewer. Prioritize issues that can cause production failures, data bugs, security risk, performance regressions, or compatibility problems. Order findings by severity, give concrete fixes and missing tests, and state residual risk when no issue is found.",
     },
-    starter: { cn: "帮我审查这段改动：", en: "Review this change:" },
+    starter: {
+      cn: "帮我审查这段改动：",
+      en: "Review this change:",
+      jp: "この変更をレビューしてください：",
+      ko: "이 변경 사항을 리뷰해 주세요:",
+    },
   },
   {
     id: "ops-growth",
     category: "operation",
-    title: { cn: "运营策划专家", en: "Growth operator" },
+    title: {
+      cn: "运营策划专家",
+      en: "Growth operator",
+      jp: "グロース運用プランナー",
+      ko: "성장 운영 기획자",
+    },
     description: {
       cn: "活动、公告、用户反馈和增长方案。",
       en: "Campaigns, announcements, feedback, and growth plans.",
+      jp: "キャンペーン、告知、ユーザーフィードバック、成長施策。",
+      ko: "캠페인, 공지, 사용자 피드백, 성장 전략.",
     },
     personality: {
       cn: "目标导向、重执行",
       en: "Goal-oriented, execution-minded",
+      jp: "目標志向、実行重視",
+      ko: "목표 지향, 실행 중심",
     },
     systemPrompt: {
       cn: "你是运营策划专家。围绕目标用户、触达场景、转化路径、内容话术、活动规则、数据指标和执行排期输出方案。方案要能直接交给团队执行，避免泛泛而谈。",
       en: "You are a growth operator. Build plans around audience, touchpoints, conversion path, copy, campaign rules, metrics, and rollout schedule. Make the result directly executable, not generic.",
     },
-    starter: { cn: "帮我设计一个运营方案：", en: "Design a growth plan for:" },
+    starter: {
+      cn: "帮我设计一个运营方案：",
+      en: "Design a growth plan for:",
+      jp: "運用施策を設計してください：",
+      ko: "운영/성장 방안을 설계해 주세요:",
+    },
   },
   {
     id: "support-agent",
     category: "support",
-    title: { cn: "客服回复专家", en: "Support agent" },
+    title: {
+      cn: "客服回复专家",
+      en: "Support agent",
+      jp: "サポート返信専門家",
+      ko: "고객지원 답변 전문가",
+    },
     description: {
       cn: "生成耐心、清楚、能安抚用户的回复。",
       en: "Creates clear, calm support replies.",
+      jp: "丁寧で分かりやすく、ユーザーを安心させる返信を作成します。",
+      ko: "차분하고 명확하며 사용자를 안심시키는 답변을 만듭니다.",
     },
-    personality: { cn: "耐心、负责、不推诿", en: "Patient, accountable, calm" },
+    personality: {
+      cn: "耐心、负责、不推诿",
+      en: "Patient, accountable, calm",
+      jp: "丁寧、責任感、言い訳しない",
+      ko: "인내심, 책임감, 회피하지 않음",
+    },
     systemPrompt: {
       cn: "你是客服回复专家。先复述并确认用户问题，再给清楚步骤、预计处理时间、补偿或后续跟进方式。语气要真诚负责，不甩锅，不承诺无法保证的结果。",
       en: "You are a support agent. Acknowledge and restate the issue, then provide clear steps, expected handling time, compensation or follow-up when appropriate. Be sincere and accountable without overpromising.",
@@ -1467,34 +1911,62 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
     starter: {
       cn: "帮我回复这个用户反馈：",
       en: "Help me reply to this user:",
+      jp: "このユーザーフィードバックへの返信を作ってください：",
+      ko: "이 사용자 피드백에 대한 답변을 작성해 주세요:",
     },
   },
   {
     id: "product-manager",
     category: "product",
-    title: { cn: "产品经理", en: "Product manager" },
+    title: {
+      cn: "产品经理",
+      en: "Product manager",
+      jp: "プロダクトマネージャー",
+      ko: "프로덕트 매니저",
+    },
     description: {
       cn: "需求拆解、优先级、原型流程。",
       en: "Requirement breakdown, priority, and flows.",
+      jp: "要件分解、優先順位、プロトタイプ導線。",
+      ko: "요구사항 분해, 우선순위, 프로토타입 흐름.",
     },
-    personality: { cn: "结构化、关注用户体验", en: "Structured, UX-aware" },
+    personality: {
+      cn: "结构化、关注用户体验",
+      en: "Structured, UX-aware",
+      jp: "構造的、UX 重視",
+      ko: "구조적, 사용자 경험 중심",
+    },
     systemPrompt: {
       cn: "你是产品经理。把用户想法拆成目标、目标用户、核心场景、功能范围、交互流程、异常状态、验收标准、数据指标和迭代路线。遇到体验冲突时优先保护核心用户体验。",
       en: "You are a product manager. Break ideas into goals, target users, core scenarios, scope, interaction flow, failure states, acceptance criteria, metrics, and iteration path. When tradeoffs conflict, protect the core user experience.",
     },
-    starter: { cn: "帮我拆解这个需求：", en: "Break down this requirement:" },
+    starter: {
+      cn: "帮我拆解这个需求：",
+      en: "Break down this requirement:",
+      jp: "この要件を分解してください：",
+      ko: "이 요구사항을 분해해 주세요:",
+    },
   },
   {
     id: "prompt-architect",
     category: "ai",
-    title: { cn: "提示词架构师", en: "Prompt architect" },
+    title: {
+      cn: "提示词架构师",
+      en: "Prompt architect",
+      jp: "プロンプト設計者",
+      ko: "프롬프트 설계자",
+    },
     description: {
       cn: "智能体、人设、工作流提示词。",
       en: "Agent, persona, and workflow prompts.",
+      jp: "エージェント、ペルソナ、ワークフロー用プロンプト。",
+      ko: "에이전트, 페르소나, 워크플로 프롬프트.",
     },
     personality: {
       cn: "精准、可复用、重边界",
       en: "Precise, reusable, boundary-aware",
+      jp: "正確、再利用可能、境界重視",
+      ko: "정확하고 재사용 가능하며 경계가 명확함",
     },
     systemPrompt: {
       cn: "你是提示词架构师。根据任务目标设计可复用提示词，包含角色、目标、输入要求、工作步骤、输出格式、边界约束和失败处理。提示词要简洁但完整，并给出测试样例。",
@@ -1503,19 +1975,30 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
     starter: {
       cn: "帮我设计一个智能体提示词：",
       en: "Design an agent prompt for:",
+      jp: "エージェント用プロンプトを設計してください：",
+      ko: "에이전트 프롬프트를 설계해 주세요:",
     },
   },
   {
     id: "image-director",
     category: "ai",
-    title: { cn: "生图导演", en: "Image director" },
+    title: {
+      cn: "生图导演",
+      en: "Image director",
+      jp: "画像生成ディレクター",
+      ko: "이미지 생성 디렉터",
+    },
     description: {
       cn: "把想法变成高质量生图提示词。",
       en: "Turn ideas into high-quality image prompts.",
+      jp: "アイデアを高品質な画像生成プロンプトに変換します。",
+      ko: "아이디어를 고품질 이미지 생성 프롬프트로 바꿉니다.",
     },
     personality: {
       cn: "审美明确、细节丰富",
       en: "Visual, specific, taste-led",
+      jp: "美意識が明確、具体的、細部重視",
+      ko: "미감이 분명하고 구체적이며 디테일 풍부",
     },
     systemPrompt: {
       cn: "你是生图导演。把用户想法转成可直接用于图像模型的提示词，明确主体、场景、构图、镜头、光线、材质、风格、色彩、比例和负面约束。默认输出中文提示词，可附英文版。",
@@ -1524,32 +2007,63 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
     starter: {
       cn: "帮我优化这个生图提示词：",
       en: "Improve this image prompt:",
+      jp: "この画像生成プロンプトを改善してください：",
+      ko: "이 이미지 생성 프롬프트를 개선해 주세요:",
     },
   },
   {
     id: "data-analyst",
     category: "analysis",
-    title: { cn: "数据分析师", en: "Data analyst" },
+    title: {
+      cn: "数据分析师",
+      en: "Data analyst",
+      jp: "データアナリスト",
+      ko: "데이터 분석가",
+    },
     description: {
       cn: "指标拆解、表格分析、结论提炼。",
       en: "Metrics, tables, and insight extraction.",
+      jp: "指標分解、表分析、洞察抽出。",
+      ko: "지표 분해, 표 분석, 인사이트 도출.",
     },
-    personality: { cn: "客观、重证据", en: "Objective, evidence-led" },
+    personality: {
+      cn: "客观、重证据",
+      en: "Objective, evidence-led",
+      jp: "客観的、証拠重視",
+      ko: "객관적, 증거 중심",
+    },
     systemPrompt: {
       cn: "你是数据分析师。先明确指标口径和样本范围，再做趋势、结构、异常和原因假设分析。输出结论、证据、可能原因、验证办法和下一步动作。不要把相关性说成因果。",
       en: "You are a data analyst. Clarify metric definitions and sample scope, then analyze trends, composition, anomalies, and hypotheses. Output conclusions, evidence, possible causes, validation steps, and next actions. Do not present correlation as causation.",
     },
-    starter: { cn: "帮我分析这些数据：", en: "Analyze this data:" },
+    starter: {
+      cn: "帮我分析这些数据：",
+      en: "Analyze this data:",
+      jp: "このデータを分析してください：",
+      ko: "이 데이터를 분석해 주세요:",
+    },
   },
   {
     id: "sre-operator",
     category: "operation",
-    title: { cn: "运维排障专家", en: "SRE troubleshooter" },
+    title: {
+      cn: "运维排障专家",
+      en: "SRE troubleshooter",
+      jp: "SRE 障害対応専門家",
+      ko: "SRE 장애 대응 전문가",
+    },
     description: {
       cn: "服务异常、日志、监控和容量方案。",
       en: "Incidents, logs, monitoring, and capacity.",
+      jp: "サービス障害、ログ、監視、キャパシティ設計。",
+      ko: "서비스 장애, 로그, 모니터링, 용량 계획.",
     },
-    personality: { cn: "冷静、分层排查", en: "Calm, layered diagnosis" },
+    personality: {
+      cn: "冷静、分层排查",
+      en: "Calm, layered diagnosis",
+      jp: "冷静、段階的な切り分け",
+      ko: "차분하고 단계적으로 진단",
+    },
     systemPrompt: {
       cn: "你是运维排障专家。按现象、影响范围、最近变更、依赖链路、日志证据、临时止血、根因定位和长期改进来分析。优先保障可用性和数据安全。",
       en: "You are an SRE troubleshooter. Analyze symptoms, blast radius, recent changes, dependencies, logs, mitigation, root cause, and long-term improvements. Prioritize availability and data safety.",
@@ -1557,17 +2071,31 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
     starter: {
       cn: "帮我排查这个服务异常：",
       en: "Troubleshoot this incident:",
+      jp: "このサービス障害を調査してください：",
+      ko: "이 서비스 장애를 진단해 주세요:",
     },
   },
   {
     id: "finance-advisor",
     category: "business",
-    title: { cn: "商业财务助手", en: "Business finance" },
+    title: {
+      cn: "商业财务助手",
+      en: "Business finance",
+      jp: "ビジネス財務アシスタント",
+      ko: "비즈니스 재무 도우미",
+    },
     description: {
       cn: "定价、成本、毛利和套餐设计。",
       en: "Pricing, cost, margin, and plans.",
+      jp: "価格、コスト、粗利、プラン設計。",
+      ko: "가격, 비용, 마진, 요금제 설계.",
     },
-    personality: { cn: "现实、算账清楚", en: "Practical, numbers-first" },
+    personality: {
+      cn: "现实、算账清楚",
+      en: "Practical, numbers-first",
+      jp: "現実的、数字優先",
+      ko: "현실적이고 숫자 중심",
+    },
     systemPrompt: {
       cn: "你是商业财务助手。围绕成本结构、毛利、现金流、定价梯度、用户分层和风险假设做分析。输出可计算公式、示例表格和决策建议，提醒不确定参数。",
       en: "You are a business finance assistant. Analyze cost structure, margin, cash flow, pricing tiers, user segments, and risk assumptions. Provide formulas, example tables, decisions, and uncertain parameters.",
@@ -1575,40 +2103,73 @@ const CHAT_AGENT_TEMPLATES: ChatAgentTemplate[] = [
     starter: {
       cn: "帮我算一下这个定价方案：",
       en: "Analyze this pricing plan:",
+      jp: "この価格設計を分析してください：",
+      ko: "이 가격 정책을 분석해 주세요:",
     },
   },
   {
     id: "translator",
     category: "translation",
-    title: { cn: "中英翻译专家", en: "CN/EN translator" },
+    title: {
+      cn: "中英翻译专家",
+      en: "CN/EN translator",
+      jp: "中英翻訳専門家",
+      ko: "중영 번역 전문가",
+    },
     description: {
       cn: "自然翻译、双语润色、跨境表达。",
       en: "Natural translation and bilingual polishing.",
+      jp: "自然な翻訳、二言語校正、越境表現。",
+      ko: "자연스러운 번역, 이중언어 다듬기, 글로벌 표현.",
     },
     personality: {
       cn: "自然、准确、懂语境",
       en: "Natural, accurate, contextual",
+      jp: "自然、正確、文脈を理解",
+      ko: "자연스럽고 정확하며 맥락을 이해",
     },
     systemPrompt: {
       cn: "你是中英翻译专家。根据语境自然翻译，不逐字硬翻，保留专业术语、品牌名、变量名和格式。用户未指定时，中文翻英文、英文翻中文；必要时给正式版和口语版。",
       en: "You are a Chinese-English translator. Translate naturally based on context, avoid literal phrasing, and preserve domain terms, brand names, variable names, and formatting. If direction is unspecified, translate Chinese to English and English to Chinese; include formal and conversational variants when useful.",
     },
-    starter: { cn: "帮我翻译：", en: "Translate this:" },
+    starter: {
+      cn: "帮我翻译：",
+      en: "Translate this:",
+      jp: "これを翻訳してください：",
+      ko: "이 내용을 번역해 주세요:",
+    },
   },
   {
     id: "legal-reference",
     category: "legal",
-    title: { cn: "法律参考助手", en: "Legal reference" },
+    title: {
+      cn: "法律参考助手",
+      en: "Legal reference",
+      jp: "法務参考アシスタント",
+      ko: "법률 참고 도우미",
+    },
     description: {
       cn: "合同、条款、风险点初步梳理。",
       en: "Initial review of contracts, terms, and risks.",
+      jp: "契約、条項、リスク点の初期整理。",
+      ko: "계약, 조항, 위험 요소를 1차로 정리합니다.",
     },
-    personality: { cn: "谨慎、边界清楚", en: "Careful, boundary-clear" },
+    personality: {
+      cn: "谨慎、边界清楚",
+      en: "Careful, boundary-clear",
+      jp: "慎重、境界が明確",
+      ko: "신중하고 경계가 명확함",
+    },
     systemPrompt: {
       cn: "你是法律参考助手。帮助用户梳理条款含义、风险点、缺失条款、谈判建议和需要咨询律师的问题。必须说明内容仅供参考，不替代律师意见；不要给确定性法律结论。",
       en: "You are a legal reference assistant. Help identify clause meaning, risks, missing terms, negotiation points, and questions for a lawyer. Always state this is informational and not legal advice; avoid definitive legal conclusions.",
     },
-    starter: { cn: "帮我看一下这段条款：", en: "Review this clause:" },
+    starter: {
+      cn: "帮我看一下这段条款：",
+      en: "Review this clause:",
+      jp: "この条項を確認してください：",
+      ko: "이 조항을 검토해 주세요:",
+    },
   },
 ];
 
@@ -1616,10 +2177,17 @@ const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
   {
     id: "document-summary",
     category: "document",
-    title: { cn: "文档总结", en: "Document summary" },
+    title: {
+      cn: "文档总结",
+      en: "Document summary",
+      jp: "文書要約",
+      ko: "문서 요약",
+    },
     description: {
       cn: "提炼长文、会议纪要、资料重点和待办。",
       en: "Extract key points, decisions, and todos from long text.",
+      jp: "長文、会議メモ、資料から要点とタスクを抽出します。",
+      ko: "긴 글, 회의록, 자료에서 핵심과 할 일을 추출합니다.",
     },
     instruction: {
       cn: "你正在使用“文档总结”技能。先识别文档主题、对象和上下文，再输出核心结论、关键证据、风险/疑问、待办事项和适合转发给团队的简短摘要。不要编造文档中不存在的信息。",
@@ -1629,17 +2197,31 @@ const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
       {
         cn: "总结这份会议记录并列出待办",
         en: "Summarize this meeting note and list todos",
+        jp: "この会議メモを要約してタスクを列挙してください",
+        ko: "이 회의록을 요약하고 할 일을 정리해 주세요",
       },
     ],
-    starter: { cn: "请总结下面这份文档：", en: "Summarize this document:" },
+    starter: {
+      cn: "请总结下面这份文档：",
+      en: "Summarize this document:",
+      jp: "次の文書を要約してください：",
+      ko: "아래 문서를 요약해 주세요:",
+    },
   },
   {
     id: "webpage-summary",
     category: "document",
-    title: { cn: "网页总结", en: "Webpage summary" },
+    title: {
+      cn: "网页总结",
+      en: "Webpage summary",
+      jp: "Web ページ要約",
+      ko: "웹페이지 요약",
+    },
     description: {
       cn: "把链接、网页摘录整理成重点和行动建议。",
       en: "Turn links or webpage excerpts into key points and next actions.",
+      jp: "リンクやページ抜粋を要点と次のアクションに整理します。",
+      ko: "링크나 웹페이지 발췌를 핵심과 다음 행동으로 정리합니다.",
     },
     instruction: {
       cn: "你正在使用“网页总结”技能。根据用户提供的链接说明或网页摘录进行整理；无法访问外部网页时要明确说明需要用户粘贴正文。输出页面主题、关键信息、适合谁看、可执行建议和需要核实的点。",
@@ -1649,20 +2231,31 @@ const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
       {
         cn: "总结这个网页适合我关注什么",
         en: "Summarize what matters from this webpage",
+        jp: "このページで注目すべき点を要約してください",
+        ko: "이 웹페이지에서 중요한 점을 요약해 주세요",
       },
     ],
     starter: {
       cn: "请总结这个网页/链接内容：",
       en: "Summarize this webpage/link:",
+      jp: "この Web ページ/リンク内容を要約してください：",
+      ko: "이 웹페이지/링크 내용을 요약해 주세요:",
     },
   },
   {
     id: "image-to-prompt",
     category: "image",
-    title: { cn: "图片转提示词", en: "Image to prompt" },
+    title: {
+      cn: "图片转提示词",
+      en: "Image to prompt",
+      jp: "画像からプロンプト",
+      ko: "이미지를 프롬프트로",
+    },
     description: {
       cn: "分析图片风格、主体、镜头和可复用生图 prompt。",
       en: "Analyze an image and produce reusable generation prompts.",
+      jp: "画像のスタイル、主体、構図を分析し、再利用できる生成プロンプトにします。",
+      ko: "이미지의 스타일, 주제, 구도를 분석해 재사용 가능한 생성 프롬프트로 만듭니다.",
     },
     instruction: {
       cn: "你正在使用“图片转提示词”技能。根据用户上传或描述的图片，拆解主体、场景、构图、镜头、光线、色彩、材质、风格、负面约束，并给出中文完整 prompt 和英文完整 prompt。不要声称看到了未提供的图片细节。",
@@ -1672,37 +2265,65 @@ const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
       {
         cn: "把这张图转成可复用生图提示词",
         en: "Turn this image into a reusable prompt",
+        jp: "この画像を再利用できる画像生成プロンプトにしてください",
+        ko: "이 이미지를 재사용 가능한 이미지 생성 프롬프트로 바꿔 주세요",
       },
     ],
     starter: {
       cn: "请把这张图/这个画面转成提示词：",
       en: "Turn this image/scene into a prompt:",
+      jp: "この画像/シーンをプロンプトにしてください：",
+      ko: "이 이미지/장면을 프롬프트로 바꿔 주세요:",
     },
   },
   {
     id: "prompt-polish",
     category: "image",
-    title: { cn: "生图提示词优化", en: "Image prompt polish" },
+    title: {
+      cn: "生图提示词优化",
+      en: "Image prompt polish",
+      jp: "画像プロンプト改善",
+      ko: "이미지 프롬프트 개선",
+    },
     description: {
       cn: "把简单想法扩写成完整、高质量、通用的生图提示词。",
       en: "Expand rough ideas into complete model-agnostic image prompts.",
+      jp: "ラフなアイデアを、汎用的で高品質な画像生成プロンプトに広げます。",
+      ko: "간단한 아이디어를 모델에 덜 종속적인 고품질 이미지 프롬프트로 확장합니다.",
     },
     instruction: {
       cn: "你正在使用“生图提示词优化”技能。保留用户原意，不绑定特定模型；补全主体、场景、构图、镜头、光线、色彩、材质、风格、比例、负面约束和参考图建议。输出中文 prompt、英文 prompt、推荐参数和可选变体。",
       en: "You are using the Image Prompt Polish skill. Preserve user intent and avoid binding to one model. Add subject, scene, composition, camera, lighting, color, material, style, ratio, negative constraints, and reference-image advice. Output Chinese prompt, English prompt, suggested parameters, and optional variants.",
     },
     examples: [
-      { cn: "优化这个生图提示词，让它更完整", en: "Polish this image prompt" },
+      {
+        cn: "优化这个生图提示词，让它更完整",
+        en: "Polish this image prompt",
+        jp: "この画像プロンプトをより完成度高くしてください",
+        ko: "이 이미지 프롬프트를 더 완성도 있게 다듬어 주세요",
+      },
     ],
-    starter: { cn: "请优化这个生图提示词：", en: "Polish this image prompt:" },
+    starter: {
+      cn: "请优化这个生图提示词：",
+      en: "Polish this image prompt:",
+      jp: "この画像プロンプトを改善してください：",
+      ko: "이 이미지 프롬프트를 개선해 주세요:",
+    },
   },
   {
     id: "ecommerce-copy",
     category: "business",
-    title: { cn: "电商文案", en: "E-commerce copy" },
+    title: {
+      cn: "电商文案",
+      en: "E-commerce copy",
+      jp: "EC コピー",
+      ko: "커머스 문구",
+    },
     description: {
       cn: "生成商品标题、卖点、详情页结构和投放文案。",
       en: "Generate titles, selling points, product pages, and ad copy.",
+      jp: "商品タイトル、訴求点、詳細ページ構成、広告コピーを作成します。",
+      ko: "상품 제목, 판매 포인트, 상세 페이지 구조와 광고 문구를 생성합니다.",
     },
     instruction: {
       cn: "你正在使用“电商文案”技能。先确认商品、目标人群、平台和核心卖点；输出搜索友好标题、3-5 个主卖点、详情页结构、短视频/信息流文案和风险词提醒。不要夸大功效，不要写无法证明的绝对化承诺。",
@@ -1712,20 +2333,31 @@ const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
       {
         cn: "帮我写这个商品的主图和详情页文案",
         en: "Write listing copy for this product",
+        jp: "この商品のメイン画像と詳細ページコピーを書いてください",
+        ko: "이 상품의 대표 이미지와 상세 페이지 문구를 작성해 주세요",
       },
     ],
     starter: {
       cn: "请为这个商品生成电商文案：",
       en: "Create e-commerce copy for this product:",
+      jp: "この商品の EC コピーを作成してください：",
+      ko: "이 상품의 커머스 문구를 작성해 주세요:",
     },
   },
   {
     id: "xiaohongshu-note",
     category: "marketing",
-    title: { cn: "小红书笔记", en: "Social note" },
+    title: {
+      cn: "小红书笔记",
+      en: "Social note",
+      jp: "SNS 投稿ノート",
+      ko: "소셜 노트",
+    },
     description: {
       cn: "生成种草笔记、标题、封面文字和评论引导。",
       en: "Create social note posts, titles, cover text, and engagement hooks.",
+      jp: "SNS 投稿、タイトル、カバー文言、コメント誘導を作成します。",
+      ko: "소셜 게시글, 제목, 커버 문구와 댓글 유도 문장을 만듭니다.",
     },
     instruction: {
       cn: "你正在使用“小红书笔记”技能。根据用户目标输出 5 个标题、正文结构、口语化正文、封面文字建议、话题标签和评论区引导。语气自然可信，避免假体验、虚假背书和过度营销。",
@@ -1735,103 +2367,201 @@ const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
       {
         cn: "写一篇适合小红书的种草笔记",
         en: "Write a social recommendation note",
+        jp: "SNS 向けのおすすめ投稿を書いてください",
+        ko: "소셜 플랫폼에 맞는 추천 글을 써 주세요",
       },
     ],
-    starter: { cn: "请写一篇小红书笔记：", en: "Write a social note:" },
+    starter: {
+      cn: "请写一篇小红书笔记：",
+      en: "Write a social note:",
+      jp: "SNS 投稿を書いてください：",
+      ko: "소셜 노트를 작성해 주세요:",
+    },
   },
   {
     id: "contract-review",
     category: "legal",
-    title: { cn: "合同风险初筛", en: "Contract risk scan" },
+    title: {
+      cn: "合同风险初筛",
+      en: "Contract risk scan",
+      jp: "契約リスク一次確認",
+      ko: "계약 리스크 1차 점검",
+    },
     description: {
       cn: "梳理合同重点、风险条款、缺失条款和谈判建议。",
       en: "Scan contract clauses, risks, missing terms, and negotiation points.",
+      jp: "契約の要点、リスク条項、不足条項、交渉提案を整理します。",
+      ko: "계약 핵심, 위험 조항, 누락 조항과 협상 제안을 정리합니다.",
     },
     instruction: {
       cn: "你正在使用“合同风险初筛”技能。内容仅供参考，不替代律师意见。按条款含义、风险等级、可能后果、建议修改、需补充信息输出；对无法判断的法律事实明确标注需专业确认。",
       en: "You are using the Contract Risk Scan skill. This is informational and not legal advice. Output clause meaning, risk level, possible consequence, suggested revision, and missing information. Mark legal uncertainties that require professional review.",
     },
     examples: [
-      { cn: "帮我检查这份合同有哪些风险", en: "Scan this contract for risks" },
+      {
+        cn: "帮我检查这份合同有哪些风险",
+        en: "Scan this contract for risks",
+        jp: "この契約のリスクを確認してください",
+        ko: "이 계약의 위험 요소를 점검해 주세요",
+      },
     ],
-    starter: { cn: "请初步检查这份合同：", en: "Scan this contract:" },
+    starter: {
+      cn: "请初步检查这份合同：",
+      en: "Scan this contract:",
+      jp: "この契約を一次確認してください：",
+      ko: "이 계약을 1차로 검토해 주세요:",
+    },
   },
   {
     id: "customer-reply",
     category: "support",
-    title: { cn: "客服回复", en: "Support reply" },
+    title: {
+      cn: "客服回复",
+      en: "Support reply",
+      jp: "サポート返信",
+      ko: "고객지원 답변",
+    },
     description: {
       cn: "把用户投诉、问题和售后情况转成清楚负责的回复。",
       en: "Turn complaints or issues into clear support replies.",
+      jp: "苦情、問い合わせ、アフター対応を分かりやすく責任ある返信にします。",
+      ko: "불만, 문의, 사후 처리 상황을 명확하고 책임감 있는 답변으로 바꿉니다.",
     },
     instruction: {
       cn: "你正在使用“客服回复”技能。先共情并复述问题，再给处理步骤、预计时间、补充信息要求和后续跟进方式。语气负责，不甩锅，不承诺无法保证的结果。",
       en: "You are using the Support Reply skill. Acknowledge and restate the issue, then provide steps, expected timing, requested details, and follow-up. Be accountable without overpromising.",
     },
     examples: [
-      { cn: "帮我回复这个用户投诉", en: "Help me reply to this complaint" },
+      {
+        cn: "帮我回复这个用户投诉",
+        en: "Help me reply to this complaint",
+        jp: "このユーザー苦情への返信を作ってください",
+        ko: "이 사용자 불만에 대한 답변을 작성해 주세요",
+      },
     ],
-    starter: { cn: "请帮我回复这个用户：", en: "Help me reply to this user:" },
+    starter: {
+      cn: "请帮我回复这个用户：",
+      en: "Help me reply to this user:",
+      jp: "このユーザーへの返信を作ってください：",
+      ko: "이 사용자에게 답변해 주세요:",
+    },
   },
   {
     id: "code-debug",
     category: "code",
-    title: { cn: "代码排错", en: "Code debugging" },
+    title: {
+      cn: "代码排错",
+      en: "Code debugging",
+      jp: "コードデバッグ",
+      ko: "코드 디버깅",
+    },
     description: {
       cn: "分析报错、定位原因、给修复步骤和验证命令。",
       en: "Analyze errors, locate causes, and provide fixes and verification.",
+      jp: "エラーを分析し、原因、修正手順、検証コマンドを提示します。",
+      ko: "오류를 분석하고 원인, 수정 단계, 검증 명령을 제공합니다.",
     },
     instruction: {
       cn: "你正在使用“代码排错”技能。先复述现象和环境，按最可能原因排序，给排查命令、最小修复、回归风险和验证步骤。缺少日志时明确需要哪些信息，不编造结果。",
       en: "You are using the Code Debugging skill. Restate symptoms and environment, rank likely causes, give diagnostic commands, minimal fix, regression risks, and verification. Ask for missing logs instead of inventing results.",
     },
-    examples: [{ cn: "帮我排查这段报错", en: "Debug this error" }],
-    starter: { cn: "请帮我排查这个报错：", en: "Debug this error:" },
+    examples: [
+      {
+        cn: "帮我排查这段报错",
+        en: "Debug this error",
+        jp: "このエラーを調査してください",
+        ko: "이 오류를 디버그해 주세요",
+      },
+    ],
+    starter: {
+      cn: "请帮我排查这个报错：",
+      en: "Debug this error:",
+      jp: "このエラーを調査してください：",
+      ko: "이 오류를 디버그해 주세요:",
+    },
   },
   {
     id: "study-plan",
     category: "education",
-    title: { cn: "学习计划", en: "Study plan" },
+    title: {
+      cn: "学习计划",
+      en: "Study plan",
+      jp: "学習計画",
+      ko: "학습 계획",
+    },
     description: {
       cn: "根据目标、基础和时间制定学习路径。",
       en: "Create a learning path from goals, baseline, and schedule.",
+      jp: "目標、現在のレベル、時間に合わせて学習ルートを作ります。",
+      ko: "목표, 현재 수준, 시간에 맞춘 학습 경로를 만듭니다.",
     },
     instruction: {
       cn: "你正在使用“学习计划”技能。先判断用户目标、基础、可投入时间和截止日期；输出阶段目标、每日/每周安排、练习任务、检查点和调整建议。计划要可执行，不堆砌资源。",
       en: "You are using the Study Plan skill. Identify goal, baseline, available time, and deadline. Output stages, daily/weekly schedule, practice tasks, checkpoints, and adjustment advice. Keep it executable, not resource-heavy.",
     },
     examples: [
-      { cn: "给我制定一个 30 天学习计划", en: "Create a 30-day study plan" },
+      {
+        cn: "给我制定一个 30 天学习计划",
+        en: "Create a 30-day study plan",
+        jp: "30 日間の学習計画を作ってください",
+        ko: "30일 학습 계획을 만들어 주세요",
+      },
     ],
-    starter: { cn: "请给我制定学习计划：", en: "Create a study plan:" },
+    starter: {
+      cn: "请给我制定学习计划：",
+      en: "Create a study plan:",
+      jp: "学習計画を作成してください：",
+      ko: "학습 계획을 만들어 주세요:",
+    },
   },
   {
     id: "meeting-minutes",
     category: "office",
-    title: { cn: "会议纪要", en: "Meeting minutes" },
+    title: {
+      cn: "会议纪要",
+      en: "Meeting minutes",
+      jp: "議事録",
+      ko: "회의록",
+    },
     description: {
       cn: "把会议内容整理成决策、待办、负责人和时间点。",
       en: "Convert meeting text into decisions, todos, owners, and dates.",
+      jp: "会議内容を決定事項、タスク、担当者、期限に整理します。",
+      ko: "회의 내용을 결정 사항, 할 일, 담당자, 일정으로 정리합니다.",
     },
     instruction: {
       cn: "你正在使用“会议纪要”技能。输出会议主题、参会角色、关键讨论、已确认决策、待办事项、负责人、截止时间和未决问题。未知负责人或时间要标注待确认。",
       en: "You are using the Meeting Minutes skill. Output topic, attendees/roles, key discussion, decisions, action items, owners, deadlines, and open questions. Mark unknown owners or dates as to-be-confirmed.",
     },
     examples: [
-      { cn: "整理这段会议录音转写", en: "Organize this meeting transcript" },
+      {
+        cn: "整理这段会议录音转写",
+        en: "Organize this meeting transcript",
+        jp: "この会議文字起こしを整理してください",
+        ko: "이 회의 녹취록을 정리해 주세요",
+      },
     ],
     starter: {
       cn: "请整理这段会议内容：",
       en: "Organize these meeting notes:",
+      jp: "この会議内容を整理してください：",
+      ko: "이 회의 내용을 정리해 주세요:",
     },
   },
   {
     id: "translation-localize",
     category: "translation",
-    title: { cn: "翻译本地化", en: "Translation localization" },
+    title: {
+      cn: "翻译本地化",
+      en: "Translation localization",
+      jp: "翻訳とローカライズ",
+      ko: "번역 및 현지화",
+    },
     description: {
       cn: "中英互译、润色、适配平台语气和目标用户。",
       en: "Translate and localize tone for platform and audience.",
+      jp: "翻訳、校正、媒体トーンと対象読者への調整。",
+      ko: "번역, 다듬기, 플랫폼 톤과 대상 독자에 맞춘 현지화.",
     },
     instruction: {
       cn: "你正在使用“翻译本地化”技能。保留专有名词、变量、格式和事实；根据目标地区和平台调整语气。默认给自然版，如有必要再给正式版和口语版，并说明关键取舍。",
@@ -1841,9 +2571,16 @@ const CHAT_SKILL_TEMPLATES: ChatSkillTemplate[] = [
       {
         cn: "把这段中文翻译成自然英文",
         en: "Translate this into natural English",
+        jp: "この文章を自然な英語に翻訳してください",
+        ko: "이 문장을 자연스러운 영어로 번역해 주세요",
       },
     ],
-    starter: { cn: "请翻译并本地化：", en: "Translate and localize:" },
+    starter: {
+      cn: "请翻译并本地化：",
+      en: "Translate and localize:",
+      jp: "翻訳してローカライズしてください：",
+      ko: "번역하고 현지화해 주세요:",
+    },
   },
 ];
 
@@ -1860,12 +2597,14 @@ const IMAGE_SIZE_OPTIONS = [
   { id: "4096x4096", tier: "4K", aspect: "1:1" },
 ];
 const MOBILE_FEEDBACK_CATEGORIES: MobileFeedbackCategory[] = [
+  "ai_content_report",
   "bug",
   "experience",
   "image",
   "chat",
   "payment",
   "account",
+  "account_deletion_request",
   "request",
   "other",
 ];
@@ -1879,15 +2618,47 @@ function fixedManagedBackendBaseUrl(config?: ClientBuildConfig) {
 function formatMoney(value?: number | string) {
   const numberValue =
     typeof value === "string" ? Number.parseFloat(value) : Number(value || 0);
-  return `¥${Number.isFinite(numberValue) ? numberValue.toFixed(2) : "0.00"}`;
+  return `$${Number.isFinite(numberValue) ? numberValue.toFixed(2) : "0.00"}`;
 }
 
 function useMobileText() {
-  return useMemo(() => getManagedMobileText(), []);
+  const [locale, setLocale] = useState<ManagedMobileLocale>(() =>
+    getManagedMobileLocale(),
+  );
+  useEffect(() => {
+    const refresh = () => setLocale(getManagedMobileLocale());
+    window.addEventListener("jisudeng:mobile-locale-change", refresh);
+    return () =>
+      window.removeEventListener("jisudeng:mobile-locale-change", refresh);
+  }, []);
+  useEffect(() => {
+    document.documentElement.lang =
+      locale === "cn"
+        ? "zh-CN"
+        : locale === "jp"
+        ? "ja-JP"
+        : locale === "ko"
+        ? "ko-KR"
+        : "en-US";
+  }, [locale]);
+  return useMemo(() => getManagedMobileText(locale), [locale]);
+}
+
+function mobileTextLocale(text: ManagedMobileText): ManagedMobileLocale {
+  const locale = text.dateLocale.toLowerCase();
+  if (locale.startsWith("zh")) return "cn";
+  if (locale.startsWith("ja")) return "jp";
+  if (locale.startsWith("ko")) return "ko";
+  return "en";
+}
+
+function isChineseMobileText(text: ManagedMobileText) {
+  return mobileTextLocale(text) === "cn";
 }
 
 function localizedValue(value: LocalizedString, text: ManagedMobileText) {
-  return text.dateLocale.toLowerCase().startsWith("zh") ? value.cn : value.en;
+  const locale = mobileTextLocale(text);
+  return value[locale] || value.en || value.cn;
 }
 
 function imagePromptText(
@@ -1899,7 +2670,15 @@ function imagePromptText(
   const en = template.prompt.en;
   if (mode === "zh") return zh;
   if (mode === "en") return en || zh;
-  if (mode === "both") return [zh, en].filter(Boolean).join("\n\n---\n\n");
+  if (mode === "jp") return template.prompt.jp || en || zh;
+  if (mode === "ko") return template.prompt.ko || en || zh;
+  if (mode === "both") {
+    const localized = localizedValue(template.prompt, text);
+    const secondary = mobileTextLocale(text) === "en" ? zh : en;
+    return [...new Set([localized, secondary].filter(Boolean))].join(
+      "\n\n---\n\n",
+    );
+  }
   return localizedValue(template.prompt, text);
 }
 
@@ -1940,34 +2719,199 @@ function normalizeImagePromptPayload(
   };
 }
 
+function localPromptCatalogItemToImageTemplate(
+  item: LocalPromptCatalogItem,
+  coverUrl = "",
+): ImagePromptTemplate {
+  const prompt = String(item.prompt_text || "").trim();
+  return {
+    id: item.id,
+    category: item.category || item.purpose || "featured",
+    title: { cn: item.title, en: item.title },
+    description: { cn: item.description, en: item.description },
+    prompt: { cn: prompt, en: prompt },
+    author: "Jisudeng",
+    source: "Jisudeng creation space",
+    categories: item.categories,
+    domain: item.purpose,
+    style: item.style,
+    subject: item.subject,
+    featured: item.featured,
+    coverUrl: coverUrl || undefined,
+    params: {},
+  };
+}
+
+function localPromptCatalogCategoryToImageCategory(
+  category: LocalPromptCatalog["categories"][number],
+): ImagePromptCategory {
+  return { id: category.id, label: category.label, axis: category.axis };
+}
+
 function fallbackImagePromptCategories(text: ManagedMobileText) {
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
   return [
     { id: "all", label: text.common.all },
-    { id: "featured", label: zh ? "精选" : "Featured" },
-    { id: "favorites", label: zh ? "收藏" : "Favorites" },
-    { id: "recent", label: zh ? "最近" : "Recent" },
-    { id: "profile-avatar", label: zh ? "头像" : "Profile" },
-    { id: "portrait", label: zh ? "人像" : "Portrait" },
-    { id: "product", label: zh ? "产品" : "Product" },
-    { id: "ecommerce", label: zh ? "电商" : "E-commerce" },
-    { id: "poster", label: zh ? "海报" : "Poster" },
-    { id: "social-media", label: zh ? "社媒" : "Social" },
-    { id: "education-infographic", label: zh ? "教育图解" : "Infographic" },
+    {
+      id: "featured",
+      label: localizedValue(
+        { cn: "精选", en: "Featured", jp: "おすすめ", ko: "추천" },
+        text,
+      ),
+    },
+    {
+      id: "favorites",
+      label: localizedValue(
+        { cn: "收藏", en: "Favorites", jp: "お気に入り", ko: "즐겨찾기" },
+        text,
+      ),
+    },
+    {
+      id: "recent",
+      label: localizedValue(
+        { cn: "最近", en: "Recent", jp: "最近", ko: "최근" },
+        text,
+      ),
+    },
+    {
+      id: "profile-avatar",
+      label: localizedValue(
+        { cn: "头像", en: "Profile", jp: "プロフィール", ko: "프로필" },
+        text,
+      ),
+    },
+    {
+      id: "portrait",
+      label: localizedValue(
+        { cn: "人像", en: "Portrait", jp: "人物", ko: "인물" },
+        text,
+      ),
+    },
+    {
+      id: "product",
+      label: localizedValue(
+        { cn: "产品", en: "Product", jp: "商品", ko: "상품" },
+        text,
+      ),
+    },
+    {
+      id: "ecommerce",
+      label: localizedValue(
+        { cn: "电商", en: "E-commerce", jp: "EC", ko: "이커머스" },
+        text,
+      ),
+    },
+    {
+      id: "poster",
+      label: localizedValue(
+        { cn: "海报", en: "Poster", jp: "ポスター", ko: "포스터" },
+        text,
+      ),
+    },
+    {
+      id: "social-media",
+      label: localizedValue(
+        { cn: "社媒", en: "Social", jp: "SNS", ko: "소셜" },
+        text,
+      ),
+    },
+    {
+      id: "education-infographic",
+      label: localizedValue(
+        { cn: "教育图解", en: "Infographic", jp: "図解", ko: "인포그래픽" },
+        text,
+      ),
+    },
     { id: "ui-web", label: "UI/Web" },
-    { id: "game-asset", label: zh ? "游戏资产" : "Game asset" },
-    { id: "comic-storyboard", label: zh ? "漫画分镜" : "Storyboard" },
-    { id: "photography", label: zh ? "摄影" : "Photography" },
-    { id: "cinematic", label: zh ? "电影感" : "Cinematic" },
-    { id: "illustration", label: zh ? "插画" : "Illustration" },
-    { id: "chinese-style", label: zh ? "国风" : "Chinese style" },
-    { id: "watercolor", label: zh ? "水彩" : "Watercolor" },
-    { id: "pixel-art", label: zh ? "像素" : "Pixel art" },
+    {
+      id: "game-asset",
+      label: localizedValue(
+        { cn: "游戏资产", en: "Game asset", jp: "ゲーム素材", ko: "게임 에셋" },
+        text,
+      ),
+    },
+    {
+      id: "comic-storyboard",
+      label: localizedValue(
+        { cn: "漫画分镜", en: "Storyboard", jp: "絵コンテ", ko: "스토리보드" },
+        text,
+      ),
+    },
+    {
+      id: "photography",
+      label: localizedValue(
+        { cn: "摄影", en: "Photography", jp: "写真", ko: "사진" },
+        text,
+      ),
+    },
+    {
+      id: "cinematic",
+      label: localizedValue(
+        { cn: "电影感", en: "Cinematic", jp: "シネマ風", ko: "시네마틱" },
+        text,
+      ),
+    },
+    {
+      id: "illustration",
+      label: localizedValue(
+        { cn: "插画", en: "Illustration", jp: "イラスト", ko: "일러스트" },
+        text,
+      ),
+    },
+    {
+      id: "chinese-style",
+      label: localizedValue(
+        { cn: "国风", en: "Chinese style", jp: "中国風", ko: "중국풍" },
+        text,
+      ),
+    },
+    {
+      id: "watercolor",
+      label: localizedValue(
+        { cn: "水彩", en: "Watercolor", jp: "水彩", ko: "수채화" },
+        text,
+      ),
+    },
+    {
+      id: "pixel-art",
+      label: localizedValue(
+        { cn: "像素", en: "Pixel art", jp: "ピクセル", ko: "픽셀 아트" },
+        text,
+      ),
+    },
     { id: "3d-render", label: "3D" },
-    { id: "architecture-interior", label: zh ? "建筑空间" : "Architecture" },
-    { id: "food-drink", label: zh ? "食物" : "Food" },
-    { id: "fashion", label: zh ? "服装" : "Fashion" },
-    { id: "typography", label: zh ? "字体排版" : "Typography" },
+    {
+      id: "architecture-interior",
+      label: localizedValue(
+        { cn: "建筑空间", en: "Architecture", jp: "建築空間", ko: "건축 공간" },
+        text,
+      ),
+    },
+    {
+      id: "food-drink",
+      label: localizedValue(
+        { cn: "食物", en: "Food", jp: "フード", ko: "음식" },
+        text,
+      ),
+    },
+    {
+      id: "fashion",
+      label: localizedValue(
+        { cn: "服装", en: "Fashion", jp: "ファッション", ko: "패션" },
+        text,
+      ),
+    },
+    {
+      id: "typography",
+      label: localizedValue(
+        {
+          cn: "字体排版",
+          en: "Typography",
+          jp: "タイポグラフィ",
+          ko: "타이포그래피",
+        },
+        text,
+      ),
+    },
   ];
 }
 
@@ -2073,6 +3017,80 @@ function resolvePaymentReturnUrl(config?: ClientBuildConfig) {
   return PAYMENT_RESULT_FALLBACK_URL;
 }
 
+function resolveMobileOAuthStartUrl(
+  backendBaseUrl: string,
+  provider: MobileOAuthProvider,
+  options?: {
+    redirect?: string;
+    affCode?: string;
+    promoCode?: string;
+  },
+) {
+  const url = new URL(
+    `/api/v1/auth/oauth/${provider}/start`,
+    backendBaseUrl.endsWith("/") ? backendBaseUrl : `${backendBaseUrl}/`,
+  );
+  url.searchParams.set("redirect", options?.redirect || Path.Home);
+  const affCode = options?.affCode?.trim();
+  if (affCode) url.searchParams.set("aff_code", affCode);
+  const promoCode = options?.promoCode?.trim();
+  if (promoCode) url.searchParams.set("promo_code", promoCode);
+  return url.toString();
+}
+
+function oauthProviderLabel(
+  provider: MobileOAuthProvider,
+  text: ManagedMobileText,
+) {
+  return provider === "google"
+    ? text.login.providerGoogle
+    : text.login.providerGitHub;
+}
+
+function readOAuthAuthResponseFromUrl(rawUrl: string): {
+  auth?: ManagedAuthResponse;
+  error?: string;
+  pending?: boolean;
+} {
+  if (!rawUrl) return {};
+  const url = new URL(rawUrl);
+  const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+  const params = new URLSearchParams(hash || url.search);
+  const accessToken = params.get("access_token")?.trim() || "";
+  if (!accessToken) {
+    return {
+      pending: true,
+      error:
+        params.get("error_message")?.trim() ||
+        params.get("error_description")?.trim() ||
+        params.get("error")?.trim() ||
+        "",
+    };
+  }
+  const refreshToken = params.get("refresh_token")?.trim() || "";
+  const expiresIn = Number.parseInt(params.get("expires_in") || "", 10);
+  const tokenType = params.get("token_type")?.trim() || "";
+  return {
+    auth: {
+      access_token: accessToken,
+      ...(refreshToken ? { refresh_token: refreshToken } : {}),
+      ...(Number.isFinite(expiresIn) && expiresIn > 0
+        ? { expires_in: expiresIn }
+        : {}),
+      ...(tokenType ? { token_type: tokenType } : {}),
+    },
+  };
+}
+
+function shouldHandleNativeOAuthUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    return url.pathname === OAUTH_CALLBACK_PATH;
+  } catch {
+    return false;
+  }
+}
+
 function getAndroidManifestUrl(config?: ClientBuildConfig) {
   return resolveAndroidUrl(
     config?.androidManifestUrl || "/downloads/android-version.json",
@@ -2080,8 +3098,21 @@ function getAndroidManifestUrl(config?: ClientBuildConfig) {
   );
 }
 
-function manifestNotes(manifest?: AndroidUpdateManifest) {
-  const raw = manifest?.notes || manifest?.releaseNotes || [];
+function manifestNotes(
+  manifest: AndroidUpdateManifest | undefined,
+  text: ManagedMobileText,
+) {
+  const localeKey = {
+    cn: "zh-CN",
+    en: "en",
+    jp: "ja",
+    ko: "ko",
+  }[mobileTextLocale(text)] as "zh-CN" | "en" | "ja" | "ko";
+  const raw =
+    manifest?.notesByLocale?.[localeKey] ||
+    manifest?.notes ||
+    manifest?.releaseNotes ||
+    [];
   if (Array.isArray(raw)) return raw;
   return raw
     .split(/[;\n；]/)
@@ -2111,6 +3142,30 @@ function currentGroupID(
   );
 }
 
+function currentVideoGroupID(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+) {
+  return (
+    workspace?.managed_api_keys?.video?.group_id ??
+    workspace?.workspaces?.video?.models?.selected_group_id ??
+    workspace?.workspaces?.video?.models?.groups?.find(
+      (group) => group.is_current,
+    )?.id
+  );
+}
+
+function currentImageGroupID(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+) {
+  return (
+    workspace?.managed_api_keys?.image?.group_id ??
+    workspace?.workspaces?.image?.models?.selected_group_id ??
+    workspace?.workspaces?.image?.models?.groups?.find(
+      (group) => group.is_current,
+    )?.id
+  );
+}
+
 function currentModels(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
@@ -2134,9 +3189,27 @@ function groupNameByID(
   groupID: number | undefined,
   text: ManagedMobileText,
 ) {
-  return (
-    groupByID(workspace, groupID)?.name || currentGroupName(workspace, text)
-  );
+  const group = groupByID(workspace, groupID);
+  const name = localizedMobileDisplay(group, {
+    defaultFields: ["name"],
+    fallback: currentGroupName(workspace, text),
+  });
+  const normalized = name.replace(/\s+/g, "").toLowerCase();
+  const systemLabels: Record<string, Record<ManagedMobileLocale, string>> = {
+    国产分组: {
+      cn: "国产分组",
+      en: "Domestic models",
+      jp: "国内モデル",
+      ko: "국산 모델",
+    },
+    默认分组: {
+      cn: "默认分组",
+      en: "Default group",
+      jp: "標準グループ",
+      ko: "기본 그룹",
+    },
+  };
+  return systemLabels[normalized]?.[getManagedMobileLocale()] || name;
 }
 
 function modelsForGroup(
@@ -2151,46 +3224,15 @@ function modelsForGroup(
 }
 
 function modelValue(model?: ManagedWorkspaceModel) {
-  return model?.name || model?.id || "";
+  return managedWorkspaceModelID(model);
+}
+
+function modelMatches(model: ManagedWorkspaceModel, value: string) {
+  return managedWorkspaceModelMatches(model, value);
 }
 
 function modelLabel(model?: ManagedWorkspaceModel) {
   return model?.display_name || model?.name || model?.id || "";
-}
-
-function isImageModel(model: ManagedWorkspaceModel) {
-  const text = [
-    model.id,
-    model.name,
-    model.display_name,
-    model.use_case,
-    model.channel,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  if (/(video|audio|embedding|rerank|speech|tts|stt)/.test(text)) return false;
-  return /(gpt-image|image-preview|image|dall|flux|sdxl|stable-diffusion|imagen|recraft|midjourney|grok-imagine|绘图|生图|画图|图片|图像|海报)/.test(
-    text,
-  );
-}
-
-function isVideoModel(model: ManagedWorkspaceModel) {
-  const text = [
-    model.id,
-    model.name,
-    model.display_name,
-    model.use_case,
-    model.channel,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  return /(video|影片|视频)/.test(text);
-}
-
-function isChatModel(model: ManagedWorkspaceModel) {
-  return !isImageModel(model) && !isVideoModel(model);
 }
 
 function currentChatModels(
@@ -2209,14 +3251,36 @@ function chatModelsForGroup(
 function currentImageModels(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
-  return currentModels(workspace).filter(isImageModel);
+  return currentModels(workspace).filter((model) =>
+    isExecutableManagedImageModel(model, "create", workspace?.models),
+  );
 }
 
 function imageModelsForGroup(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
   groupID?: number,
 ) {
-  return modelsForGroup(workspace, groupID).filter(isImageModel);
+  return modelsForGroup(workspace, groupID).filter((model) =>
+    isExecutableManagedImageModel(model, "create", workspace?.models),
+  );
+}
+
+/**
+ * Content projects retain their original group. Unlike the interactive picker,
+ * they must never fall back to a current/default group when that group is gone.
+ */
+function imageModelsForExactGroup(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+  groupID?: number,
+) {
+  const exactGroupID = Number(groupID);
+  if (!Number.isSafeInteger(exactGroupID) || exactGroupID <= 0) return [];
+  const group = workspace?.models?.groups?.find(
+    (item) => Number(item.id) === exactGroupID,
+  );
+  return (group?.models || []).filter((model) =>
+    isExecutableManagedImageModel(model, "create", workspace?.models),
+  );
 }
 
 function imageModelSupportsStyle(model: string) {
@@ -2226,77 +3290,73 @@ function imageModelSupportsStyle(model: string) {
 function imageModelSupportsReferences(
   model: ManagedWorkspaceModel | string,
   knownModels: ManagedWorkspaceModel[] = [],
-  _allowLegacyFallback = false,
 ) {
   const workspaceModel =
     typeof model === "string"
-      ? knownModels.find((item) => modelValue(item) === model)
+      ? knownModels.find((item) => modelMatches(item, model))
       : model;
-  const capabilities = workspaceModel?.image_capabilities;
-  if (capabilities) {
-    return (
-      capabilities.operations?.includes("edit") === true &&
-      Number(capabilities.max_reference_images || 0) > 0
-    );
-  }
-
-  // Capability data is authoritative. An unknown model fails closed rather
-  // than being guessed from a private alias or a provider name.
-  return false;
+  return Boolean(
+    workspaceModel &&
+      isExecutableManagedImageModel(workspaceModel, "edit") &&
+      managedImageReferenceLimit(workspaceModel) > 0,
+  );
 }
 
 function contentKitReferenceLimit(model?: ManagedWorkspaceModel) {
-  return Math.max(
-    0,
-    Math.min(12, Number(model?.image_capabilities?.max_reference_images || 0)),
+  if (!model || !isExecutableManagedImageModel(model, "edit")) return 0;
+  return Math.min(12, managedImageReferenceLimit(model));
+}
+
+function firstReferenceImageModel(models: ManagedWorkspaceModel[]) {
+  return models.find((model) => imageModelSupportsReferences(model));
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+  let dividend = Math.abs(left);
+  let divisor = Math.abs(right);
+  while (divisor) {
+    const remainder = dividend % divisor;
+    dividend = divisor;
+    divisor = remainder;
+  }
+  return dividend || 1;
+}
+
+function imageSizeOption(size: string) {
+  const known = IMAGE_SIZE_OPTIONS.find((item) => item.id === size);
+  if (known) return known;
+  const match = /^(\d{2,5})x(\d{2,5})$/i.exec(size);
+  if (!match) return { id: size, tier: "", aspect: "" };
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const divisor = greatestCommonDivisor(width, height);
+  const longestEdge = Math.max(width, height);
+  const tier =
+    longestEdge >= 1024
+      ? `${Math.round((longestEdge / 1024) * 10) / 10}K`
+      : `${longestEdge}px`;
+  return {
+    id: size,
+    tier,
+    aspect: `${width / divisor}:${height / divisor}`,
+  };
+}
+
+function imageSizeOptionsForModel(model?: ManagedWorkspaceModel | string) {
+  if (typeof model === "string") return IMAGE_SIZE_OPTIONS;
+  const capabilities = model?.image_capabilities;
+  if (!capabilities) return [];
+  const declaredSizes = Array.from(
+    new Set(
+      (capabilities?.supported_sizes || [])
+        .map((size) => String(size).trim())
+        .filter(Boolean),
+    ),
   );
-}
-
-function contentKitModelSupportsSize(
-  model: ManagedWorkspaceModel | undefined,
-  size: string,
-) {
-  const supported = model?.image_capabilities?.supported_sizes;
-  return !supported?.length || supported.includes(size);
-}
-
-function firstReferenceImageModel(
-  models: ManagedWorkspaceModel[],
-  allowLegacyFallback = false,
-) {
-  return models.find((model) =>
-    imageModelSupportsReferences(model, [], allowLegacyFallback),
+  if (declaredSizes.length) return declaredSizes.map(imageSizeOption);
+  return IMAGE_SIZE_OPTIONS.filter((item) =>
+    isManagedImageSizeSupported(capabilities, item.id),
   );
-}
-
-function imageSizeOptionsForModel(model: string) {
-  const normalized = model.toLowerCase();
-  if (/dall-e-3/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) =>
-      ["1024x1024", "1024x1792", "1792x1024"].includes(item.id),
-    );
-  }
-  if (/gpt-image-(?!2)/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) =>
-      ["1024x1024", "1536x1024", "1024x1536"].includes(item.id),
-    );
-  }
-  if (/grok-imagine|gemini|imagen/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) =>
-      [
-        "1024x1024",
-        "1536x1024",
-        "1024x1536",
-        "1792x1024",
-        "1024x1792",
-        "2048x2048",
-      ].includes(item.id),
-    );
-  }
-  if (/gpt-image-2/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) => item.id !== "4096x4096");
-  }
-  return IMAGE_SIZE_OPTIONS;
 }
 
 function imageSizeLabel(
@@ -2446,7 +3506,9 @@ function bestImageGroup(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
   return workspace?.models?.groups?.find((group) =>
-    (group.models || []).some(isImageModel),
+    (group.models || []).some((model) =>
+      isExecutableManagedImageModel(model, "create", workspace?.models),
+    ),
   );
 }
 
@@ -2499,34 +3561,6 @@ function readChatPreference() {
   );
 }
 
-function readVoiceConversationPreferences(): MobileVoiceConversationPreferences {
-  const stored = readStoredJSON(
-    VOICE_CONVERSATION_STORAGE_KEY,
-    DEFAULT_VOICE_CONVERSATION_PREFERENCES,
-  );
-  const phrase = String(stored.wakeWordPhrase || "")
-    .trim()
-    .slice(0, 64);
-  return {
-    enabled: Boolean(stored.enabled),
-    continuous: Boolean(stored.continuous),
-    wakeWordEnabled: Boolean(stored.wakeWordEnabled) && Boolean(phrase),
-    wakeWordPhrase:
-      phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
-    ttsRate: Math.min(2, Math.max(0.5, Number(stored.ttsRate) || 1)),
-  };
-}
-
-function plainVoiceText(value: string) {
-  return value
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/!?(?:\[[^\]]*\])?\([^)]*\)/g, "")
-    .replace(/[`*_>#]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 3800);
-}
-
 function resolveChatPreference(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
   preferredGroupId?: number,
@@ -2540,6 +3574,7 @@ function resolveChatPreference(
     candidateModels,
     isChatModel,
     modelValue,
+    modelMatches,
   });
 }
 
@@ -2611,6 +3646,26 @@ function describeImageError(
     return context.text.errors.networkFailed;
   }
   return message || context.text.image.generateFailed;
+}
+
+function describeManagedImageValidation(
+  code:
+    | "model_not_executable"
+    | "operation_not_supported"
+    | "size_not_supported"
+    | "reference_not_supported",
+  model: string,
+  text: ManagedMobileText,
+) {
+  switch (code) {
+    case "size_not_supported":
+      return text.errors.imageSizeUnsupported(model);
+    case "operation_not_supported":
+    case "reference_not_supported":
+      return text.image.referenceModelUnsupported(model);
+    default:
+      return text.errors.imageModelUnavailable(model);
+  }
 }
 
 function makeImageFileName(prefix: string, id?: string, index = 0) {
@@ -2774,6 +3829,17 @@ function writeStoredJSON(key: string, value: unknown) {
   localStorage.setItem(accountStorageKey(key), JSON.stringify(value));
 }
 
+function readWebOpenMode(): WebOpenMode {
+  if (typeof localStorage === "undefined") return "in_app";
+  const value = localStorage.getItem(WEB_OPEN_MODE_STORAGE_KEY);
+  return value === "external" ? "external" : "in_app";
+}
+
+function writeWebOpenMode(value: WebOpenMode) {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(WEB_OPEN_MODE_STORAGE_KEY, value);
+}
+
 function galleryItemPreference(item: any, preferences: GalleryPreferences) {
   return preferences[galleryItemPreferenceKey(item)] || {};
 }
@@ -2875,49 +3941,144 @@ function localizedOrderStatus(status: string, text: ManagedMobileText) {
   const key = String(status || "")
     .toLowerCase()
     .trim();
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
-  const labels: Record<string, string> = zh
-    ? {
-        pending: "待支付",
-        created: "待支付",
-        unpaid: "待支付",
-        waiting: "等待支付",
-        processing: "处理中",
-        paid: "已支付",
-        success: "已支付",
-        completed: "已完成",
-        failed: "已失败",
-        cancelled: "已取消",
-        canceled: "已取消",
-        expired: "已过期",
-        refunded: "已退款",
-        refunding: "退款中",
-        refund_failed: "退款失败",
-      }
-    : {
-        pending: "Pending",
-        created: "Pending",
-        unpaid: "Pending",
-        waiting: "Waiting",
-        processing: "Processing",
-        paid: "Paid",
-        success: "Paid",
-        completed: "Completed",
-        failed: "Failed",
-        cancelled: "Cancelled",
-        canceled: "Cancelled",
-        expired: "Expired",
-        refunded: "Refunded",
-        refunding: "Refunding",
-        refund_failed: "Refund failed",
-      };
+  const labelsByLocale: Record<ManagedMobileLocale, Record<string, string>> = {
+    cn: {
+      pending: "待支付",
+      created: "待支付",
+      unpaid: "待支付",
+      waiting: "等待支付",
+      processing: "处理中",
+      paid: "已支付",
+      success: "已支付",
+      payment_success: "已支付",
+      paid_success: "已支付",
+      completed: "已完成",
+      failed: "已失败",
+      cancelled: "已取消",
+      canceled: "已取消",
+      closed: "已关闭",
+      expired: "已过期",
+      refunded: "已退款",
+      refund_success: "已退款",
+      refunded_success: "已退款",
+      refunding: "退款中",
+      refund_failed: "退款失败",
+    },
+    en: {
+      pending: "Pending",
+      created: "Pending",
+      unpaid: "Pending",
+      waiting: "Waiting",
+      processing: "Processing",
+      paid: "Paid",
+      success: "Paid",
+      payment_success: "Paid",
+      paid_success: "Paid",
+      completed: "Completed",
+      failed: "Failed",
+      cancelled: "Cancelled",
+      canceled: "Cancelled",
+      closed: "Closed",
+      expired: "Expired",
+      refunded: "Refunded",
+      refund_success: "Refunded",
+      refunded_success: "Refunded",
+      refunding: "Refunding",
+      refund_failed: "Refund failed",
+    },
+    jp: {
+      pending: "支払い待ち",
+      created: "支払い待ち",
+      unpaid: "支払い待ち",
+      waiting: "支払い待ち",
+      processing: "処理中",
+      paid: "支払い済み",
+      success: "支払い済み",
+      payment_success: "支払い済み",
+      paid_success: "支払い済み",
+      completed: "完了",
+      failed: "失敗",
+      cancelled: "キャンセル済み",
+      canceled: "キャンセル済み",
+      closed: "クローズ済み",
+      expired: "期限切れ",
+      refunded: "返金済み",
+      refund_success: "返金済み",
+      refunded_success: "返金済み",
+      refunding: "返金中",
+      refund_failed: "返金失敗",
+    },
+    ko: {
+      pending: "결제 대기",
+      created: "결제 대기",
+      unpaid: "결제 대기",
+      waiting: "결제 대기",
+      processing: "처리 중",
+      paid: "결제 완료",
+      success: "결제 완료",
+      payment_success: "결제 완료",
+      paid_success: "결제 완료",
+      completed: "완료",
+      failed: "실패",
+      cancelled: "취소됨",
+      canceled: "취소됨",
+      closed: "닫힘",
+      expired: "만료됨",
+      refunded: "환불됨",
+      refund_success: "환불됨",
+      refunded_success: "환불됨",
+      refunding: "환불 중",
+      refund_failed: "환불 실패",
+    },
+  };
+  const labels = labelsByLocale[mobileTextLocale(text)] || labelsByLocale.en;
   if (labels[key]) return labels[key];
   if (!key) return "-";
-  return zh ? "订单状态待同步" : "Order status unavailable";
+  return localizedValue(
+    {
+      cn: "订单状态待同步",
+      en: "Order status unavailable",
+      jp: "注文状態は未同期です",
+      ko: "주문 상태가 아직 동기화되지 않았습니다",
+    },
+    text,
+  );
 }
 
 function localizedPaymentType(type: string, text: ManagedMobileText) {
   return paymentMethodLabel({ payment_type: type }, text);
+}
+
+function localizedOrderTitle(order: any, text: ManagedMobileText) {
+  const raw = String(
+    order?.order_type ||
+      order?.type ||
+      order?.product_type ||
+      order?.payment_type ||
+      "",
+  )
+    .trim()
+    .toLowerCase();
+  const productName = String(order?.product_name || "").trim();
+  if (
+    productName &&
+    !/^(balance|recharge|subscription|plan|package|redeem|coupon)$/i.test(
+      productName,
+    )
+  ) {
+    return productName;
+  }
+  const labels: Record<string, string> = {
+    balance: text.account.orderRecharge,
+    recharge: text.account.orderRecharge,
+    topup: text.account.orderRecharge,
+    subscription: text.account.orderPackage,
+    plan: text.account.orderPackage,
+    package: text.account.orderPackage,
+    redeem: text.account.orderRedeem,
+    coupon: text.account.orderCoupon,
+  };
+  return labels[raw] || localizedPaymentType(raw, text) || text.account.orders;
 }
 
 function localizedTransactionReason(item: any, text: ManagedMobileText) {
@@ -2933,74 +4094,151 @@ function localizedTransactionReason(item: any, text: ManagedMobileText) {
     .toLowerCase()
     .trim();
   const combined = `${raw} ${description}`.toLowerCase();
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
   if (/reason|thinking|deep/.test(combined)) {
-    return zh ? "深度思考扣除" : "Reasoning usage";
+    return localizedValue(
+      {
+        cn: "深度思考扣除",
+        en: "Reasoning usage",
+        jp: "推論使用量",
+        ko: "추론 사용량",
+      },
+      text,
+    );
   }
   if (/image|draw|poster|batch_image/.test(combined)) {
-    return zh ? "生图扣除" : "Image generation";
+    return localizedValue(
+      {
+        cn: "生图扣除",
+        en: "Image generation",
+        jp: "画像生成",
+        ko: "이미지 생성",
+      },
+      text,
+    );
   }
-  const labels: Record<string, string> = zh
-    ? {
-        recharge: "充值到账",
-        payment_recharge: "充值到账",
-        payment_balance: "充值到账",
-        redeem: "兑换到账",
-        redeem_code: "兑换码到账",
-        usage: "API 扣除",
-        usage_charge: "API 扣除",
-        usage_log: "API 扣除",
-        api_usage: "API 扣除",
-        refund: "退款/退回",
-        payment_refund: "退款到账",
-        admin_adjustment: "管理员调整",
-        admin_balance: "管理员调整",
-        promotion: "活动赠送",
-        promo_bonus: "活动赠送",
-        promo_code: "优惠码赠送",
-        subscription: "套餐购买",
-        subscription_refund: "套餐退款",
-        user_subscription: "套餐权益",
-        gift: "赠送余额",
-        withdrawal: "提现",
-        team_reward: "团队奖励",
-        arena_reward: "玩法奖励",
-        checkin: "签到奖励",
-        quiz: "答题奖励",
-        blind_box: "盲盒奖励",
-        affiliate: "推广奖励",
-        image_task: "生图扣除",
-      }
-    : {
-        recharge: "Recharge credited",
-        payment_recharge: "Recharge credited",
-        payment_balance: "Recharge credited",
-        redeem: "Redeem credited",
-        redeem_code: "Redeem code credited",
-        usage: "API usage",
-        usage_charge: "API usage",
-        usage_log: "API usage",
-        api_usage: "API usage",
-        refund: "Refund",
-        payment_refund: "Payment refund",
-        admin_adjustment: "Admin adjustment",
-        admin_balance: "Admin adjustment",
-        promotion: "Promotion",
-        promo_bonus: "Promotion",
-        promo_code: "Promo code",
-        subscription: "Plan purchase",
-        subscription_refund: "Plan refund",
-        user_subscription: "Plan entitlement",
-        gift: "Gift balance",
-        withdrawal: "Withdrawal",
-        team_reward: "Team reward",
-        arena_reward: "Play reward",
-        checkin: "Check-in reward",
-        quiz: "Quiz reward",
-        blind_box: "Blind box reward",
-        affiliate: "Affiliate reward",
-        image_task: "Image generation",
-      };
+  const labelsByLocale: Record<ManagedMobileLocale, Record<string, string>> = {
+    cn: {
+      recharge: "充值到账",
+      payment_recharge: "充值到账",
+      payment_balance: "充值到账",
+      redeem: "兑换到账",
+      redeem_code: "兑换码到账",
+      usage: "API 扣除",
+      usage_charge: "API 扣除",
+      usage_log: "API 扣除",
+      api_usage: "API 扣除",
+      refund: "退款/退回",
+      payment_refund: "退款到账",
+      admin_adjustment: "管理员调整",
+      admin_balance: "管理员调整",
+      promotion: "活动赠送",
+      promo_bonus: "活动赠送",
+      promo_code: "优惠码赠送",
+      subscription: "套餐购买",
+      subscription_refund: "套餐退款",
+      user_subscription: "套餐权益",
+      gift: "赠送余额",
+      withdrawal: "提现",
+      team_reward: "团队奖励",
+      arena_reward: "玩法奖励",
+      checkin: "签到奖励",
+      quiz: "答题奖励",
+      blind_box: "盲盒奖励",
+      affiliate: "推广奖励",
+      image_task: "生图扣除",
+    },
+    en: {
+      recharge: "Recharge credited",
+      payment_recharge: "Recharge credited",
+      payment_balance: "Recharge credited",
+      redeem: "Redeem credited",
+      redeem_code: "Redeem code credited",
+      usage: "API usage",
+      usage_charge: "API usage",
+      usage_log: "API usage",
+      api_usage: "API usage",
+      refund: "Refund",
+      payment_refund: "Payment refund",
+      admin_adjustment: "Admin adjustment",
+      admin_balance: "Admin adjustment",
+      promotion: "Promotion",
+      promo_bonus: "Promotion",
+      promo_code: "Promo code",
+      subscription: "Plan purchase",
+      subscription_refund: "Plan refund",
+      user_subscription: "Plan entitlement",
+      gift: "Gift balance",
+      withdrawal: "Withdrawal",
+      team_reward: "Team reward",
+      arena_reward: "Play reward",
+      checkin: "Check-in reward",
+      quiz: "Quiz reward",
+      blind_box: "Blind box reward",
+      affiliate: "Affiliate reward",
+      image_task: "Image generation",
+    },
+    jp: {
+      recharge: "チャージ反映",
+      payment_recharge: "チャージ反映",
+      payment_balance: "チャージ反映",
+      redeem: "引換反映",
+      redeem_code: "引換コード反映",
+      usage: "API 使用量",
+      usage_charge: "API 使用量",
+      usage_log: "API 使用量",
+      api_usage: "API 使用量",
+      refund: "返金/戻入",
+      payment_refund: "支払い返金",
+      admin_adjustment: "管理者調整",
+      admin_balance: "管理者調整",
+      promotion: "キャンペーン付与",
+      promo_bonus: "キャンペーン付与",
+      promo_code: "プロモコード付与",
+      subscription: "プラン購入",
+      subscription_refund: "プラン返金",
+      user_subscription: "プラン権益",
+      gift: "ギフト残高",
+      withdrawal: "出金",
+      team_reward: "チーム報酬",
+      arena_reward: "プレイ報酬",
+      checkin: "チェックイン報酬",
+      quiz: "クイズ報酬",
+      blind_box: "ブラインドボックス報酬",
+      affiliate: "紹介報酬",
+      image_task: "画像生成",
+    },
+    ko: {
+      recharge: "충전 반영",
+      payment_recharge: "충전 반영",
+      payment_balance: "충전 반영",
+      redeem: "교환 반영",
+      redeem_code: "교환 코드 반영",
+      usage: "API 사용량",
+      usage_charge: "API 사용량",
+      usage_log: "API 사용량",
+      api_usage: "API 사용량",
+      refund: "환불/반환",
+      payment_refund: "결제 환불",
+      admin_adjustment: "관리자 조정",
+      admin_balance: "관리자 조정",
+      promotion: "캠페인 지급",
+      promo_bonus: "캠페인 지급",
+      promo_code: "프로모션 코드 지급",
+      subscription: "플랜 구매",
+      subscription_refund: "플랜 환불",
+      user_subscription: "플랜 권한",
+      gift: "선물 잔액",
+      withdrawal: "출금",
+      team_reward: "팀 보상",
+      arena_reward: "플레이 보상",
+      checkin: "출석 보상",
+      quiz: "퀴즈 보상",
+      blind_box: "블라인드박스 보상",
+      affiliate: "추천 보상",
+      image_task: "이미지 생성",
+    },
+  };
+  const labels = labelsByLocale[mobileTextLocale(text)] || labelsByLocale.en;
   return (
     labels[raw] ||
     labels[String(item?.source || "").toLowerCase()] ||
@@ -3597,6 +4835,33 @@ function ThemeSwitch(props: { text: ManagedMobileText }) {
   );
 }
 
+function MobileLanguageSettings(props: { text: ManagedMobileText }) {
+  const selectedLocale = mobileTextLocale(props.text);
+  return (
+    <div className={styles["language-settings"]}>
+      <label htmlFor="managed-mobile-language">
+        <strong>{props.text.account.appLanguage}</strong>
+        <span>{props.text.account.appLanguageHint}</span>
+      </label>
+      <select
+        id="managed-mobile-language"
+        value={selectedLocale}
+        onChange={(event) =>
+          setManagedMobileLocale(event.target.value as ManagedMobileLocale)
+        }
+      >
+        <option value="cn">{props.text.account.languageChinese}</option>
+        <option value="en">{props.text.account.languageEnglish}</option>
+        <option value="jp">{props.text.account.languageJapanese}</option>
+        <option value="ko">{props.text.account.languageKorean}</option>
+      </select>
+      <button type="button" onClick={() => setManagedMobileLocale(null)}>
+        {props.text.account.languageSystem}
+      </button>
+    </div>
+  );
+}
+
 function IconButton(props: {
   label: string;
   children: ReactNode;
@@ -3660,7 +4925,7 @@ function useNativeDocumentScroll(enabled = true) {
   }, [enabled]);
 }
 
-type AndroidTab = "chat" | "image" | "gallery" | "account";
+type AndroidTab = "home" | "chat" | "create" | "projects" | "account";
 
 function AndroidBottomTabs(props: {
   active: AndroidTab;
@@ -3674,38 +4939,51 @@ function AndroidBottomTabs(props: {
     icon: ReactNode;
   }> = [
     {
-      id: "chat",
-      label: props.text.chat.title,
+      id: "home",
+      label: props.text.navigation.home,
       path: Path.Home,
+      icon: <BotIcon />,
+    },
+    {
+      id: "chat",
+      label: props.text.navigation.chat,
+      path: Path.Chat,
       icon: <ChatIcon />,
     },
     {
-      id: "image",
-      label: props.text.image.title,
+      id: "create",
+      label: props.text.navigation.create,
       path: Path.Sd,
       icon: <SDIcon />,
     },
     {
-      id: "gallery",
-      label: props.text.image.gallery,
-      path: Path.Gallery,
-      icon: <BotIcon />,
+      id: "projects",
+      label: props.text.navigation.projects,
+      path: Path.Projects,
+      icon: <HistoryIcon />,
     },
     {
       id: "account",
-      label: props.text.account.title,
+      label: props.text.navigation.account,
       path: Path.Settings,
       icon: <SettingsIcon />,
     },
   ];
 
   return (
-    <nav className={styles["bottom-tabs"]} aria-label="JisudengChat">
+    <nav
+      className={styles["bottom-tabs"]}
+      aria-label="JisudengChat"
+      role="tablist"
+    >
       {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
-          aria-label={`app-tab-${tab.id}`}
+          aria-label={tab.label}
+          aria-current={props.active === tab.id ? "page" : undefined}
+          aria-selected={props.active === tab.id}
+          role="tab"
           className={clsx(styles["bottom-tab"], {
             [styles["active"]]: props.active === tab.id,
           })}
@@ -3716,6 +4994,34 @@ function AndroidBottomTabs(props: {
         </button>
       ))}
     </nav>
+  );
+}
+
+function MobileConnectivityBanner(props: { text: ManagedMobileText }) {
+  const [online, setOnline] = useState(() =>
+    typeof navigator === "undefined" ? true : navigator.onLine,
+  );
+  useEffect(() => {
+    const markOnline = () => setOnline(true);
+    const markOffline = () => setOnline(false);
+    window.addEventListener("online", markOnline);
+    window.addEventListener("offline", markOffline);
+    window.addEventListener("jisudeng-network-restored", markOnline);
+    return () => {
+      window.removeEventListener("online", markOnline);
+      window.removeEventListener("offline", markOffline);
+      window.removeEventListener("jisudeng-network-restored", markOnline);
+    };
+  }, []);
+  if (online) return null;
+  return (
+    <div
+      className={styles["connectivity-banner"]}
+      role="status"
+      aria-live="assertive"
+    >
+      {props.text.errors.offline}
+    </div>
   );
 }
 
@@ -3735,6 +5041,7 @@ function AndroidAppShell(props: {
       })}
     >
       <section className={styles["app-shell"]}>
+        <MobileConnectivityBanner text={props.text} />
         <div className={styles["app-scroll"]}>{props.children}</div>
         <AndroidBottomTabs active={props.active} text={props.text} />
       </section>
@@ -3777,11 +5084,12 @@ function AndroidLogin() {
   );
   const [totpCode, setTotpCode] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState<MobileOAuthProvider | "">("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
   const configError = backendBaseUrl ? "" : text.errors.missingBackend;
-  const busy = managed.loading || localLoading;
+  const busy = managed.loading || localLoading || Boolean(oauthBusy);
 
   useEffect(() => {
     if (backendBaseUrl && managed.backendBaseUrl !== backendBaseUrl) {
@@ -3820,6 +5128,114 @@ function AndroidLogin() {
       })
       .catch(() => undefined);
   }, []);
+
+  async function finishOAuthLogin(auth: ManagedAuthResponse) {
+    if (!backendBaseUrl) return;
+    setError("");
+    setMessage(text.login.oauthLoginSuccess);
+    managed.setBackendBaseUrl(backendBaseUrl);
+    managed.applyAuth(auth);
+    await managed.bootstrap();
+    const accessToken = useManagedNextChatStore.getState().accessToken;
+    if (affiliateToken) {
+      await attributeInviteCampaign(backendBaseUrl, accessToken, affiliateToken)
+        .then(() => storeInviteReferral(null))
+        .catch(() => undefined);
+    }
+    await reportInviteLifecycleEvent(
+      backendBaseUrl,
+      accessToken,
+      "login",
+      installedRelease.name,
+      getInviteInstallationId(),
+      {
+        eventId: getStableInviteEventId(
+          `oauth-login:${new Date().toISOString().slice(0, 10)}`,
+        ),
+        attributionToken: affiliateToken,
+        metadata: { surface: "android_oauth" },
+      },
+    ).catch(() => undefined);
+    navigate(Path.Home);
+  }
+
+  async function consumeOAuthCallbackUrl(rawUrl: string) {
+    if (!backendBaseUrl || !shouldHandleNativeOAuthUrl(rawUrl)) return;
+    const rawProvider = localStorage.getItem(NATIVE_PENDING_OAUTH_PROVIDER_KEY);
+    const provider: MobileOAuthProvider =
+      rawProvider === "github" ? "github" : "google";
+    setOauthBusy(provider);
+    try {
+      const result = readOAuthAuthResponseFromUrl(rawUrl);
+      if (result.auth) {
+        await finishOAuthLogin(result.auth);
+        return;
+      }
+      setMode("register");
+      setMessage(text.login.oauthPendingRegistration);
+      setError(result.error || text.login.oauthNoToken);
+    } catch (err) {
+      setError(localizedMobileErrorMessage(err, text.errors.loginFailed));
+    } finally {
+      localStorage.removeItem(NATIVE_PENDING_OAUTH_KEY);
+      localStorage.removeItem(NATIVE_PENDING_OAUTH_PROVIDER_KEY);
+      setOauthBusy("");
+    }
+  }
+
+  useEffect(() => {
+    const onOAuthDeepLink = (event: Event) => {
+      const rawUrl = String((event as CustomEvent).detail?.url || "");
+      if (!rawUrl) return;
+      void consumeOAuthCallbackUrl(rawUrl);
+    };
+    try {
+      const pending = localStorage.getItem(NATIVE_PENDING_OAUTH_KEY);
+      if (pending) {
+        const detail = JSON.parse(pending);
+        const rawUrl = String(detail?.url || "");
+        if (rawUrl) void consumeOAuthCallbackUrl(rawUrl);
+      }
+    } catch {
+      localStorage.removeItem(NATIVE_PENDING_OAUTH_KEY);
+    }
+    window.addEventListener("jisudeng-oauth-callback", onOAuthDeepLink);
+    return () =>
+      window.removeEventListener("jisudeng-oauth-callback", onOAuthDeepLink);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendBaseUrl, affiliateToken, installedRelease.name, text]);
+
+  async function startOAuthLogin(provider: MobileOAuthProvider) {
+    if (!backendBaseUrl || busy) return;
+    setOauthBusy(provider);
+    setError("");
+    setMessage(text.login.oauthOpening);
+    let opened = false;
+    try {
+      const url = resolveMobileOAuthStartUrl(backendBaseUrl, provider, {
+        redirect: Path.Home,
+        affCode: affiliateCode || mobileAttributionAffiliateCode(),
+        promoCode,
+      });
+      localStorage.setItem(NATIVE_PENDING_OAUTH_PROVIDER_KEY, provider);
+      await openExternalUrl(url);
+      opened = true;
+      setMessage(text.login.oauthReturnHint);
+    } catch (err) {
+      localStorage.removeItem(NATIVE_PENDING_OAUTH_PROVIDER_KEY);
+      setError(
+        text.login.oauthFailed(
+          oauthProviderLabel(provider, text),
+          localizedMobileErrorMessage(err, text.errors.loginFailed),
+        ),
+      );
+    } finally {
+      setOauthBusy("");
+      if (!opened) {
+        localStorage.removeItem(NATIVE_PENDING_OAUTH_PROVIDER_KEY);
+      }
+    }
+  }
 
   async function persistLoginChoice() {
     if (rememberAccount) {
@@ -4003,15 +5419,6 @@ function AndroidLogin() {
           },
         ).catch(() => undefined);
         if (referralAttributed) storeInviteReferral(null);
-        void reportMobileAttributionEvent({
-          baseUrl: backendBaseUrl,
-          eventType: "register",
-          appVersion: installedRelease.name,
-          locale: text.dateLocale,
-          accessToken: auth.access_token,
-          userScope: auth.user?.id || "new-account",
-          metadata: { surface: "android_register", event_name: "registered" },
-        });
         await managed.bootstrap();
         navigate(Path.Home);
         return;
@@ -4122,6 +5529,33 @@ function AndroidLogin() {
               </button>
             ))}
           </div>
+        )}
+
+        {!managed.pendingTotpToken && backendBaseUrl && (
+          <section className={styles["oauth-panel"]}>
+            <div>
+              <strong>{text.login.quickLoginTitle}</strong>
+              <span>{text.login.quickLoginHint}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => startOAuthLogin("google")}
+              disabled={busy}
+            >
+              {oauthBusy === "google"
+                ? text.login.oauthOpening
+                : text.login.continueWithGoogle}
+            </button>
+            <button
+              type="button"
+              onClick={() => startOAuthLogin("github")}
+              disabled={busy}
+            >
+              {oauthBusy === "github"
+                ? text.login.oauthOpening
+                : text.login.continueWithGitHub}
+            </button>
+          </section>
         )}
 
         <form className={styles["login-form"]} onSubmit={submit}>
@@ -4342,6 +5776,7 @@ function AndroidDashboard() {
   const mobileStore = useManagedMobileAppStore();
   const sdStore = useSdStore();
   const text = useMobileText();
+  const location = useLocation();
   const navigate = useNavigate();
   const workspace = managed.workspace;
   const activeAccountId = String(
@@ -4361,6 +5796,7 @@ function AndroidDashboard() {
   >("all");
   const [cloudTasks, setCloudTasks] = useState<MobileTask[]>([]);
   const [taskError, setTaskError] = useState("");
+  const dashboardTaskLongPressRef = useRef<number | null>(null);
   const visibleSessions = useMemo(() => {
     if (dashboardFilter === "pinned") {
       return sessions.filter((session) => session.pinned);
@@ -4371,6 +5807,13 @@ function AndroidDashboard() {
     () => (sdStore.draw || []).slice(0, 12),
     [sdStore.draw],
   );
+  const recentContentKit = useMemo(
+    () =>
+      [...mobileStore.contentKits].sort(
+        (left, right) => right.updatedAt - left.updatedAt,
+      )[0],
+    [mobileStore.contentKits],
+  );
   const showingImages = dashboardFilter === "image";
   const showingTasks = dashboardFilter === "tasks";
   const isAdmin = isMobileAdminAvailable(managed.mobileProtocol);
@@ -4379,6 +5822,20 @@ function AndroidDashboard() {
   const [renameTarget, setRenameTarget] =
     useState<ManagedMobileChatSession | null>(null);
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
+
+  useEffect(() => {
+    const nextFilter = (location.state as any)?.dashboardFilter;
+    if (
+      nextFilter !== "all" &&
+      nextFilter !== "pinned" &&
+      nextFilter !== "image" &&
+      nextFilter !== "tasks"
+    ) {
+      return;
+    }
+    setDashboardFilter(nextFilter);
+    navigate(Path.Home, { replace: true, state: null });
+  }, [location.state, navigate]);
 
   useEffect(() => {
     const preference = resolveChatPreference(workspace, dashboardChatGroupId);
@@ -4428,9 +5885,28 @@ function AndroidDashboard() {
   }
 
   useEffect(() => {
-    if (showingTasks) void refreshCloudTasks();
+    if (!showingTasks) return;
+    const refresh = () => void refreshCloudTasks();
+    refresh();
+    const timer = window.setInterval(refresh, 15_000);
+    window.addEventListener("online", refresh);
+    window.addEventListener("jisudeng-native-resume", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("jisudeng-native-resume", refresh);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showingTasks]);
+  }, [showingTasks, managed.accessToken]);
+
+  useEffect(
+    () => () => {
+      if (dashboardTaskLongPressRef.current !== null) {
+        window.clearTimeout(dashboardTaskLongPressRef.current);
+      }
+    },
+    [],
+  );
 
   async function cancelCloudTask(task: MobileTask) {
     try {
@@ -4452,6 +5928,32 @@ function AndroidDashboard() {
     } catch {
       setTaskError(text.platform.taskRefreshFailed);
     }
+  }
+
+  function openTaskManager(taskId?: string) {
+    navigate(Path.Activity, {
+      state: {
+        view: "tasks",
+        manage: true,
+        taskId,
+      },
+    });
+  }
+
+  function startDashboardTaskLongPress(taskId: string) {
+    if (dashboardTaskLongPressRef.current !== null) {
+      window.clearTimeout(dashboardTaskLongPressRef.current);
+    }
+    dashboardTaskLongPressRef.current = window.setTimeout(() => {
+      dashboardTaskLongPressRef.current = null;
+      openTaskManager(taskId);
+    }, 450);
+  }
+
+  function stopDashboardTaskLongPress() {
+    if (dashboardTaskLongPressRef.current === null) return;
+    window.clearTimeout(dashboardTaskLongPressRef.current);
+    dashboardTaskLongPressRef.current = null;
   }
 
   async function deleteDashboardImageTask(item: any) {
@@ -4529,13 +6031,13 @@ function AndroidDashboard() {
   }
 
   return (
-    <AndroidAppShell active="chat" text={text} documentScroll>
+    <AndroidAppShell active="home" text={text} documentScroll>
       <header className={styles["dashboard-header"]}>
         <div>
           <span>
             {workspace?.brand?.workspace_name || text.workspaceFallback}
           </span>
-          <h1>{text.dashboard.title}</h1>
+          <h1>{text.navigation.home}</h1>
         </div>
         <button
           className={styles["avatar"]}
@@ -4602,6 +6104,38 @@ function AndroidDashboard() {
         )}
       </section>
 
+      {recentContentKit && (
+        <section className={styles["recent-project-panel"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.platform.contentKit.projects}</h2>
+            <button type="button" onClick={() => navigate(Path.ContentKit)}>
+              {text.common.open}
+            </button>
+          </div>
+          <button
+            type="button"
+            className={styles["recent-project-row"]}
+            onClick={() => navigate(Path.ContentKit)}
+          >
+            <ImageIcon />
+            <span>
+              <strong>
+                {recentContentKit.productName || text.platform.contentKit.title}
+              </strong>
+              <small>
+                {[
+                  recentContentKit.platform,
+                  text.photoCount(recentContentKit.assets.length),
+                  formatDateTime(recentContentKit.updatedAt, text),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </small>
+            </span>
+          </button>
+        </section>
+      )}
+
       <div className={styles["conversation-filters"]}>
         <button
           className={clsx({ [styles["active"]]: dashboardFilter === "all" })}
@@ -4647,24 +6181,28 @@ function AndroidDashboard() {
               ? text.image.history
               : text.chat.sessions}
           </h2>
-          <button
-            aria-label="dashboard-new-chat"
-            onClick={
-              showingTasks
-                ? refreshCloudTasks
-                : showingImages
-                ? () => navigate(Path.Sd)
-                : openChat
-            }
-          >
-            {showingTasks
-              ? text.common.refresh
-              : showingImages
-              ? text.image.generate
-              : text.chat.newSession}
-          </button>
+          {showingTasks ? (
+            <div className={styles["dashboard-task-actions"]}>
+              <button type="button" onClick={() => openTaskManager()}>
+                {text.platform.taskManage}
+              </button>
+              <button type="button" onClick={refreshCloudTasks}>
+                {text.common.refresh}
+              </button>
+            </div>
+          ) : (
+            <button
+              aria-label="dashboard-new-chat"
+              onClick={showingImages ? () => navigate(Path.Sd) : openChat}
+            >
+              {showingImages ? text.image.generate : text.chat.newSession}
+            </button>
+          )}
         </div>
-        <div className={styles["conversation-list"]}>
+        <div
+          className={styles["conversation-list"]}
+          aria-live={showingTasks ? "polite" : undefined}
+        >
           {!showingImages && !showingTasks && visibleSessions.length === 0 && (
             <button className={styles["conversation-empty"]} onClick={openChat}>
               <ChatIcon />
@@ -4695,15 +6233,25 @@ function AndroidDashboard() {
           )}
           {showingTasks
             ? cloudTasks.map((task) => (
-                <article key={task.id} className={styles["cloud-task-item"]}>
+                <article
+                  key={task.id}
+                  className={styles["cloud-task-item"]}
+                  onPointerDown={(event) => {
+                    if (event.pointerType !== "mouse") {
+                      startDashboardTaskLongPress(task.id);
+                    }
+                  }}
+                  onPointerUp={stopDashboardTaskLongPress}
+                  onPointerCancel={stopDashboardTaskLongPress}
+                  onPointerLeave={stopDashboardTaskLongPress}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openTaskManager(task.id);
+                  }}
+                >
                   <i>{task.kind === "image" ? <ImageIcon /> : <ChatIcon />}</i>
                   <span>
-                    <strong>
-                      {localizedMobileDisplay(task, {
-                        defaultFields: ["operation"],
-                        fallback: text.platform.tasks,
-                      })}
-                    </strong>
+                    <strong>{mobileTaskOperationLabel(task, text)}</strong>
                     <small>
                       {formatDateTime(task.updated_at || task.created_at, text)}
                     </small>
@@ -4892,6 +6440,1176 @@ function AndroidDashboard() {
   );
 }
 
+function AndroidProjects() {
+  const managed = useManagedNextChatStore();
+  const text = useMobileText();
+  const navigate = useNavigate();
+  const [projects, setProjects] = useState<MobileProject[]>([]);
+  const [selected, setSelected] = useState<MobileProject | null>(null);
+  const [page, setPage] = useState(1);
+  const [pages, setPages] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+
+  const refresh = useCallback(
+    async (nextPage = 1, append = false) => {
+      if (!managed.accessToken) return;
+      setLoading(true);
+      try {
+        const client = await mobilePlatformClient();
+        const result = await client.projects.list({
+          page: nextPage,
+          page_size: 20,
+        });
+        setProjects((current) =>
+          append ? [...current, ...(result.items || [])] : result.items || [],
+        );
+        setPage(result.page || nextPage);
+        setPages(result.pages || 1);
+        setError("");
+      } catch {
+        setError(text.platform.projectSyncFailed);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [managed.accessToken, text.platform.projectSyncFailed],
+  );
+
+  useEffect(() => {
+    const reload = () => void refresh();
+    reload();
+    window.addEventListener("online", reload);
+    window.addEventListener("jisudeng-native-resume", reload);
+    return () => {
+      window.removeEventListener("online", reload);
+      window.removeEventListener("jisudeng-native-resume", reload);
+    };
+  }, [refresh]);
+
+  useNativeBackHandler(true, () => {
+    if (selected) {
+      setSelected(null);
+      return;
+    }
+    if (creating) {
+      setCreating(false);
+      return;
+    }
+    handleNativeHomeBack(text);
+  });
+
+  function openProject(project: MobileProject) {
+    setSelected(project);
+    setName(project.name);
+    setDescription(project.description || "");
+    setCreating(false);
+    setError("");
+  }
+
+  function startCreate() {
+    setSelected(null);
+    setName("");
+    setDescription("");
+    setCreating(true);
+    setError("");
+  }
+
+  async function createProject(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    try {
+      const client = await mobilePlatformClient();
+      const project = await client.projects.create({
+        name: name.trim(),
+        description: description.trim(),
+        task_ids: [],
+        asset_ids: [],
+        client_request_id: clientRequestID("project-create"),
+      });
+      setProjects((current) => [project, ...current]);
+      setCreating(false);
+      openProject(project);
+    } catch {
+      setError(text.platform.projectSaveFailed);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveProject(event: FormEvent) {
+    event.preventDefault();
+    if (!selected || !name.trim() || saving) return;
+    setSaving(true);
+    try {
+      const client = await mobilePlatformClient();
+      const project = await client.projects.update(selected.id, {
+        name: name.trim(),
+        description: description.trim(),
+        client_request_id: clientRequestID("project-update"),
+      });
+      setProjects((current) =>
+        current.map((item) => (item.id === project.id ? project : item)),
+      );
+      setSelected(project);
+      setError("");
+    } catch {
+      setError(text.platform.projectSaveFailed);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteProject(project: MobileProject) {
+    if (!window.confirm(text.platform.projectDeleteConfirm(project.name)))
+      return;
+    setSaving(true);
+    try {
+      const client = await mobilePlatformClient();
+      await client.projects.delete(
+        project.id,
+        clientRequestID("project-delete"),
+      );
+      setProjects((current) =>
+        current.filter((item) => item.id !== project.id),
+      );
+      if (selected?.id === project.id) setSelected(null);
+      setError("");
+    } catch {
+      setError(text.platform.projectSaveFailed);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AndroidAppShell active="projects" text={text} documentScroll>
+      <header className={styles["app-header"]}>
+        <div>
+          <span>{text.platform.projectHint}</span>
+          <h1>{text.platform.projects}</h1>
+        </div>
+        <button
+          type="button"
+          className={styles["compact-text-action"]}
+          onClick={selected ? () => setSelected(null) : startCreate}
+        >
+          {selected ? text.common.back : text.platform.projectNew}
+        </button>
+      </header>
+
+      <section className={styles["project-shortcuts"]}>
+        <button type="button" onClick={() => navigate(Path.Gallery)}>
+          <ImageIcon />
+          <span>{text.platform.openGallery}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate(Path.Activity, { state: { view: "tasks" } })}
+        >
+          <HistoryIcon />
+          <span>{text.platform.openTasks}</span>
+        </button>
+      </section>
+
+      {(creating || selected) && (
+        <form
+          className={styles["project-editor"]}
+          onSubmit={creating ? createProject : saveProject}
+        >
+          <label className={styles["field-card"]}>
+            <span>{text.platform.projectName}</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.currentTarget.value)}
+              placeholder={text.platform.projectNamePlaceholder}
+              maxLength={120}
+            />
+          </label>
+          <label className={styles["field-card"]}>
+            <span>{text.platform.projectDescription}</span>
+            <textarea
+              value={description}
+              onChange={(event) => setDescription(event.currentTarget.value)}
+              maxLength={4000}
+              rows={3}
+            />
+          </label>
+          {selected && (
+            <div className={styles["project-counts"]}>
+              <span>
+                {text.platform.projectTasks(selected.task_ids.length)}
+              </span>
+              <span>
+                {text.platform.projectAssets(selected.asset_ids.length)}
+              </span>
+            </div>
+          )}
+          <button
+            type="submit"
+            className={styles["primary-action"]}
+            disabled={saving || !name.trim()}
+          >
+            {creating ? text.platform.projectCreate : text.common.save}
+          </button>
+          {selected && (
+            <button
+              type="button"
+              className={styles["danger-action"]}
+              disabled={saving}
+              onClick={() => void deleteProject(selected)}
+            >
+              {text.common.delete}
+            </button>
+          )}
+        </form>
+      )}
+
+      {!creating && !selected && (
+        <section className={styles["project-list"]} aria-live="polite">
+          {!loading && projects.length === 0 && (
+            <button
+              type="button"
+              className={styles["conversation-empty"]}
+              onClick={startCreate}
+            >
+              <HistoryIcon />
+              <strong>{text.platform.projectEmpty}</strong>
+              <span>{text.platform.projectHint}</span>
+            </button>
+          )}
+          {projects.map((project) => (
+            <article key={project.id} className={styles["project-row"]}>
+              <button type="button" onClick={() => openProject(project)}>
+                <i>
+                  <HistoryIcon />
+                </i>
+                <span>
+                  <strong>{project.name}</strong>
+                  <small>
+                    {[
+                      text.platform.projectTasks(project.task_ids.length),
+                      text.platform.projectAssets(project.asset_ids.length),
+                      formatDateTime(project.updated_at, text),
+                    ].join(" · ")}
+                  </small>
+                </span>
+              </button>
+              <IconButton
+                label={text.common.delete}
+                disabled={saving}
+                onClick={() => void deleteProject(project)}
+              >
+                <DeleteIcon />
+              </IconButton>
+            </article>
+          ))}
+          {page < pages && (
+            <button
+              type="button"
+              className={styles["wide-soft-action"]}
+              disabled={loading}
+              onClick={() => void refresh(page + 1, true)}
+            >
+              {text.platform.taskLoadMore}
+            </button>
+          )}
+        </section>
+      )}
+      {loading && <p className={styles["empty-copy"]}>{text.loading}</p>}
+      {error && <div className={styles["form-error"]}>{error}</div>}
+    </AndroidAppShell>
+  );
+}
+
+function AndroidActivityCenter() {
+  const managed = useManagedNextChatStore();
+  const text = useMobileText();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [view, setView] = useState<"tasks" | "notifications">(() =>
+    (location.state as any)?.view === "notifications"
+      ? "notifications"
+      : "tasks",
+  );
+  const [tasks, setTasks] = useState<MobileTask[]>([]);
+  const [taskPage, setTaskPage] = useState(1);
+  const [taskHasMore, setTaskHasMore] = useState(true);
+  const [taskLoadingMore, setTaskLoadingMore] = useState(false);
+  const taskPageRef = useRef(1);
+  const taskHasMoreRef = useRef(true);
+  const taskLoadingMoreRef = useRef(false);
+  const taskCursorRef = useRef("");
+  const [taskStatusFilter, setTaskStatusFilter] = useState<
+    "all" | MobileTaskStatus
+  >("all");
+  const [taskManaging, setTaskManaging] = useState(() =>
+    Boolean((location.state as any)?.manage),
+  );
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const taskLongPressRef = useRef<number | null>(null);
+  const [notifications, setNotifications] = useState<NativePushInboxItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [selectedTask, setSelectedTask] = useState<MobileTask | null>(null);
+  const [taskProjects, setTaskProjects] = useState<MobileProject[]>([]);
+  const [targetProjectId, setTargetProjectId] = useState("");
+  const [projectMessage, setProjectMessage] = useState("");
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [taskDeleteConfirmOpen, setTaskDeleteConfirmOpen] = useState(false);
+  const [taskCancelConfirmOpen, setTaskCancelConfirmOpen] = useState(false);
+  const [taskNotice, setTaskNotice] = useState("");
+  const taskNoticeTimerRef = useRef<number | null>(null);
+
+  function showTaskNotice(message: string) {
+    setTaskNotice(message);
+    if (taskNoticeTimerRef.current !== null) {
+      window.clearTimeout(taskNoticeTimerRef.current);
+    }
+    taskNoticeTimerRef.current = window.setTimeout(() => {
+      setTaskNotice("");
+      taskNoticeTimerRef.current = null;
+    }, 3200);
+  }
+
+  const refresh = useCallback(
+    async (append = false, preserveLoaded = false) => {
+      if (
+        append &&
+        (taskLoadingMoreRef.current ||
+          !taskHasMoreRef.current ||
+          view !== "tasks")
+      )
+        return;
+      if (append) {
+        taskLoadingMoreRef.current = true;
+        setTaskLoadingMore(true);
+      } else setLoading(true);
+      try {
+        if (view === "notifications") {
+          setNotifications(await getNativePushInbox());
+        } else {
+          const client = await mobilePlatformClient();
+          const nextPage = append ? taskPageRef.current + 1 : 1;
+          const page = await client.tasks.list({
+            page: nextPage,
+            page_size: 50,
+            cursor: append ? taskCursorRef.current || undefined : undefined,
+            limit: 50,
+            order: "desc",
+            status: taskStatusFilter === "all" ? undefined : taskStatusFilter,
+          });
+          const items = page.items || [];
+          setTasks((current) => {
+            if (append) return mergeMobileTaskPages(current, items, "append");
+            return mergeMobileTaskPages(
+              current,
+              items,
+              preserveLoaded ? "refresh" : "replace",
+            );
+          });
+          if (!preserveLoaded) {
+            const hasMore =
+              typeof page.has_more === "boolean"
+                ? page.has_more
+                : typeof page.pages === "number"
+                ? nextPage < page.pages
+                : items.length >= 50;
+            taskPageRef.current = nextPage;
+            taskHasMoreRef.current = hasMore;
+            taskCursorRef.current = page.next_cursor || "";
+            setTaskPage(nextPage);
+            setTaskHasMore(hasMore);
+          }
+        }
+        setError("");
+      } catch {
+        setError(text.platform.taskRefreshFailed);
+      } finally {
+        if (append) {
+          taskLoadingMoreRef.current = false;
+          setTaskLoadingMore(false);
+        } else setLoading(false);
+      }
+    },
+    [taskStatusFilter, text.platform.taskRefreshFailed, view],
+  );
+
+  useEffect(() => {
+    const routeState = (location.state as any) || {};
+    const nextView = routeState.view;
+    if (nextView === "tasks" || nextView === "notifications") {
+      setView(nextView);
+      if (routeState.manage) {
+        setTaskManaging(true);
+        if (typeof routeState.taskId === "string" && routeState.taskId) {
+          setSelectedTaskIds((current) =>
+            new Set(current).add(routeState.taskId),
+          );
+        }
+      }
+      navigate(Path.Activity, { replace: true, state: null });
+    }
+  }, [location.state, navigate]);
+
+  useEffect(() => {
+    const onRefresh = () => void refresh(false, true);
+    void refresh();
+    const timer = window.setInterval(
+      onRefresh,
+      view === "tasks" ? 15_000 : 60_000,
+    );
+    window.addEventListener("online", onRefresh);
+    window.addEventListener("jisudeng-native-resume", onRefresh);
+    window.addEventListener("jisudeng:push-inbox-change", onRefresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("online", onRefresh);
+      window.removeEventListener("jisudeng-native-resume", onRefresh);
+      window.removeEventListener("jisudeng:push-inbox-change", onRefresh);
+    };
+  }, [refresh, view]);
+
+  useEffect(
+    () => () => {
+      if (taskLongPressRef.current !== null) {
+        window.clearTimeout(taskLongPressRef.current);
+      }
+      if (taskNoticeTimerRef.current !== null) {
+        window.clearTimeout(taskNoticeTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useNativeBackHandler(true, () => {
+    if (taskDeleteConfirmOpen) {
+      setTaskDeleteConfirmOpen(false);
+      return;
+    }
+    if (taskCancelConfirmOpen) {
+      setTaskCancelConfirmOpen(false);
+      return;
+    }
+    if (selectedTask) {
+      setSelectedTask(null);
+      setProjectMessage("");
+      return;
+    }
+    if (taskManaging) {
+      leaveTaskManage();
+      return;
+    }
+    handleNativeHomeBack(text);
+  });
+
+  async function openTaskDetail(task: MobileTask) {
+    setSelectedTask(task);
+    setProjectMessage("");
+    try {
+      const client = await mobilePlatformClient();
+      const page = await client.projects.list({ page: 1, page_size: 100 });
+      setTaskProjects(page.items || []);
+      setTargetProjectId(page.items?.[0]?.id || "");
+    } catch {
+      setTaskProjects([]);
+      setTargetProjectId("");
+    }
+  }
+
+  async function addSelectedTaskToProject() {
+    if (!selectedTask || !targetProjectId || projectBusy) return;
+    const project = taskProjects.find((item) => item.id === targetProjectId);
+    if (!project) return;
+    if (project.task_ids.includes(selectedTask.id)) {
+      setProjectMessage(text.platform.projectTaskAlreadyAdded);
+      return;
+    }
+    setProjectBusy(true);
+    try {
+      const client = await mobilePlatformClient();
+      const updated = await client.projects.update(project.id, {
+        task_ids: [...project.task_ids, selectedTask.id],
+        client_request_id: clientRequestID("project-add-task"),
+      });
+      setTaskProjects((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setProjectMessage(text.platform.projectTaskAdded);
+    } catch {
+      setProjectMessage(text.platform.projectSaveFailed);
+    } finally {
+      setProjectBusy(false);
+    }
+  }
+
+  async function updateTask(task: MobileTask, action: "cancel" | "retry") {
+    try {
+      const client = await mobilePlatformClient();
+      if (action === "cancel") {
+        await client.tasks.cancel(task.id, { reason: "user_cancelled" });
+      } else {
+        await client.tasks.retry(task.id, {
+          client_request_id: clientRequestID("retry"),
+        });
+      }
+      await refresh();
+    } catch {
+      setError(text.platform.taskRefreshFailed);
+    }
+  }
+
+  function toggleTaskSelection(taskId: string) {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }
+
+  function enterTaskManage(taskId?: string) {
+    setTaskManaging(true);
+    if (taskId) {
+      setSelectedTaskIds((current) => new Set(current).add(taskId));
+    }
+  }
+
+  function startTaskLongPress(taskId: string) {
+    if (taskManaging) return;
+    if (taskLongPressRef.current !== null) {
+      window.clearTimeout(taskLongPressRef.current);
+    }
+    taskLongPressRef.current = window.setTimeout(() => {
+      enterTaskManage(taskId);
+      taskLongPressRef.current = null;
+    }, 450);
+  }
+
+  function stopTaskLongPress() {
+    if (taskLongPressRef.current === null) return;
+    window.clearTimeout(taskLongPressRef.current);
+    taskLongPressRef.current = null;
+  }
+
+  function leaveTaskManage() {
+    setTaskManaging(false);
+    setSelectedTaskIds(new Set());
+  }
+
+  async function deleteSelectedTasks() {
+    const selected = tasks.filter((task) =>
+      selectedTaskIds.has(String(task.id)),
+    );
+    const deletable = selected.filter(
+      (task) => !["queued", "running", "streaming"].includes(task.status),
+    );
+    const protectedTaskIds = selected
+      .filter((task) =>
+        ["queued", "running", "streaming"].includes(task.status),
+      )
+      .map((task) => String(task.id));
+    if (!deletable.length) {
+      setError(text.platform.taskRunningCannotDelete);
+      return;
+    }
+    setTaskDeleteConfirmOpen(false);
+    const failed = new Set<string>(protectedTaskIds);
+    let deletedCount = 0;
+    try {
+      const client = await mobilePlatformClient();
+      const requestId = clientRequestID("task-bulk-delete");
+      try {
+        const result = await client.tasks.bulkDelete({
+          ids: selected.map((task) => String(task.id)),
+          client_request_id: requestId,
+        });
+        deletedCount = result.deleted;
+        const returned = new Set(result.results.map((item) => String(item.id)));
+        result.results.forEach((result) => {
+          if (result.status === "not_terminal" || result.status === "failed") {
+            failed.add(String(result.id));
+          } else {
+            failed.delete(String(result.id));
+          }
+        });
+        selected.forEach((task) => {
+          if (!returned.has(String(task.id))) failed.add(String(task.id));
+        });
+      } catch (error) {
+        const olderBackend =
+          error instanceof ManagedApiError &&
+          (error.status === 404 || error.status === 405);
+        if (!olderBackend) throw error;
+        for (let index = 0; index < deletable.length; index += 4) {
+          const batch = deletable.slice(index, index + 4);
+          const results = await Promise.allSettled(
+            batch.map((task) => client.tasks.delete(task.id)),
+          );
+          results.forEach((result, resultIndex) => {
+            if (result.status === "rejected") {
+              failed.add(String(batch[resultIndex].id));
+            } else {
+              failed.delete(String(batch[resultIndex].id));
+              deletedCount += 1;
+            }
+          });
+        }
+      }
+      setTasks((current) =>
+        current.filter(
+          (task) =>
+            !selectedTaskIds.has(String(task.id)) ||
+            failed.has(String(task.id)),
+        ),
+      );
+      await refresh();
+      setSelectedTaskIds(failed);
+      if (failed.size) {
+        setError(
+          protectedTaskIds.length === failed.size
+            ? text.platform.taskRunningCannotDelete
+            : text.platform.taskDeletePartial(failed.size),
+        );
+      } else {
+        setError("");
+        setTaskManaging(false);
+      }
+      if (deletedCount > 0) {
+        showTaskNotice(text.platform.taskDeleteDone(deletedCount));
+      }
+    } catch {
+      setError(text.platform.taskRefreshFailed);
+    }
+  }
+
+  function requestDeleteSelectedTasks() {
+    const deletableCount = tasks.filter(
+      (task) =>
+        selectedTaskIds.has(String(task.id)) &&
+        !["queued", "running", "streaming"].includes(task.status),
+    ).length;
+    if (!deletableCount) {
+      setError(text.platform.taskRunningCannotDelete);
+      return;
+    }
+    setTaskDeleteConfirmOpen(true);
+  }
+
+  async function cancelSelectedTasks() {
+    const selected = tasks.filter(
+      (task) =>
+        selectedTaskIds.has(String(task.id)) &&
+        ["queued", "running", "streaming"].includes(task.status),
+    );
+    if (!selected.length) return;
+    setTaskCancelConfirmOpen(false);
+    const failed = new Set<string>();
+    let cancelledCount = 0;
+    try {
+      const client = await mobilePlatformClient();
+      const requestId = clientRequestID("task-bulk-cancel");
+      try {
+        const result = await client.tasks.bulkCancel({
+          ids: selected.map((task) => String(task.id)),
+          client_request_id: requestId,
+        });
+        cancelledCount = result.cancelled;
+        const returned = new Set(result.results.map((item) => String(item.id)));
+        result.results.forEach((item) => {
+          if (item.status === "not_cancellable" || item.status === "failed") {
+            failed.add(String(item.id));
+          }
+        });
+        selected.forEach((task) => {
+          if (!returned.has(String(task.id))) failed.add(String(task.id));
+        });
+      } catch (error) {
+        const olderBackend =
+          error instanceof ManagedApiError &&
+          (error.status === 404 || error.status === 405);
+        if (!olderBackend) throw error;
+        const results = await Promise.allSettled(
+          selected.map((task) =>
+            client.tasks.cancel(task.id, {
+              reason: "user_cancelled",
+              client_request_id: clientRequestID("task-cancel"),
+            }),
+          ),
+        );
+        results.forEach((result, index) => {
+          if (result.status === "rejected")
+            failed.add(String(selected[index].id));
+          else cancelledCount += 1;
+        });
+      }
+      setTasks((current) =>
+        current.map((task) =>
+          selectedTaskIds.has(String(task.id)) && !failed.has(String(task.id))
+            ? {
+                ...task,
+                status: "cancelled",
+                cancellable: false,
+                retryable: true,
+              }
+            : task,
+        ),
+      );
+      await refresh(false, true);
+      setSelectedTaskIds(failed);
+      if (failed.size) setError(text.platform.taskCancelPartial(failed.size));
+      else {
+        setError("");
+        setTaskManaging(false);
+      }
+      if (cancelledCount) {
+        showTaskNotice(text.platform.taskCancelDone(cancelledCount));
+      }
+    } catch {
+      setError(text.platform.taskRefreshFailed);
+    }
+  }
+
+  function requestCancelSelectedTasks() {
+    const cancellableCount = tasks.filter(
+      (task) =>
+        selectedTaskIds.has(String(task.id)) &&
+        ["queued", "running", "streaming"].includes(task.status),
+    ).length;
+    if (cancellableCount) setTaskCancelConfirmOpen(true);
+  }
+
+  const unreadCount = notifications.filter((item) => !item.read).length;
+
+  return (
+    <AndroidAppShell active="projects" text={text} documentScroll>
+      <header className={styles["app-header"]}>
+        <div>
+          <span>{text.account.activityHint}</span>
+          <h1>{text.account.activityCenter}</h1>
+        </div>
+        <div className={styles["activity-header-actions"]}>
+          {selectedTask && (
+            <button
+              type="button"
+              className={styles["compact-text-action"]}
+              onClick={() => setSelectedTask(null)}
+            >
+              {text.common.back}
+            </button>
+          )}
+          {view === "tasks" && !selectedTask && (
+            <button
+              type="button"
+              className={styles["compact-text-action"]}
+              onClick={() =>
+                taskManaging ? leaveTaskManage() : enterTaskManage()
+              }
+            >
+              {taskManaging ? text.common.cancel : text.platform.taskManage}
+            </button>
+          )}
+          <IconButton
+            label={text.common.refresh}
+            onClick={() => void refresh()}
+          >
+            <ReloadIcon />
+          </IconButton>
+        </div>
+      </header>
+
+      {selectedTask && (
+        <section className={styles["task-detail"]} aria-live="polite">
+          <div className={styles["section-head"]}>
+            <div>
+              <h2>{mobileTaskOperationLabel(selectedTask, text)}</h2>
+              <span>{formatDateTime(selectedTask.created_at, text)}</span>
+            </div>
+            <em>{mobileTaskStatusLabel(selectedTask.status, text)}</em>
+          </div>
+          <div className={styles["meta-row"]}>
+            <span>{text.platform.tasks}</span>
+            <strong>{selectedTask.operation || selectedTask.kind}</strong>
+          </div>
+          <div className={styles["meta-row"]}>
+            <span>{text.platform.taskStatuses[selectedTask.status]}</span>
+            <strong>{Math.max(0, selectedTask.progress || 0)}%</strong>
+          </div>
+          {(selectedTask.error?.message || selectedTask.error_message) && (
+            <div className={styles["form-error"]}>
+              {selectedTask.error?.message || selectedTask.error_message}
+            </div>
+          )}
+          {!!selectedTask.artifacts?.length && (
+            <div className={styles["project-counts"]}>
+              <span>
+                {text.platform.projectAssets(selectedTask.artifacts.length)}
+              </span>
+            </div>
+          )}
+          {taskProjects.length ? (
+            <div className={styles["task-project-link"]}>
+              <label>
+                <span>{text.platform.projectSelect}</span>
+                <select
+                  value={targetProjectId}
+                  onChange={(event) =>
+                    setTargetProjectId(event.currentTarget.value)
+                  }
+                >
+                  {taskProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={!targetProjectId || projectBusy}
+                onClick={() => void addSelectedTaskToProject()}
+              >
+                {text.platform.projectAddTask}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className={styles["wide-soft-action"]}
+              onClick={() => navigate(Path.Projects)}
+            >
+              {text.platform.projectNew}
+            </button>
+          )}
+          {projectMessage && (
+            <div className={styles["form-success"]}>{projectMessage}</div>
+          )}
+        </section>
+      )}
+
+      {!selectedTask && (
+        <>
+          <div className={styles["conversation-filters"]} role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "tasks"}
+              className={clsx({ [styles["active"]]: view === "tasks" })}
+              onClick={() => setView("tasks")}
+            >
+              {text.platform.tasks}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "notifications"}
+              className={clsx({ [styles["active"]]: view === "notifications" })}
+              onClick={() => setView("notifications")}
+            >
+              {text.account.notifications}
+              {unreadCount ? ` (${unreadCount})` : ""}
+            </button>
+          </div>
+
+          {error && <div className={styles["form-error"]}>{error}</div>}
+          <section
+            className={styles["section"]}
+            aria-busy={loading}
+            aria-live="polite"
+          >
+            <div className={styles["section-head"]}>
+              <h2>
+                {view === "tasks"
+                  ? text.platform.tasks
+                  : text.account.notifications}
+              </h2>
+              <span>
+                {view === "tasks"
+                  ? taskManaging
+                    ? text.common.selected(selectedTaskIds.size)
+                    : text.shortCount(tasks.length)
+                  : text.account.notificationUnread(unreadCount)}
+              </span>
+            </div>
+
+            {view === "tasks" && (
+              <select
+                className={styles["task-filter-select"]}
+                value={taskStatusFilter}
+                aria-label={text.platform.tasks}
+                onChange={(event) => {
+                  setTaskStatusFilter(
+                    event.currentTarget.value as "all" | MobileTaskStatus,
+                  );
+                  taskPageRef.current = 1;
+                  taskHasMoreRef.current = true;
+                  taskCursorRef.current = "";
+                  setTaskPage(1);
+                  setTaskHasMore(true);
+                  leaveTaskManage();
+                }}
+              >
+                <option value="all">{text.common.all}</option>
+                {(
+                  Object.keys(text.platform.taskStatuses) as MobileTaskStatus[]
+                ).map((status) => (
+                  <option key={status} value={status}>
+                    {text.platform.taskStatuses[status]}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {view === "tasks" ? (
+              <div className={styles["conversation-list"]}>
+                {taskManaging && !!tasks.length && (
+                  <div className={styles["task-selection-toolbar"]}>
+                    <button
+                      type="button"
+                      disabled={
+                        !tasks.some(
+                          (task) =>
+                            selectedTaskIds.has(String(task.id)) &&
+                            ["queued", "running", "streaming"].includes(
+                              task.status,
+                            ),
+                        )
+                      }
+                      onClick={requestCancelSelectedTasks}
+                    >
+                      {text.common.cancel}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedTaskIds(
+                          selectedTaskIds.size === tasks.length
+                            ? new Set()
+                            : new Set(tasks.map((task) => String(task.id))),
+                        )
+                      }
+                    >
+                      {text.common.selectAll}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles["danger-inline"]}
+                      disabled={!selectedTaskIds.size}
+                      onClick={requestDeleteSelectedTasks}
+                    >
+                      <DeleteIcon />
+                      <span>{text.common.delete}</span>
+                    </button>
+                  </div>
+                )}
+                {!loading && tasks.length === 0 && (
+                  <div className={styles["conversation-empty"]}>
+                    <HistoryIcon />
+                    <strong>{text.platform.taskEmpty}</strong>
+                    <span>{text.platform.taskHint}</span>
+                  </div>
+                )}
+                {tasks.map((task) => {
+                  const taskId = String(task.id);
+                  const selected = selectedTaskIds.has(taskId);
+                  return (
+                    <article
+                      key={task.id}
+                      className={clsx(styles["cloud-task-item"], {
+                        [styles["selected"]]: selected,
+                        [styles["managing"]]: taskManaging,
+                      })}
+                      onPointerDown={(event) => {
+                        if (event.pointerType !== "mouse")
+                          startTaskLongPress(taskId);
+                      }}
+                      onPointerUp={stopTaskLongPress}
+                      onPointerCancel={stopTaskLongPress}
+                      onPointerLeave={stopTaskLongPress}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        enterTaskManage(taskId);
+                      }}
+                    >
+                      {taskManaging ? (
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          aria-label={text.common.select}
+                          onChange={() => toggleTaskSelection(taskId)}
+                        />
+                      ) : (
+                        <i>
+                          {task.kind === "image" ? <ImageIcon /> : <ChatIcon />}
+                        </i>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          stopTaskLongPress();
+                          if (taskManaging) {
+                            toggleTaskSelection(taskId);
+                            return;
+                          }
+                          void openTaskDetail(task);
+                        }}
+                      >
+                        <strong>{mobileTaskOperationLabel(task, text)}</strong>
+                        <small>
+                          {formatDateTime(
+                            task.updated_at || task.created_at,
+                            text,
+                          )}
+                        </small>
+                      </button>
+                      <em>{mobileTaskStatusLabel(task.status, text)}</em>
+                      <div>
+                        {!taskManaging &&
+                          (task.cancellable ||
+                            ["queued", "running"].includes(task.status)) && (
+                            <button
+                              onClick={() => void updateTask(task, "cancel")}
+                            >
+                              {text.common.cancel}
+                            </button>
+                          )}
+                        {!taskManaging &&
+                          (task.retryable ||
+                            ["failed", "cancelled", "partial"].includes(
+                              task.status,
+                            )) && (
+                            <button
+                              onClick={() => void updateTask(task, "retry")}
+                            >
+                              {text.common.retry}
+                            </button>
+                          )}
+                      </div>
+                    </article>
+                  );
+                })}
+                {!loading && !!tasks.length && (
+                  <button
+                    type="button"
+                    className={styles["wide-soft-action"]}
+                    disabled={!taskHasMore || taskLoadingMore}
+                    onClick={() => void refresh(true)}
+                  >
+                    {taskLoadingMore
+                      ? text.loading
+                      : taskHasMore
+                      ? text.platform.taskLoadMore
+                      : text.platform.taskAllLoaded}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className={styles["notification-inbox-list"]}>
+                {!!notifications.length && (
+                  <div className={styles["inline-actions"]}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void markNativePushInboxRead().then(setNotifications)
+                      }
+                    >
+                      {text.account.markAllNotificationsRead}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles["danger-inline"]}
+                      onClick={() =>
+                        void clearNativePushInbox().then(setNotifications)
+                      }
+                    >
+                      {text.account.clearNotifications}
+                    </button>
+                  </div>
+                )}
+                {!loading && notifications.length === 0 && (
+                  <p className={styles["empty-copy"]}>
+                    {text.account.notificationEmpty}
+                  </p>
+                )}
+                {notifications.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={clsx(styles["notification-inbox-item"], {
+                      [styles["unread"]]: !item.read,
+                    })}
+                    onClick={() => {
+                      void markNativePushInboxRead([item.id]).then(
+                        setNotifications,
+                      );
+                      window.dispatchEvent(
+                        new CustomEvent("jisudeng:push-open", { detail: item }),
+                      );
+                    }}
+                  >
+                    <i aria-hidden="true" />
+                    <span>
+                      <strong>
+                        {item.title || text.account.notifications}
+                      </strong>
+                      {!!item.body && <p>{item.body}</p>}
+                      <small>{formatDateTime(item.receivedAt, text)}</small>
+                    </span>
+                    <em>{text.account.notificationOpen}</em>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+      <ConfirmSheet
+        open={taskDeleteConfirmOpen}
+        title={text.common.delete}
+        body={text.platform.taskDeleteConfirm(
+          tasks.filter(
+            (task) =>
+              selectedTaskIds.has(String(task.id)) &&
+              !["queued", "running", "streaming"].includes(task.status),
+          ).length,
+        )}
+        cancelLabel={text.common.cancel}
+        confirmLabel={text.common.delete}
+        danger
+        onClose={() => setTaskDeleteConfirmOpen(false)}
+        onConfirm={() => void deleteSelectedTasks()}
+      />
+      <ConfirmSheet
+        open={taskCancelConfirmOpen}
+        title={text.common.cancel}
+        body={text.platform.taskCancelConfirm(
+          tasks.filter(
+            (task) =>
+              selectedTaskIds.has(String(task.id)) &&
+              ["queued", "running", "streaming"].includes(task.status),
+          ).length,
+        )}
+        cancelLabel={text.common.back}
+        confirmLabel={text.common.cancel}
+        onClose={() => setTaskCancelConfirmOpen(false)}
+        onConfirm={() => void cancelSelectedTasks()}
+      />
+      {taskNotice && (
+        <div className={styles["app-toast"]} role="status" aria-live="polite">
+          {taskNotice}
+        </div>
+      )}
+    </AndroidAppShell>
+  );
+}
+
 function ChatSessionDrawer(props: {
   open: boolean;
   sessions: ManagedMobileChatSession[];
@@ -4920,7 +7638,12 @@ function ChatSessionDrawer(props: {
   });
   if (!props.open) return null;
   return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+    >
       <aside
         className={styles["session-sheet"]}
         onClick={(event) => event.stopPropagation()}
@@ -5035,7 +7758,12 @@ function ChoiceSheet(props: {
 }) {
   if (!props.open) return null;
   return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+    >
       <aside
         className={styles["session-sheet"]}
         onClick={(event) => event.stopPropagation()}
@@ -5072,199 +7800,6 @@ function ChoiceSheet(props: {
   );
 }
 
-function VoiceConversationSheet(props: {
-  open: boolean;
-  text: ManagedMobileText;
-  preferences: MobileVoiceConversationPreferences;
-  listening: boolean;
-  speaking: boolean;
-  liveState: MobileLiveState;
-  liveAvailable: boolean;
-  onClose: () => void;
-  onChange: (next: MobileVoiceConversationPreferences) => void;
-  onStopSpeaking: () => void;
-  onStartLive: () => void;
-  onStopLive: () => void;
-}) {
-  if (!props.open) return null;
-  const update = (patch: Partial<MobileVoiceConversationPreferences>) => {
-    const next = { ...props.preferences, ...patch };
-    if (!next.enabled) next.wakeWordEnabled = false;
-    props.onChange(next);
-  };
-  const rateLabel = `${Number(props.preferences.ttsRate || 1).toFixed(1)}x`;
-
-  return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
-      <aside
-        className={clsx(
-          styles["session-sheet"],
-          styles["voice-settings-sheet"],
-        )}
-        role="dialog"
-        aria-modal="true"
-        aria-label={props.text.chat.voiceConversation}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className={styles["sheet-head"]}>
-          <div>
-            <h2>{props.text.chat.voiceConversation}</h2>
-            <small>{props.text.chat.voiceConversationHint}</small>
-          </div>
-          <IconButton label={props.text.common.close} onClick={props.onClose}>
-            <CloseIcon />
-          </IconButton>
-        </div>
-
-        <div className={styles["voice-settings-list"]}>
-          <label className={styles["voice-settings-toggle"]}>
-            <span>
-              <strong>{props.text.chat.voiceConversation}</strong>
-              <small>{props.text.chat.voiceConversationHint}</small>
-            </span>
-            <input
-              type="checkbox"
-              checked={props.preferences.enabled}
-              onChange={(event) =>
-                update({ enabled: event.currentTarget.checked })
-              }
-            />
-          </label>
-
-          {props.preferences.enabled && (
-            <button
-              type="button"
-              className={styles["voice-live-action"]}
-              disabled={
-                !props.liveAvailable || props.liveState === "connecting"
-              }
-              onClick={() => {
-                if (props.liveState === "connected") {
-                  props.onStopLive();
-                } else {
-                  props.onStartLive();
-                }
-              }}
-            >
-              <VoiceIcon />
-              <span>
-                {props.liveState === "connected"
-                  ? props.text.chat.liveVoiceStop
-                  : props.liveState === "connecting"
-                  ? props.text.chat.liveVoiceConnecting
-                  : props.text.chat.liveVoiceStart}
-              </span>
-            </button>
-          )}
-          {props.preferences.enabled && !props.liveAvailable && (
-            <small className={styles["voice-live-unavailable"]}>
-              {props.text.chat.liveVoiceUnavailable}
-            </small>
-          )}
-
-          <label
-            className={clsx(styles["voice-settings-toggle"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>
-              <strong>{props.text.chat.continuousVoice}</strong>
-              <small>{props.text.chat.continuousVoiceHint}</small>
-            </span>
-            <input
-              type="checkbox"
-              disabled={!props.preferences.enabled}
-              checked={
-                props.preferences.enabled && props.preferences.continuous
-              }
-              onChange={(event) =>
-                update({ continuous: event.currentTarget.checked })
-              }
-            />
-          </label>
-
-          <label
-            className={clsx(styles["voice-settings-toggle"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>
-              <strong>{props.text.chat.wakeWord}</strong>
-              <small>{props.text.chat.wakeWordHint}</small>
-            </span>
-            <input
-              type="checkbox"
-              disabled={!props.preferences.enabled}
-              checked={
-                props.preferences.enabled && props.preferences.wakeWordEnabled
-              }
-              onChange={(event) =>
-                update({ wakeWordEnabled: event.currentTarget.checked })
-              }
-            />
-          </label>
-
-          <label
-            className={clsx(styles["voice-settings-field"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>{props.text.chat.wakeWordPhrase}</span>
-            <input
-              value={props.preferences.wakeWordPhrase}
-              maxLength={64}
-              disabled={!props.preferences.enabled}
-              placeholder={props.text.chat.wakeWordPlaceholder}
-              onChange={(event) =>
-                update({ wakeWordPhrase: event.currentTarget.value })
-              }
-            />
-          </label>
-
-          <label
-            className={clsx(styles["voice-settings-field"], {
-              [styles["disabled"]]: !props.preferences.enabled,
-            })}
-          >
-            <span>
-              {props.text.chat.voicePlaybackRate} <em>{rateLabel}</em>
-            </span>
-            <input
-              type="range"
-              min="0.5"
-              max="2"
-              step="0.1"
-              disabled={!props.preferences.enabled}
-              value={props.preferences.ttsRate}
-              onChange={(event) =>
-                update({ ttsRate: Number(event.currentTarget.value) || 1 })
-              }
-            />
-          </label>
-
-          {(props.listening || props.speaking) && (
-            <div className={styles["voice-settings-state"]}>
-              <VoiceIcon />
-              <span>
-                {props.speaking
-                  ? props.text.chat.voiceStopSpeaking
-                  : props.text.chat.wakeWordListening(
-                      props.preferences.wakeWordPhrase,
-                    )}
-              </span>
-              {props.speaking && (
-                <button type="button" onClick={props.onStopSpeaking}>
-                  {props.text.chat.voiceStopSpeaking}
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </aside>
-    </div>
-  );
-}
-
 function LibrarySheet(props: {
   open: boolean;
   title: string;
@@ -5279,7 +7814,12 @@ function LibrarySheet(props: {
 }) {
   if (!props.open) return null;
   return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+    >
       <aside
         className={clsx(styles["session-sheet"], {
           [styles["compact-library-sheet"]]: props.compact,
@@ -5318,6 +7858,9 @@ function ImagePromptLibrarySheet(props: {
   open: boolean;
   text: ManagedMobileText;
   currentModel?: string;
+  accountId?: string;
+  backendBaseUrl?: string;
+  accessToken?: string;
   onClose: () => void;
   onApply: (template: ImagePromptTemplate) => void;
   onAdapt: (template: ImagePromptTemplate) => void;
@@ -5339,61 +7882,89 @@ function ImagePromptLibrarySheet(props: {
   const [recentIds, setRecentIds] = useState<string[]>(() =>
     readStoredJSON("jisudengchat-image-prompt-recents-v1", [] as string[]),
   );
+  const coverObjectURLsRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!props.open) return;
     let alive = true;
-    const locale = props.text.dateLocale.toLowerCase().startsWith("zh")
-      ? "zh"
-      : "en";
-    async function loadLibrary() {
-      try {
-        const manifest = await fetch("/image-prompts/manifest.json").then(
-          (res) => res.json(),
+    const appLocale = mobileTextLocale(props.text);
+    const locale =
+      appLocale === "cn"
+        ? "zh"
+        : appLocale === "jp"
+        ? "ja"
+        : appLocale === "ko"
+        ? "ko"
+        : "en";
+    const releaseCoverObjectURLs = () => {
+      coverObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      coverObjectURLsRef.current = [];
+    };
+    async function applyCatalog(catalog: LocalPromptCatalog) {
+      const entries = await Promise.all(
+        catalog.items.map(async (item) => {
+          const coverUrl = await createLocalPromptCoverObjectURL(
+            catalog.accountId,
+            catalog.locale,
+            "image",
+            item.id,
+            catalog.source,
+          );
+          return { item, coverUrl };
+        }),
+      );
+      if (!alive) {
+        entries.forEach(({ coverUrl }) => {
+          if (coverUrl) URL.revokeObjectURL(coverUrl);
+        });
+        return;
+      }
+      releaseCoverObjectURLs();
+      coverObjectURLsRef.current = entries
+        .map(({ coverUrl }) => coverUrl)
+        .filter(Boolean);
+      const normalized = entries.map(({ item, coverUrl }) =>
+        localPromptCatalogItemToImageTemplate(item, coverUrl),
+      );
+      if (normalized.length > 0) setLibraryItems(normalized);
+      const systemCategories = fallbackImagePromptCategories(props.text).filter(
+        (item) => ["all", "featured", "favorites", "recent"].includes(item.id),
+      );
+      const remoteOnly = catalog.categories
+        .map(localPromptCatalogCategoryToImageCategory)
+        .filter(
+          (item) =>
+            item.id &&
+            !systemCategories.some((system) => system.id === item.id),
         );
-        const categoryFile =
-          manifest?.categoryFiles?.[locale] ||
-          manifest?.categoryFiles?.zh ||
-          "";
-        const promptFiles: string[] =
-          manifest?.promptFiles?.[locale] || manifest?.promptFiles?.zh || [];
-        const [remoteCategories, promptParts] = await Promise.all([
-          categoryFile
-            ? fetch(categoryFile)
-                .then((res) => res.json())
-                .catch(() => [])
-            : Promise.resolve([]),
-          Promise.all(
-            promptFiles.map((file) =>
-              fetch(file)
-                .then((res) => res.json())
-                .catch(() => []),
-            ),
-          ),
-        ]);
-        if (!alive) return;
-        const normalized = promptParts
-          .flat()
-          .filter((item: ImagePromptLibraryPayload) => item?.id)
-          .map(normalizeImagePromptPayload);
-        if (normalized.length > 0) {
-          setLibraryItems(normalized);
-        }
-        if (Array.isArray(remoteCategories) && remoteCategories.length > 0) {
-          const systemCategories = fallbackImagePromptCategories(
-            props.text,
-          ).filter((item) =>
-            ["all", "featured", "favorites", "recent"].includes(item.id),
-          );
-          const remoteOnly = remoteCategories.filter(
-            (item: ImagePromptCategory) =>
-              item?.id &&
-              !systemCategories.some((system) => system.id === item.id),
-          );
-          setLibraryCategories([...systemCategories, ...remoteOnly]);
-        }
+      setLibraryCategories([...systemCategories, ...remoteOnly]);
+    }
+    async function loadLibrary() {
+      const accountId = String(props.accountId || "").trim();
+      const accessToken = String(props.accessToken || "").trim();
+      const backendBaseUrl = String(props.backendBaseUrl || "").trim();
+      try {
+        if (!accountId) return;
+        const cached = await readLocalPromptCatalog(
+          accountId,
+          locale,
+          "image",
+          "canvas",
+        );
+        if (cached) await applyCatalog(cached);
+        if (!accessToken || !backendBaseUrl) return;
+        const synced = await syncLocalPromptCatalog(
+          accountId,
+          locale,
+          "image",
+          backendBaseUrl,
+          accessToken,
+          undefined,
+          "canvas",
+        );
+        await applyCatalog(synced.catalog);
       } catch {
-        if (alive) {
+        if (alive && !String(props.accountId || "").trim()) {
           setLibraryItems(IMAGE_PROMPT_TEMPLATES);
           setLibraryCategories(fallbackImagePromptCategories(props.text));
         }
@@ -5402,8 +7973,15 @@ function ImagePromptLibrarySheet(props: {
     loadLibrary();
     return () => {
       alive = false;
+      releaseCoverObjectURLs();
     };
-  }, [props.open, props.text]);
+  }, [
+    props.accessToken,
+    props.accountId,
+    props.backendBaseUrl,
+    props.open,
+    props.text,
+  ]);
 
   function markRecent(id: string) {
     setRecentIds((ids) => {
@@ -5424,7 +8002,6 @@ function ImagePromptLibrarySheet(props: {
   }
 
   const queryValue = query.trim().toLowerCase();
-  const zhLocale = props.text.dateLocale.toLowerCase().startsWith("zh");
   const items = libraryItems.filter((item) => {
     const categoryMatch =
       category === "all" ||
@@ -5438,8 +8015,11 @@ function ImagePromptLibrarySheet(props: {
     return [
       localizedValue(item.title, props.text),
       localizedValue(item.description, props.text),
+      localizedValue(item.prompt, props.text),
       item.prompt.cn,
       item.prompt.en,
+      item.prompt.jp,
+      item.prompt.ko,
       item.author,
       item.source,
       item.domain,
@@ -5475,7 +8055,27 @@ function ImagePromptLibrarySheet(props: {
           [
             ["app", props.text.image.languageApp],
             ["zh", "中文"],
-            ["en", zhLocale ? "英文" : "English"],
+            [
+              "en",
+              localizedValue(
+                { cn: "英文", en: "English", jp: "英語", ko: "영어" },
+                props.text,
+              ),
+            ],
+            [
+              "jp",
+              localizedValue(
+                { cn: "日文", en: "Japanese", jp: "日本語", ko: "일본어" },
+                props.text,
+              ),
+            ],
+            [
+              "ko",
+              localizedValue(
+                { cn: "韩文", en: "Korean", jp: "韓国語", ko: "한국어" },
+                props.text,
+              ),
+            ],
             ["both", props.text.image.languageBoth],
           ] as Array<[ImagePromptLanguageMode, string]>
         ).map(([id, label]) => (
@@ -5491,6 +8091,14 @@ function ImagePromptLibrarySheet(props: {
       <div className={styles["library-list"]}>
         {items.map((item) => (
           <article key={item.id} className={styles["library-item"]}>
+            {item.coverUrl && (
+              <img
+                className={styles["prompt-library-cover"]}
+                src={item.coverUrl}
+                alt=""
+                loading="lazy"
+              />
+            )}
             <div className={styles["library-item-main"]}>
               <strong>{localizedValue(item.title, props.text)}</strong>
               <small>{localizedValue(item.description, props.text)}</small>
@@ -5573,20 +8181,85 @@ function ChatAgentLibrarySheet(props: {
   onSelect: (template: ChatAgentTemplate | null) => void;
 }) {
   const [category, setCategory] = useState("all");
-  const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
   const categories = [
     { id: "all", label: props.text.common.all },
-    { id: "collaboration", label: zh ? "协作" : "Collab" },
-    { id: "writing", label: zh ? "写作" : "Writing" },
-    { id: "code", label: zh ? "代码" : "Code" },
-    { id: "operation", label: zh ? "运营" : "Ops" },
-    { id: "support", label: zh ? "客服" : "Support" },
-    { id: "product", label: zh ? "产品" : "Product" },
-    { id: "ai", label: zh ? "AI创作" : "AI" },
-    { id: "analysis", label: zh ? "分析" : "Analysis" },
-    { id: "business", label: zh ? "商业" : "Business" },
-    { id: "translation", label: zh ? "翻译" : "Translation" },
-    { id: "legal", label: zh ? "法律" : "Legal" },
+    {
+      id: "collaboration",
+      label: localizedValue(
+        { cn: "协作", en: "Collab", jp: "協働", ko: "협업" },
+        props.text,
+      ),
+    },
+    {
+      id: "writing",
+      label: localizedValue(
+        { cn: "写作", en: "Writing", jp: "執筆", ko: "작성" },
+        props.text,
+      ),
+    },
+    {
+      id: "code",
+      label: localizedValue(
+        { cn: "代码", en: "Code", jp: "コード", ko: "코드" },
+        props.text,
+      ),
+    },
+    {
+      id: "operation",
+      label: localizedValue(
+        { cn: "运营", en: "Ops", jp: "運用", ko: "운영" },
+        props.text,
+      ),
+    },
+    {
+      id: "support",
+      label: localizedValue(
+        { cn: "客服", en: "Support", jp: "サポート", ko: "지원" },
+        props.text,
+      ),
+    },
+    {
+      id: "product",
+      label: localizedValue(
+        { cn: "产品", en: "Product", jp: "プロダクト", ko: "제품" },
+        props.text,
+      ),
+    },
+    {
+      id: "ai",
+      label: localizedValue(
+        { cn: "AI创作", en: "AI", jp: "AI 創作", ko: "AI 창작" },
+        props.text,
+      ),
+    },
+    {
+      id: "analysis",
+      label: localizedValue(
+        { cn: "分析", en: "Analysis", jp: "分析", ko: "분석" },
+        props.text,
+      ),
+    },
+    {
+      id: "business",
+      label: localizedValue(
+        { cn: "商业", en: "Business", jp: "ビジネス", ko: "비즈니스" },
+        props.text,
+      ),
+    },
+    {
+      id: "translation",
+      label: localizedValue(
+        { cn: "翻译", en: "Translation", jp: "翻訳", ko: "번역" },
+        props.text,
+      ),
+    },
+    {
+      id: "legal",
+      label: localizedValue(
+        { cn: "法律", en: "Legal", jp: "法務", ko: "법률" },
+        props.text,
+      ),
+    },
   ];
   const items = CHAT_AGENT_TEMPLATES.filter(
     (item) => category === "all" || item.category === category,
@@ -5668,19 +8341,78 @@ function ChatSkillLibrarySheet(props: {
     null,
   );
   const [serverDetail, setServerDetail] = useState<MobileSkill | null>(null);
-  const zh = props.text.dateLocale.toLowerCase().startsWith("zh");
   const categories = [
     { id: "all", label: props.text.common.all },
-    { id: "document", label: zh ? "文档" : "Docs" },
-    { id: "image", label: zh ? "图片" : "Image" },
-    { id: "business", label: zh ? "商业" : "Business" },
-    { id: "marketing", label: zh ? "营销" : "Marketing" },
-    { id: "code", label: zh ? "代码" : "Code" },
-    { id: "support", label: zh ? "客服" : "Support" },
-    { id: "legal", label: zh ? "合同" : "Legal" },
-    { id: "education", label: zh ? "学习" : "Study" },
-    { id: "office", label: zh ? "办公" : "Office" },
-    { id: "translation", label: zh ? "翻译" : "Translation" },
+    {
+      id: "document",
+      label: localizedValue(
+        { cn: "文档", en: "Docs", jp: "文書", ko: "문서" },
+        props.text,
+      ),
+    },
+    {
+      id: "image",
+      label: localizedValue(
+        { cn: "图片", en: "Image", jp: "画像", ko: "이미지" },
+        props.text,
+      ),
+    },
+    {
+      id: "business",
+      label: localizedValue(
+        { cn: "商业", en: "Business", jp: "ビジネス", ko: "비즈니스" },
+        props.text,
+      ),
+    },
+    {
+      id: "marketing",
+      label: localizedValue(
+        { cn: "营销", en: "Marketing", jp: "マーケ", ko: "마케팅" },
+        props.text,
+      ),
+    },
+    {
+      id: "code",
+      label: localizedValue(
+        { cn: "代码", en: "Code", jp: "コード", ko: "코드" },
+        props.text,
+      ),
+    },
+    {
+      id: "support",
+      label: localizedValue(
+        { cn: "客服", en: "Support", jp: "サポート", ko: "지원" },
+        props.text,
+      ),
+    },
+    {
+      id: "legal",
+      label: localizedValue(
+        { cn: "合同", en: "Legal", jp: "法務", ko: "법무" },
+        props.text,
+      ),
+    },
+    {
+      id: "education",
+      label: localizedValue(
+        { cn: "学习", en: "Study", jp: "学習", ko: "학습" },
+        props.text,
+      ),
+    },
+    {
+      id: "office",
+      label: localizedValue(
+        { cn: "办公", en: "Office", jp: "オフィス", ko: "오피스" },
+        props.text,
+      ),
+    },
+    {
+      id: "translation",
+      label: localizedValue(
+        { cn: "翻译", en: "Translation", jp: "翻訳", ko: "번역" },
+        props.text,
+      ),
+    },
   ];
   const items = CHAT_SKILL_TEMPLATES.filter(
     (item) =>
@@ -5756,7 +8488,17 @@ function ChatSkillLibrarySheet(props: {
           <div className={styles["library-item-main"]}>
             <strong>{props.text.platform.noSkill}</strong>
             <small>{props.text.platform.noSkillHint}</small>
-            <em>{zh ? "普通对话" : "Normal chat"}</em>
+            <em>
+              {localizedValue(
+                {
+                  cn: "普通对话",
+                  en: "Normal chat",
+                  jp: "通常チャット",
+                  ko: "일반 채팅",
+                },
+                props.text,
+              )}
+            </em>
           </div>
           <div className={styles["inline-actions"]}>
             <button onClick={() => props.onSelectLocal(null)}>
@@ -5908,8 +8650,20 @@ function ChatSkillLibrarySheet(props: {
                 <ul>
                   {serverDetail.parameters.slice(0, 6).map((param) => (
                     <li key={param.key}>
-                      {zh && param.label_zh ? param.label_zh : param.label}
-                      {param.required ? ` · ${zh ? "必填" : "Required"}` : ""}
+                      {isChineseMobileText(props.text) && param.label_zh
+                        ? param.label_zh
+                        : param.label}
+                      {param.required
+                        ? ` · ${localizedValue(
+                            {
+                              cn: "必填",
+                              en: "Required",
+                              jp: "必須",
+                              ko: "필수",
+                            },
+                            props.text,
+                          )}`
+                        : ""}
                     </li>
                   ))}
                 </ul>
@@ -5972,6 +8726,7 @@ function MessageActionSheet(props: {
   onSelectText: () => void;
   onQuote: () => void;
   onRetry: () => void;
+  onReport: () => void;
   onDelete: () => void;
 }) {
   const message = props.target.message;
@@ -5980,7 +8735,12 @@ function MessageActionSheet(props: {
     message.status === "error" ||
     message.status === "cancelled";
   return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+    >
       <aside
         className={styles["session-sheet"]}
         onClick={(event) => event.stopPropagation()}
@@ -6027,6 +8787,10 @@ function MessageActionSheet(props: {
             <ReloadIcon />
             <span>{props.text.chat.retryMessage}</span>
           </button>
+          <button onClick={props.onReport}>
+            <CloudFailIcon />
+            <span>{props.text.account.aiContentReport}</span>
+          </button>
           <button className={styles["danger-inline"]} onClick={props.onDelete}>
             <DeleteIcon />
             <span>{props.text.common.delete}</span>
@@ -6048,7 +8812,12 @@ function SessionActionSheet(props: {
 }) {
   if (!props.session) return null;
   return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+    >
       <aside
         className={styles["session-sheet"]}
         onClick={(event) => event.stopPropagation()}
@@ -6103,7 +8872,12 @@ function RenameSessionDialog(props: {
   }, [props.initialValue, props.open]);
   if (!props.open) return null;
   return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+    >
       <aside
         className={styles["confirm-dialog"]}
         onClick={(event) => event.stopPropagation()}
@@ -6142,12 +8916,18 @@ function ImageTaskActionSheet(props: {
   onOpen: () => void;
   onReuse: () => void;
   onRetry: () => void;
+  onReport: () => void;
   onDelete: () => void;
 }) {
   if (!props.item) return null;
   const canRetry = !["running", "queued"].includes(String(props.item.status));
   return (
-    <div className={styles["sheet-mask"]} onClick={props.onClose}>
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+    >
       <aside
         className={styles["session-sheet"]}
         onClick={(event) => event.stopPropagation()}
@@ -6178,6 +8958,10 @@ function ImageTaskActionSheet(props: {
             <ReloadIcon />
             <span>{props.text.image.retryTask}</span>
           </button>
+          <button onClick={props.onReport}>
+            <CloudFailIcon />
+            <span>{props.text.account.aiContentReport}</span>
+          </button>
           <button className={styles["danger-inline"]} onClick={props.onDelete}>
             <DeleteIcon />
             <span>{props.text.common.delete}</span>
@@ -6207,6 +8991,107 @@ function messageTextValue(
       ? text.chat.imageAttached(message.imageUrls.length)
       : "")
   );
+}
+
+function reportSnippet(value: string, max = 1200) {
+  const normalized = String(value || "").trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, max)}…`;
+}
+
+function writeMobileReportDraft(draft: MobileReportDraft) {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(
+        MOBILE_REPORT_DRAFT_STORAGE_KEY,
+        JSON.stringify(draft),
+      );
+      return;
+    }
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(
+        MOBILE_REPORT_DRAFT_STORAGE_KEY,
+        JSON.stringify(draft),
+      );
+    }
+  } catch {
+    // Keep the manual feedback form usable even when storage is blocked.
+  }
+}
+
+function readMobileReportDraft(): MobileReportDraft | null {
+  const stores: Storage[] = [];
+  if (typeof sessionStorage !== "undefined") stores.push(sessionStorage);
+  if (typeof localStorage !== "undefined") stores.push(localStorage);
+  for (const storage of stores) {
+    try {
+      const raw = storage.getItem(MOBILE_REPORT_DRAFT_STORAGE_KEY);
+      if (!raw) continue;
+      storage.removeItem(MOBILE_REPORT_DRAFT_STORAGE_KEY);
+      const parsed = JSON.parse(raw) as Partial<MobileReportDraft>;
+      if (
+        parsed?.category === "ai_content_report" &&
+        typeof parsed.title === "string" &&
+        typeof parsed.content === "string"
+      ) {
+        return {
+          category: "ai_content_report",
+          title: parsed.title,
+          content: parsed.content,
+          createdAt: Number(parsed.createdAt || Date.now()),
+        };
+      }
+    } catch {
+      // Ignore malformed drafts and keep the manual feedback form usable.
+    }
+  }
+  return null;
+}
+
+function buildChatReportDraft(
+  message: ManagedMobileChatMessage,
+  text: ManagedMobileText,
+): MobileReportDraft {
+  const role = messageRoleLabel(message, text);
+  const content = messageTextValue(message, text);
+  return {
+    category: "ai_content_report",
+    title: text.account.aiContentReportChatTitle,
+    content: [
+      text.account.aiContentReportIntro,
+      "Surface: chat",
+      `Role: ${role}`,
+      `Message ID: ${message.id}`,
+      `Status: ${message.status || "done"}`,
+      `Content:\n${reportSnippet(content || text.common.empty)}`,
+    ].join("\n\n"),
+    createdAt: Date.now(),
+  };
+}
+
+function buildImageReportDraft(
+  item: any,
+  text: ManagedMobileText,
+): MobileReportDraft {
+  const prompt = item?.params?.prompt || item?.prompt || "";
+  const imageCount = imageResults(item).length;
+  return {
+    category: "ai_content_report",
+    title: text.account.aiContentReportImageTitle,
+    content: [
+      text.account.aiContentReportIntro,
+      "Surface: image",
+      `Task ID: ${item?.id || text.common.empty}`,
+      `Status: ${item?.status || text.common.empty}`,
+      `Model: ${item?.model_name || item?.model || text.common.empty}`,
+      `Images: ${imageCount}`,
+      `Prompt:\n${reportSnippet(prompt || text.common.empty)}`,
+      item?.error ? `Error:\n${reportSnippet(item.error)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    createdAt: Date.now(),
+  };
 }
 
 function parseMarkdownTable(lines: string[], start: number) {
@@ -6240,6 +9125,33 @@ function parseMarkdownTable(lines: string[], start: number) {
 function renderPlainMessageLines(content: string) {
   const lines = content.split("\n");
   const nodes: ReactNode[] = [];
+
+  function renderInlineText(value: string, keyPrefix: string) {
+    const parts = value.split(/(https?:\/\/[^\s<]+)/gi);
+    return parts.map((part, index) => {
+      if (!/^https?:\/\//i.test(part)) return part;
+      const trailing =
+        part.match(/[),.;!?\u3002\uff0c\uff01\uff1b\uff1a]+$/)?.[0] || "";
+      const url = trailing ? part.slice(0, -trailing.length) : part;
+      return (
+        <Fragment key={`${keyPrefix}-link-${index}`}>
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => {
+              event.preventDefault();
+              void openExternalUrl(url);
+            }}
+          >
+            {url}
+          </a>
+          {trailing}
+        </Fragment>
+      );
+    });
+  }
+
   let paragraph: string[] = [];
 
   function flushParagraph(key: string) {
@@ -6249,7 +9161,14 @@ function renderPlainMessageLines(content: string) {
         {paragraph
           .join("\n")
           .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-          .replace(/\*\*([^*]+)\*\*/g, "$1")}
+          .replace(/\*\*([^*]+)\*\*/g, "$1")
+          .split("\n")
+          .map((line, index, lines) => (
+            <Fragment key={`${key}-line-${index}`}>
+              {index > 0 ? "\n" : null}
+              {renderInlineText(line, `${key}-${lines.length}`)}
+            </Fragment>
+          ))}
       </p>,
     );
     paragraph = [];
@@ -6335,6 +9254,7 @@ function MessageViewerModal(props: {
   onClose: () => void;
   onCopy: () => void;
   onQuote: () => void;
+  onReport: () => void;
   onDelete: () => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -6377,6 +9297,10 @@ function MessageViewerModal(props: {
           <button onClick={props.onQuote}>
             <ChatIcon />
             <span>{props.text.chat.quote}</span>
+          </button>
+          <button onClick={props.onReport}>
+            <CloudFailIcon />
+            <span>{props.text.account.aiContentReport}</span>
           </button>
           <button className={styles["danger-inline"]} onClick={props.onDelete}>
             <DeleteIcon />
@@ -6442,17 +9366,7 @@ function AndroidChat() {
   const selectedModel = currentSession?.model || draftModel || fallbackModel;
   const selectedModelIsAvailable =
     Boolean(selectedModel) &&
-    models.some((model) => modelValue(model) === selectedModel);
-  const selectedManagedModel = models.find(
-    (model) => modelValue(model) === selectedModel,
-  );
-  const liveVoiceAvailable = Boolean(
-    effectiveChatGroupId &&
-      groups.find((group) => group.id === effectiveChatGroupId)
-        ?.live_available &&
-      selectedManagedModel?.tool_capabilities?.live &&
-      isMobileLiveWebRTCAvailable(),
-  );
+    models.some((model) => modelMatches(model, selectedModel));
   const webSearchServiceAvailable = isMobileWebSearchAvailable(
     managed.mobileProtocol,
   );
@@ -6461,7 +9375,6 @@ function AndroidChat() {
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
   const [agentSheetOpen, setAgentSheetOpen] = useState(false);
   const [skillSheetOpen, setSkillSheetOpen] = useState(false);
-  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
   const activeAgent =
     CHAT_AGENT_TEMPLATES.find(
@@ -6476,14 +9389,6 @@ function AndroidChat() {
   const [voiceBarOpen, setVoiceBarOpen] = useState(false);
   const [voiceCancelling, setVoiceCancelling] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
-  const [voicePreferences, setVoicePreferences] = useState(
-    readVoiceConversationPreferences,
-  );
-  const [wakeWordListening, setWakeWordListening] = useState(false);
-  const [wakeWordStatus, setWakeWordStatus] = useState("");
-  const [voiceSpeaking, setVoiceSpeaking] = useState(false);
-  const [liveVoiceState, setLiveVoiceState] =
-    useState<MobileLiveState>("disconnected");
   const [groupSwitching, setGroupSwitching] = useState(false);
   const [chatError, setChatError] = useState("");
   const [quotedMessage, setQuotedMessage] = useState<QuotedChatMessage | null>(
@@ -6505,17 +9410,21 @@ function AndroidChat() {
   const voicePttSessionRef = useRef<NativeForegroundPttSession | null>(null);
   const voicePttSessionIdRef = useRef("");
   const voiceAutoSendRef = useRef(false);
-  const wakeWordSessionRef = useRef<NativeWakeWordSession | null>(null);
-  const liveVoiceSessionRef = useRef<MobileLiveSession | null>(null);
-  const liveVoiceAbortRef = useRef<AbortController | null>(null);
-  const activeLiveConversationRef = useRef<ActiveMobileLiveConversation | null>(
-    null,
-  );
-  const voicePreferencesRef = useRef(voicePreferences);
   const listRef = useRef<HTMLDivElement | null>(null);
   const autoFollowRef = useRef(true);
   const lastScrolledSessionRef = useRef("");
   const autoRetryKeyRef = useRef("");
+
+  const messageError =
+    currentSession?.messages
+      .slice()
+      .reverse()
+      .find((message) => message.error?.trim())
+      ?.error?.trim() || "";
+  const sessionError = chatError.trim() || currentSession?.error?.trim() || "";
+  const showChatErrorBar = Boolean(
+    sessionError && sessionError !== messageError,
+  );
 
   async function addMaterialDraft(input: {
     blob: Blob;
@@ -6829,7 +9738,7 @@ function AndroidChat() {
 
   useEffect(() => {
     if (!currentSession) return;
-    if (models.some((model) => modelValue(model) === currentSession.model)) {
+    if (models.some((model) => modelMatches(model, currentSession.model))) {
       return;
     }
     const preference = resolveChatPreference(
@@ -7087,230 +9996,9 @@ function AndroidChat() {
     }
   }
 
-  function updateVoicePreferences(
-    updater: (
-      current: MobileVoiceConversationPreferences,
-    ) => MobileVoiceConversationPreferences,
-  ) {
-    setVoicePreferences((current) => {
-      const next = updater(current);
-      const phrase = next.wakeWordPhrase.trim().slice(0, 64);
-      const normalized = {
-        ...next,
-        wakeWordPhrase:
-          phrase || DEFAULT_VOICE_CONVERSATION_PREFERENCES.wakeWordPhrase,
-        wakeWordEnabled: Boolean(
-          next.enabled && next.wakeWordEnabled && phrase,
-        ),
-        continuous: Boolean(next.enabled && next.continuous),
-        ttsRate: Math.min(2, Math.max(0.5, Number(next.ttsRate) || 1)),
-      };
-      writeStoredJSON(VOICE_CONVERSATION_STORAGE_KEY, normalized);
-      return normalized;
-    });
-  }
-
-  async function stopVoiceSpeaking() {
-    try {
-      await stopNativeSpeech();
-    } finally {
-      setVoiceSpeaking(false);
-    }
-  }
-
-  async function stopLiveVoiceConversation(reason = "user_ended") {
-    const controller = liveVoiceAbortRef.current;
-    liveVoiceAbortRef.current = null;
-    controller?.abort();
-    const live = liveVoiceSessionRef.current;
-    liveVoiceSessionRef.current = null;
-    activeLiveConversationRef.current = null;
-    try {
-      await live?.close(reason);
-    } finally {
-      setLiveVoiceState("disconnected");
-    }
-  }
-
-  async function startLiveVoiceConversation() {
-    if (liveVoiceState === "connecting" || liveVoiceState === "connected") {
-      return;
-    }
-    if (!liveVoiceAvailable) {
-      setChatError(text.chat.liveVoiceUnavailable);
-      return;
-    }
-    const groupId = effectiveChatGroupId || 0;
-    const model = selectedModel || fallbackModel;
-    if (!groupId || !model || !selectedModelIsAvailable || !managed.session) {
-      setChatError(text.errors.noModel);
-      return;
-    }
-
-    const controller = new AbortController();
-    liveVoiceAbortRef.current = controller;
-    setChatError("");
-    setLiveVoiceState("connecting");
-    try {
-      await stopVoiceSpeaking();
-      await cancelForegroundPttSession(
-        voicePttSessionIdRef.current,
-        "live_started",
-      ).catch(() => undefined);
-      await cancelAllForegroundWakeWordSessions("live_started");
-      wakeWordSessionRef.current?.unsubscribe();
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
-      setListening(false);
-
-      let activeManaged = useManagedNextChatStore.getState();
-      if (shouldRefreshManagedSession(activeManaged.session)) {
-        await managed.bootstrap({ silent: true });
-        activeManaged = useManagedNextChatStore.getState();
-      }
-      if (currentGroupID(activeManaged.workspace) !== groupId) {
-        await managed.switchGroup(groupId);
-        activeManaged = useManagedNextChatStore.getState();
-      }
-      if (!activeManaged.session?.api_key) {
-        throw new Error(text.errors.loginRequired);
-      }
-      if (controller.signal.aborted) {
-        throw new DOMException("Aborted", "AbortError");
-      }
-
-      activeLiveConversationRef.current = {
-        sessionId: currentSession?.id || "",
-        assistantMessageId: "",
-        model,
-        groupId,
-        lastUserTranscript: "",
-      };
-      const live = await startMobileLiveSession({
-        baseUrl: activeManaged.backendBaseUrl,
-        apiKey: activeManaged.session.api_key,
-        model,
-        locale: text.dateLocale,
-        requestId: clientRequestID("live-call"),
-        instructions: text.dateLocale.toLowerCase().startsWith("zh")
-          ? "使用自然、简洁的中文对话。"
-          : "Use natural, concise conversation.",
-        signal: controller.signal,
-        onState: (state, detail) => {
-          if (controller.signal.aborted) return;
-          setLiveVoiceState(state);
-          if (state === "failed" && detail) setChatError(detail);
-        },
-        onTranscript: (event) => {
-          const active = activeLiveConversationRef.current;
-          if (!active || controller.signal.aborted) return;
-          if (event.role === "user") {
-            if (
-              !event.done ||
-              !event.text ||
-              event.text === active.lastUserTranscript
-            ) {
-              return;
-            }
-            active.lastUserTranscript = event.text;
-            const sessionId =
-              active.sessionId ||
-              mobileStore.ensureChatSession(active.model, active.groupId);
-            active.sessionId = sessionId;
-            mobileStore.addChatMessage(sessionId, {
-              role: "user",
-              content: event.text,
-              status: "done",
-            });
-            return;
-          }
-          if (!active.sessionId || !event.text) return;
-          if (!active.assistantMessageId) {
-            active.assistantMessageId = mobileStore.addChatMessage(
-              active.sessionId,
-              {
-                role: "assistant",
-                content: event.text,
-                status: event.done ? "done" : "streaming",
-              },
-            );
-          } else {
-            mobileStore.updateChatMessage(
-              active.sessionId,
-              active.assistantMessageId,
-              {
-                content: event.text,
-                status: event.done ? "done" : "streaming",
-              },
-            );
-          }
-          if (event.done) active.assistantMessageId = "";
-        },
-      });
-      if (controller.signal.aborted) {
-        await live.close("cancelled_during_connect");
-        return;
-      }
-      liveVoiceSessionRef.current = live;
-      setLiveVoiceState("connected");
-    } catch (error) {
-      activeLiveConversationRef.current = null;
-      if (controller.signal.aborted) return;
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : text.chat.liveVoiceUnavailable;
-      setChatError(message);
-      setLiveVoiceState("failed");
-    } finally {
-      if (liveVoiceAbortRef.current === controller) {
-        liveVoiceAbortRef.current = null;
-      }
-    }
-  }
-
-  async function speakAssistantReply(content: string) {
-    if (!voicePreferencesRef.current.enabled) return;
-    const speech = plainVoiceText(content);
-    if (!speech) return;
-    setVoiceSpeaking(true);
-    try {
-      const utteranceId = await speakNativeText({
-        text: speech,
-        language: text.dateLocale,
-        rate: voicePreferencesRef.current.ttsRate,
-        onEvent: (event) => {
-          if (
-            event.type === "done" ||
-            event.type === "error" ||
-            event.type === "stopped"
-          ) {
-            setVoiceSpeaking(false);
-            if (
-              event.type === "done" &&
-              voicePreferencesRef.current.enabled &&
-              voicePreferencesRef.current.continuous &&
-              !running &&
-              !listening
-            ) {
-              window.setTimeout(() => {
-                void startVoiceTurn({ autoSend: true });
-              }, 280);
-            }
-          }
-        },
-      });
-      if (!utteranceId) setVoiceSpeaking(false);
-    } catch {
-      setVoiceSpeaking(false);
-      setChatError(text.chat.ttsUnavailable);
-    }
-  }
-
   async function startVoiceTurn(
     options: {
       event?: PointerEvent<HTMLButtonElement>;
-      autoSend?: boolean;
     } = {},
   ) {
     if (listening || running) return;
@@ -7318,21 +10006,16 @@ function AndroidChat() {
     voiceStartYRef.current = options.event?.clientY || 0;
     voiceCancelledRef.current = false;
     voiceReleasedRef.current = false;
-    voiceAutoSendRef.current = Boolean(options.autoSend);
+    voiceAutoSendRef.current = false;
     setVoiceCancelling(false);
     setVoiceTranscript("");
     setListening(true);
     setChatError("");
-    setWakeWordStatus("");
     const sessionId = `chat-ptt-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 10)}`;
     voicePttSessionIdRef.current = sessionId;
     try {
-      await cancelAllForegroundWakeWordSessions("ptt_started");
-      wakeWordSessionRef.current?.unsubscribe();
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
       const session = await startForegroundPttSession({
         sessionId,
         language: text.dateLocale,
@@ -7345,19 +10028,10 @@ function AndroidChat() {
           }
           if (result.type === "final") {
             const recognized = (result.text || "").trim();
-            const autoSend = voiceAutoSendRef.current;
             if (recognized) {
-              if (autoSend) {
-                setInput("");
-                setQuotedMessage(null);
-                window.setTimeout(() => {
-                  void sendChat(recognized);
-                }, 0);
-              } else {
-                setInput((value) =>
-                  [value.trim(), recognized].filter(Boolean).join("\n"),
-                );
-              }
+              setInput((value) =>
+                [value.trim(), recognized].filter(Boolean).join("\n"),
+              );
               setVoiceBarOpen(false);
             } else if (!voiceCancelledRef.current) {
               setChatError(text.errors.emptySpeechResult);
@@ -7424,118 +10098,6 @@ function AndroidChat() {
     void startVoiceTurn({ event });
   }
 
-  function startVoiceConversationTurn() {
-    if (listening || running || liveVoiceState === "connected") return;
-    setWakeWordStatus(text.chat.wakeWordMatched);
-    setVoiceBarOpen(true);
-    void startVoiceTurn({ autoSend: true });
-  }
-
-  useEffect(() => {
-    voicePreferencesRef.current = voicePreferences;
-  }, [voicePreferences]);
-
-  useEffect(() => {
-    let disposed = false;
-    const enabled =
-      voicePreferences.enabled && voicePreferences.wakeWordEnabled;
-    const phrase = voicePreferences.wakeWordPhrase.trim();
-
-    async function stopWakeWord(reason: string) {
-      const session = wakeWordSessionRef.current;
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
-      if (session) {
-        session.unsubscribe();
-        await session.stop(reason).catch(() => undefined);
-      } else {
-        await cancelAllForegroundWakeWordSessions(reason).catch(
-          () => undefined,
-        );
-      }
-    }
-
-    async function syncWakeWord() {
-      if (
-        !enabled ||
-        !phrase ||
-        running ||
-        listening ||
-        liveVoiceState === "connected"
-      ) {
-        await stopWakeWord("voice_turn_active");
-        if (!enabled || !phrase) setWakeWordStatus("");
-        return;
-      }
-      if (wakeWordSessionRef.current) return;
-      try {
-        const session = await startForegroundWakeWordSession({
-          phrase,
-          language: text.dateLocale,
-          onEvent: (event) => {
-            if (disposed) return;
-            if (event.type === "ready") {
-              setWakeWordListening(true);
-              setWakeWordStatus(text.chat.wakeWordListening(phrase));
-              return;
-            }
-            if (event.type === "partial") return;
-            if (event.type === "matched") {
-              wakeWordSessionRef.current?.unsubscribe();
-              wakeWordSessionRef.current = null;
-              setWakeWordListening(false);
-              startVoiceConversationTurn();
-              return;
-            }
-            if (event.type === "error") {
-              wakeWordSessionRef.current?.unsubscribe();
-              wakeWordSessionRef.current = null;
-              setWakeWordListening(false);
-              setWakeWordStatus("");
-              setChatError(text.chat.wakeWordUnavailable);
-              return;
-            }
-            if (event.type === "stopped") {
-              wakeWordSessionRef.current?.unsubscribe();
-              wakeWordSessionRef.current = null;
-              setWakeWordListening(false);
-            }
-          },
-        });
-        if (disposed) {
-          session.unsubscribe();
-          await session.stop("chat_unmounted").catch(() => undefined);
-          return;
-        }
-        wakeWordSessionRef.current = session;
-        setWakeWordListening(true);
-        setWakeWordStatus(text.chat.wakeWordListening(phrase));
-      } catch {
-        if (disposed) return;
-        setWakeWordListening(false);
-        setWakeWordStatus("");
-        setChatError(text.chat.wakeWordUnavailable);
-      }
-    }
-
-    void syncWakeWord();
-    return () => {
-      disposed = true;
-      void stopWakeWord("chat_state_changed");
-    };
-    // `startVoiceConversationTurn` is intentionally read from this render;
-    // the state inputs below define exactly when a recognizer may own the mic.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    listening,
-    liveVoiceState,
-    running,
-    text.dateLocale,
-    voicePreferences.enabled,
-    voicePreferences.wakeWordEnabled,
-    voicePreferences.wakeWordPhrase,
-  ]);
-
   function moveVoiceHold(event: PointerEvent<HTMLButtonElement>) {
     if (!listening) return;
     const shouldCancel = voiceStartYRef.current - event.clientY > 52;
@@ -7559,11 +10121,6 @@ function AndroidChat() {
   useEffect(() => {
     return () => {
       notifyForegroundPttRouteChange();
-      void stopVoiceSpeaking();
-      void stopLiveVoiceConversation("route_changed");
-      wakeWordSessionRef.current?.unsubscribe();
-      wakeWordSessionRef.current = null;
-      setWakeWordListening(false);
     };
   }, [location.pathname]);
 
@@ -7723,20 +10280,16 @@ function AndroidChat() {
     }
     const requestGroupId =
       currentSession?.groupId || draftChatGroupId || effectiveChatGroupId;
-    const model = selectedModel || fallbackModel;
-    const requestModelAvailable = Boolean(
-      requestGroupId &&
-        chatModelsForGroup(workspace, requestGroupId).some(
-          (item) => modelValue(item) === model,
-        ),
-    );
-    if (!model || !requestModelAvailable) {
+    const requestedModel = requestGroupId
+      ? chatModelsForGroup(workspace, requestGroupId).find((item) =>
+          modelMatches(item, selectedModel || fallbackModel),
+        )
+      : undefined;
+    const model = modelValue(requestedModel);
+    if (!model || !requestedModel) {
       setChatError(text.errors.noModel);
       return;
     }
-    const requestedModel = chatModelsForGroup(workspace, requestGroupId).find(
-      (item) => modelValue(item) === model,
-    );
     const modelSupportsWebSearch = Boolean(
       requestedModel?.tool_capabilities?.function_calling &&
         requestedModel.tool_capabilities?.web_search,
@@ -7834,6 +10387,15 @@ function AndroidChat() {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    const performanceTraceId = await startNativePerformanceTrace(
+      "chat_completion",
+      {
+        transport: isDirectNativeStreamAvailable() ? "native" : "web",
+        retry: Boolean(retryRequestId),
+        attachments: Boolean(imageUrls.length || readyAssetIds.length),
+      },
+    ).catch(() => "");
+    let performanceOutcome = "success";
     let projectedTask: MobileTask | null = null;
     let projectedTaskId = "";
     let cancellationTimer: number | undefined;
@@ -8357,9 +10919,6 @@ function AndroidChat() {
         content: completedContent,
         status: "done",
       });
-      if (contentBuffer.trim()) {
-        void speakAssistantReply(completedContent);
-      }
       void projectedTaskPromise.then(async (completedTask) => {
         if (!completedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
@@ -8370,6 +10929,7 @@ function AndroidChat() {
       await managed.bootstrap({ silent: true }).catch(() => {});
     } catch (err) {
       const aborted = controller.signal.aborted;
+      performanceOutcome = aborted ? "cancelled" : "error";
       const message = aborted
         ? text.errors.requestCancelled
         : err instanceof ManagedTransportError
@@ -8397,6 +10957,10 @@ function AndroidChat() {
           .catch(() => {});
       });
     } finally {
+      void stopNativePerformanceTrace(
+        performanceTraceId,
+        performanceOutcome,
+      ).catch(() => undefined);
       if (cancellationTimer) window.clearInterval(cancellationTimer);
       if (abortRef.current === controller) {
         abortRef.current = null;
@@ -8457,7 +11021,7 @@ function AndroidChat() {
     const value = messageTextValue(message, text);
     if (!value) return;
     try {
-      await navigator.clipboard?.writeText(value);
+      await copyTextToClipboard(value);
       setMessageActionTarget(null);
       setMessageViewerTarget(null);
     } catch {
@@ -8510,6 +11074,13 @@ function AndroidChat() {
       textarea?.focus();
       textarea?.select();
     }, 0);
+  }
+
+  function reportChatMessage(target: ChatMessageActionTarget) {
+    writeMobileReportDraft(buildChatReportDraft(target.message, text));
+    setMessageActionTarget(null);
+    setMessageViewerTarget(null);
+    navigate(Path.AccountFeedback);
   }
 
   function changeModel(model: string) {
@@ -8775,8 +11346,8 @@ function AndroidChat() {
     }
   }
 
-  const selectedModelInfo = models.find(
-    (model) => modelValue(model) === selectedModel,
+  const selectedModelInfo = models.find((model) =>
+    modelMatches(model, selectedModel),
   );
   const currentGroupValue = String(effectiveChatGroupId || "");
 
@@ -8811,10 +11382,6 @@ function AndroidChat() {
     }
     if (skillSheetOpen) {
       setSkillSheetOpen(false);
-      return;
-    }
-    if (voiceSettingsOpen) {
-      setVoiceSettingsOpen(false);
       return;
     }
     if (moreToolsOpen) {
@@ -8949,11 +11516,36 @@ function AndroidChat() {
               ) : null}
               {message.content ? (
                 <MobileMessageContent content={message.content} />
-              ) : message.status === "streaming" ? (
-                <p className={styles["muted"]}>{text.chat.assistantThinking}</p>
-              ) : null}
+              ) : message.status === "streaming" ? null : (
+                <p className={styles["message-empty"]}>
+                  {message.imageUrls?.length
+                    ? text.chat.imageAttached(message.imageUrls.length)
+                    : message.role === "user"
+                    ? text.errors.emptyMessage
+                    : text.common.empty}
+                </p>
+              )}
+              {message.status === "streaming" && (
+                <div
+                  className={styles["message-generating"]}
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span
+                    className={styles["message-generating-dots"]}
+                    aria-hidden="true"
+                  >
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <span>{text.chat.assistantThinking}</span>
+                </div>
+              )}
               {message.error && (
-                <div className={styles["inline-error"]}>{message.error}</div>
+                <div className={styles["inline-error"]} role="alert">
+                  {message.error}
+                </div>
               )}
               <div className={styles["message-footer"]}>
                 <small className={styles["message-meta"]}>
@@ -8972,26 +11564,16 @@ function AndroidChat() {
                     }
                   }}
                 >
-                  ...
+                  <ThreeDotsIcon />
                 </button>
               </div>
             </article>
           ))}
         </div>
 
-        {(chatError ||
-          (currentSession?.messages.some((message) => message.role === "user")
-            ? currentSession?.error
-            : "")) && (
-          <div className={styles["chat-error-bar"]}>
-            <span>
-              {chatError ||
-                (currentSession?.messages.some(
-                  (message) => message.role === "user",
-                )
-                  ? currentSession?.error
-                  : "")}
-            </span>
+        {showChatErrorBar && (
+          <div className={styles["chat-error-bar"]} role="alert">
+            <span>{sessionError}</span>
             {currentSession?.messages.some(
               (message) => message.role === "user",
             ) && <button onClick={retryLast}>{text.chat.retryLast}</button>}
@@ -9084,12 +11666,6 @@ function AndroidChat() {
               </button>
             </div>
           )}
-          {voicePreferences.enabled && wakeWordStatus && (
-            <div className={styles["voice-status"]} aria-live="polite">
-              <VoiceIcon />
-              <span>{wakeWordStatus}</span>
-            </div>
-          )}
           {moreToolsOpen && (
             <div className={styles["composer-tools"]}>
               <button type="button" onClick={() => fileRef.current?.click()}>
@@ -9102,31 +11678,6 @@ function AndroidChat() {
                   {capturing ? text.chat.capturing : text.chat.camera}
                 </span>
               </button>
-              <button
-                type="button"
-                aria-pressed={voicePreferences.enabled}
-                className={clsx({
-                  [styles["active"]]: voicePreferences.enabled,
-                })}
-                onClick={() => setVoiceSettingsOpen(true)}
-              >
-                <VoiceIcon />
-                <span>
-                  {voicePreferences.enabled
-                    ? text.chat.voiceConversationEnabled
-                    : text.chat.voiceConversation}
-                </span>
-              </button>
-              {voicePreferences.enabled && (
-                <button
-                  type="button"
-                  disabled={!voiceSpeaking}
-                  onClick={() => void stopVoiceSpeaking()}
-                >
-                  <CloseIcon />
-                  <span>{text.chat.voiceStopSpeaking}</span>
-                </button>
-              )}
             </div>
           )}
           <div className={styles["composer-row"]}>
@@ -9186,13 +11737,20 @@ function AndroidChat() {
                 rows={1}
               />
             )}
+            <IconButton
+              label={text.chat.moreTools}
+              onClick={() => setMoreToolsOpen((value) => !value)}
+              active={moreToolsOpen}
+            >
+              <AddIcon />
+            </IconButton>
             {running ? (
               <IconButton label={text.chat.stop} onClick={stopChat} danger>
                 <CloseIcon />
               </IconButton>
             ) : (
               <IconButton
-                label="chat-send"
+                label={text.chat.send}
                 type="submit"
                 disabled={
                   !input.trim() &&
@@ -9208,13 +11766,6 @@ function AndroidChat() {
                 <SendIcon />
               </IconButton>
             )}
-            <IconButton
-              label={text.chat.moreTools}
-              onClick={() => setMoreToolsOpen((value) => !value)}
-              active={moreToolsOpen}
-            >
-              <AddIcon />
-            </IconButton>
           </div>
         </form>
 
@@ -9271,20 +11822,6 @@ function AndroidChat() {
             changeModel(id);
           }}
         />
-        <VoiceConversationSheet
-          open={voiceSettingsOpen}
-          text={text}
-          preferences={voicePreferences}
-          listening={wakeWordListening}
-          speaking={voiceSpeaking}
-          liveState={liveVoiceState}
-          liveAvailable={liveVoiceAvailable}
-          onClose={() => setVoiceSettingsOpen(false)}
-          onChange={(next) => updateVoicePreferences(() => next)}
-          onStopSpeaking={() => void stopVoiceSpeaking()}
-          onStartLive={() => void startLiveVoiceConversation()}
-          onStopLive={() => void stopLiveVoiceConversation()}
-        />
         <ChatAgentLibrarySheet
           open={agentSheetOpen}
           text={text}
@@ -9337,6 +11874,7 @@ function AndroidChat() {
             onSelectText={() => selectMessageText(messageActionTarget.message)}
             onQuote={() => quoteMessage(messageActionTarget.message)}
             onRetry={() => retryMessage(messageActionTarget.message)}
+            onReport={() => reportChatMessage(messageActionTarget)}
             onDelete={() => deleteMessage(messageActionTarget)}
           />
         )}
@@ -9347,6 +11885,7 @@ function AndroidChat() {
             onClose={() => setMessageViewerTarget(null)}
             onCopy={() => copyMessage(messageViewerTarget.message)}
             onQuote={() => quoteMessage(messageViewerTarget.message)}
+            onReport={() => reportChatMessage(messageViewerTarget)}
             onDelete={() => deleteMessage(messageViewerTarget)}
           />
         )}
@@ -9422,12 +11961,20 @@ function AndroidContentKit() {
   const [viewRunId, setViewRunId] = useState("");
 
   useEffect(() => {
-    if (!imageModels.some((item) => modelValue(item) === model)) {
+    const selectedImageModel = imageModels.find((item) =>
+      modelMatches(item, model),
+    );
+    const canonicalModel = modelValue(selectedImageModel);
+    if (canonicalModel && canonicalModel !== model) {
+      setModel(canonicalModel);
+      return;
+    }
+    if (!selectedImageModel) {
       setModel(modelValue(imageModels[0]));
     }
   }, [imageModels, model]);
 
-  const selectedModel = imageModels.find((item) => modelValue(item) === model);
+  const selectedModel = imageModels.find((item) => modelMatches(item, model));
 
   const presetOptions = contentWorkbenchPresets().map((preset) => ({
     ...preset,
@@ -9672,9 +12219,47 @@ function AndroidContentKit() {
     project: ManagedMobileContentKit,
     asset: ManagedMobileContentKitAsset,
   ) {
+    const projectImageGroupId = Number(project.imageGroupId);
+    if (
+      !Number.isSafeInteger(projectImageGroupId) ||
+      projectImageGroupId <= 0
+    ) {
+      // A legacy project has no trustworthy group binding. Do not infer one
+      // from the current chat/image UI state because that could spend a
+      // different group's balance with the saved model name.
+      const message = text.errors.imageModelUnavailable(project.model);
+      patchAsset(project.id, asset.id, { status: "failed", error: message });
+      setError(message);
+      return;
+    }
+    const projectImageModels = imageModelsForExactGroup(
+      workspace,
+      projectImageGroupId,
+    );
+    const projectModel = projectImageModels.find((item) =>
+      modelMatches(item, project.model),
+    );
+    const exactModel = modelValue(projectModel);
+    const imageValidation = validateManagedImageRequest({
+      model: projectModel,
+      models: workspace?.models,
+      operation: project.referenceImages.length ? "edit" : "create",
+      size: asset.size,
+      referenceCount: project.referenceImages.length,
+    });
+    if (!imageValidation.valid) {
+      const message = describeManagedImageValidation(
+        imageValidation.code,
+        project.model,
+        text,
+      );
+      patchAsset(project.id, asset.id, { status: "failed", error: message });
+      setError(message);
+      return;
+    }
     if (
       project.referenceImages.length &&
-      !imageModelSupportsReferences(project.model, imageModels, false)
+      !imageModelSupportsReferences(project.model, projectImageModels)
     ) {
       patchAsset(project.id, asset.id, {
         status: "failed",
@@ -9683,11 +12268,35 @@ function AndroidContentKit() {
       setError(text.platform.contentKit.referenceUnsupported);
       return;
     }
-    if (!managed.imageSession) {
+    let activeManaged = useManagedNextChatStore.getState();
+    let imageSession = selectManagedImageSessionForGroup(
+      { image: activeManaged.imageSession || undefined },
+      projectImageGroupId,
+    );
+    if (!imageSession) {
+      try {
+        await managed.switchImageGroup(projectImageGroupId);
+      } catch (err) {
+        const message = localizedMobileErrorMessage(
+          err,
+          text.errors.switchGroupFailed,
+        );
+        patchAsset(project.id, asset.id, { status: "failed", error: message });
+        setError(message);
+        return;
+      }
+      activeManaged = useManagedNextChatStore.getState();
+      imageSession = selectManagedImageSessionForGroup(
+        { image: activeManaged.imageSession || undefined },
+        projectImageGroupId,
+      );
+    }
+    if (!imageSession) {
       patchAsset(project.id, asset.id, {
         status: "failed",
-        error: text.errors.loginRequired,
+        error: text.errors.switchGroupFailed,
       });
+      setError(text.errors.switchGroupFailed);
       return;
     }
     // Persist before the first request. A restart or timeout must replay the
@@ -9713,8 +12322,8 @@ function AndroidContentKit() {
         client_request_id: localTaskId,
         title: asset.label,
         title_zh: asset.label,
-        model: project.model,
-        group_id: imageGroup?.id,
+        model: exactModel,
+        group_id: projectImageGroupId,
         parameters: {
           size: asset.size,
           content_kit: project.id,
@@ -9745,7 +12354,7 @@ function AndroidContentKit() {
       };
       let body: BodyInit;
       const payload = {
-        model: project.model,
+        model: exactModel,
         prompt: asset.prompt,
         size: asset.size,
         n: 1,
@@ -9772,10 +12381,10 @@ function AndroidContentKit() {
         body = JSON.stringify(payload);
       }
       const response = await managedGatewayRequestText(
-        managed.backendBaseUrl,
+        activeManaged.backendBaseUrl,
         `/v1${endpoint}`,
         { method: "POST", headers, body },
-        managed.imageSession.api_key || "",
+        imageSession.api_key,
         text,
       );
       const json = response.text ? JSON.parse(response.text) : null;
@@ -9810,7 +12419,7 @@ function AndroidContentKit() {
       const saved = await persistContentKitImageResult(image, {
         taskId: localTaskId,
         prompt: asset.prompt,
-        model: project.model,
+        model: exactModel,
         ownerUserId: String(managed.user?.id || managed.session?.user_id || ""),
         projectId: project.id,
         runId: asset.runId,
@@ -10153,12 +12762,37 @@ function AndroidContentKit() {
       return setError(text.platform.contentKit.requiredProduct);
     if (!model || !imageModels.length)
       return setError(text.platform.contentKit.noImageModel);
+    const projectImageGroupId = Number(imageGroup?.id);
     if (
-      selectedPlanShots.some(
-        (shot) => !contentKitModelSupportsSize(selectedModel, shot.size),
-      )
+      !Number.isSafeInteger(projectImageGroupId) ||
+      projectImageGroupId <= 0
     ) {
-      return setError(text.platform.contentKit.unsupportedSize);
+      return setError(text.platform.contentKit.noImageModel);
+    }
+    const requestedOperation = references.length ? "edit" : "create";
+    const invalidShot = selectedPlanShots.find((shot) => {
+      const validation = validateManagedImageRequest({
+        model: selectedModel,
+        models: workspace?.models,
+        operation: requestedOperation,
+        size: shot.size,
+        referenceCount: references.length,
+      });
+      return !validation.valid;
+    });
+    if (invalidShot) {
+      const validation = validateManagedImageRequest({
+        model: selectedModel,
+        models: workspace?.models,
+        operation: requestedOperation,
+        size: invalidShot.size,
+        referenceCount: references.length,
+      });
+      return setError(
+        validation.valid
+          ? text.platform.contentKit.unsupportedSize
+          : describeManagedImageValidation(validation.code, model, text),
+      );
     }
     if (estimateLoading) {
       return setError(text.platform.contentKit.estimateRequired);
@@ -10168,7 +12802,7 @@ function AndroidContentKit() {
     }
     if (
       references.length &&
-      !imageModelSupportsReferences(selectedModel || model, [], false)
+      !imageModelSupportsReferences(selectedModel || model)
     ) {
       return setError(text.platform.contentKit.referenceUnsupported);
     }
@@ -10229,6 +12863,7 @@ function AndroidContentKit() {
         videoIntent,
       },
       model,
+      imageGroupId: projectImageGroupId,
       referenceImages: references,
       presetId: selectedPreset.id,
       shotPlan: contentWorkbenchClonePlan(selectedPlanShots),
@@ -10483,7 +13118,7 @@ function AndroidContentKit() {
       }, new Map<string, ManagedMobileContentKitAsset[]>()),
     );
     return (
-      <AndroidAppShell active="image" text={text}>
+      <AndroidAppShell active="create" text={text}>
         <header className={styles["detail-header"]}>
           <IconButton
             label={text.common.back}
@@ -10855,7 +13490,7 @@ function AndroidContentKit() {
   }
 
   return (
-    <AndroidAppShell active="image" text={text}>
+    <AndroidAppShell active="create" text={text}>
       <header className={styles["detail-header"]}>
         <IconButton
           label={text.common.back}
@@ -11387,6 +14022,2025 @@ function AndroidContentKit() {
   );
 }
 
+const VIDEO_STUDIO_PREF_KEY = "jisudeng-mobile-video-studio-preferences";
+
+function videoStudioPreferenceKey(accountID: string) {
+  return `${VIDEO_STUDIO_PREF_KEY}:${String(accountID || "anonymous")}`;
+}
+
+const DEFAULT_VIDEO_STUDIO_PREFERENCES = {
+  groupId: 0,
+  model: "",
+  resolution: "720p",
+  ratio: "16:9",
+  duration: 8,
+  generateAudio: false,
+  watermark: false,
+};
+
+function videoStudioCopy() {
+  const locale = getManagedMobileLocale();
+  const copies = {
+    cn: {
+      title: "视频创作",
+      image: "图片",
+      video: "视频",
+      group: "视频分组",
+      model: "视频模型",
+      prompt: "视频提示词",
+      placeholder: "描述你要生成的视频画面、动作和镜头",
+      script: "AI 编写提示词",
+      scriptModel: "剧本模型",
+      scriptFollowing: "跟随当前聊天",
+      scriptNoModel: "当前聊天没有可用的文本模型",
+      scripting: "正在整理提示词",
+      scriptFailed: "提示词生成失败",
+      noGroup: "当前账号没有可用的视频分组",
+      noModel: "当前视频分组没有已授权的视频模型",
+      groupHint: "请让管理员为该分组配置视频模型和视频价格后再生成。",
+      loadingCapabilities: "正在获取服务端视频能力",
+      compatibilityTitle: "正在使用已同步的视频能力",
+      compatibilityHint:
+        "服务端视频能力接口暂不可用，将使用本次登录已声明的视频工作区。刷新后会重新检查。",
+      capabilitiesUnavailable: "暂时无法获取视频能力",
+      capabilitiesUnavailableHint:
+        "当前设备没有收到可用的视频工作区。请刷新重试；若持续失败，请检查服务端视频能力接口。",
+      retryCapabilities: "重新获取",
+      bootstrapEndpointMissing: "服务端尚未提供视频能力接口",
+      bootstrapEndpointMissingHint:
+        "当前服务端还没有视频能力接口。请完成主站更新后重新获取，期间不会用聊天模型冒充视频模型。",
+      bootstrapUnauthorized: "视频能力登录已失效",
+      bootstrapUnauthorizedHint:
+        "请重新登录后再获取视频能力；当前不会改用聊天或图片会话。",
+      bootstrapFailed: "暂时无法获取服务端视频能力",
+      bootstrapFailedHint:
+        "请检查网络后重新获取；若持续失败，请检查服务端视频能力接口。",
+      serverCheckedNoVideo: "服务端已完成检查，但当前没有可执行的视频模型",
+      unavailableReasons: {
+        not_mapped: "模型未绑定到可调度账号",
+        capability_not_declared: "模型尚未声明视频能力",
+        price_missing: "模型缺少视频价格",
+        adapter_unsupported: "当前执行适配器不支持该视频能力",
+        no_schedulable_account: "没有可调度账号",
+        group_permission_denied: "当前账号无权使用该分组",
+        subscription_reservation_unsupported:
+          "订阅分组暂不支持视频任务预占，请选择钱包余额分组",
+        unknown: "服务端暂未提供该视频模型",
+      },
+      resolution: "分辨率",
+      ratio: "画面比例",
+      duration: "时长",
+      seconds: "秒",
+      smartDuration: "智能时长",
+      audio: "生成声音",
+      watermark: "添加水印",
+      reference: "参考素材",
+      choose: "选择",
+      generate: "生成视频",
+      generating: "正在生成",
+      cancel: "取消生成",
+      retry: "重试",
+      download: "保存到手机",
+      saveAsset: "保存到素材库",
+      ready: "视频已生成",
+      timeout: "生成超时，任务仍可重试",
+      failed: "视频生成失败",
+      noResult: "没有获取到视频结果",
+      history: "本地视频历史",
+      emptyHistory: "生成完成的视频会保留在这里",
+      refresh: "刷新能力",
+      selectPrompt: "提示词",
+      unsupported: "当前模型不支持此参数",
+      materialLibrary: "从素材库选择",
+      clearReferences: "清空参考",
+      materialEmpty: "没有适用于当前模型的已同步素材",
+      materialLoading: "正在检查素材更新",
+      materialKinds: { image: "图片", video: "视频", audio: "音频" },
+    },
+    en: {
+      title: "Video creation",
+      image: "Image",
+      video: "Video",
+      group: "Video group",
+      model: "Video model",
+      prompt: "Video prompt",
+      placeholder: "Describe the scene, motion, and camera you want",
+      script: "Write with AI",
+      scriptModel: "Script model",
+      scriptFollowing: "Following current chat",
+      scriptNoModel: "No chat text model is available",
+      scripting: "Preparing prompt",
+      scriptFailed: "Could not prepare the prompt",
+      noGroup: "No video group is available for this account",
+      noModel: "No authorized video model is available in this group",
+      groupHint:
+        "Ask an administrator to configure a video model and video pricing.",
+      loadingCapabilities: "Loading server video capabilities",
+      compatibilityTitle: "Using synchronized video capabilities",
+      compatibilityHint:
+        "The server video-capabilities endpoint is unavailable, so this session is using its declared video workspace. Refresh to check again.",
+      capabilitiesUnavailable: "Video capabilities are temporarily unavailable",
+      capabilitiesUnavailableHint:
+        "This device did not receive an available video workspace. Refresh to retry; if it continues, check the server video-capabilities endpoint.",
+      retryCapabilities: "Try again",
+      bootstrapEndpointMissing:
+        "The server has not published video capabilities",
+      bootstrapEndpointMissingHint:
+        "Update the main platform and try again. Chat models will not be used as video models in the meantime.",
+      bootstrapUnauthorized: "The video capability login has expired",
+      bootstrapUnauthorizedHint:
+        "Sign in again before loading video capabilities. The app will not substitute a chat or image session.",
+      bootstrapFailed: "Server video capabilities are temporarily unavailable",
+      bootstrapFailedHint:
+        "Check the network and try again. If it persists, check the server video-capabilities endpoint.",
+      serverCheckedNoVideo:
+        "The server completed its check, but no video model is executable for this account",
+      unavailableReasons: {
+        not_mapped: "The model is not mapped to a schedulable account",
+        capability_not_declared:
+          "The model does not have a declared video capability",
+        price_missing: "The model does not have video pricing",
+        adapter_unsupported:
+          "The current execution adapter does not support this video capability",
+        no_schedulable_account: "No account is currently schedulable",
+        group_permission_denied: "This account cannot use the selected group",
+        subscription_reservation_unsupported:
+          "Video task reservation is not available for subscription groups. Choose a wallet-billed group.",
+        unknown: "The server did not make this video model available",
+      },
+      resolution: "Resolution",
+      ratio: "Aspect ratio",
+      duration: "Duration",
+      seconds: "sec",
+      smartDuration: "Smart duration",
+      audio: "Generate audio",
+      watermark: "Add watermark",
+      reference: "Reference material",
+      choose: "Choose",
+      generate: "Generate video",
+      generating: "Generating",
+      cancel: "Cancel generation",
+      retry: "Retry",
+      download: "Save to device",
+      saveAsset: "Save to materials",
+      ready: "Video ready",
+      timeout: "Generation timed out; you can retry the task",
+      failed: "Video generation failed",
+      noResult: "No video result was returned",
+      history: "Local video history",
+      emptyHistory: "Completed videos will stay here",
+      refresh: "Refresh capabilities",
+      selectPrompt: "Prompt library",
+      unsupported: "This model does not support this option",
+      materialLibrary: "Choose from materials",
+      clearReferences: "Clear references",
+      materialEmpty: "No synced material is supported by this model",
+      materialLoading: "Checking material updates",
+      materialKinds: { image: "Image", video: "Video", audio: "Audio" },
+    },
+    jp: {
+      title: "動画作成",
+      image: "画像",
+      video: "動画",
+      group: "動画グループ",
+      model: "動画モデル",
+      prompt: "動画プロンプト",
+      placeholder: "生成したい場面、動き、カメラを入力してください",
+      script: "AIでプロンプト作成",
+      scriptModel: "脚本モデル",
+      scriptFollowing: "現在のチャットに連動",
+      scriptNoModel: "現在のチャットに利用可能なテキストモデルがありません",
+      scripting: "プロンプトを作成中",
+      scriptFailed: "プロンプトを作成できませんでした",
+      noGroup: "このアカウントで利用できる動画グループがありません",
+      noModel: "このグループに承認済みの動画モデルがありません",
+      groupHint: "管理者に動画モデルと料金の設定を依頼してください。",
+      loadingCapabilities: "サーバーの動画機能を取得中",
+      compatibilityTitle: "同期済みの動画機能を使用中",
+      compatibilityHint:
+        "サーバーの動画機能エンドポイントを利用できないため、このログインで宣言済みの動画ワークスペースを使用しています。更新して再確認できます。",
+      capabilitiesUnavailable: "動画機能を一時的に取得できません",
+      capabilitiesUnavailableHint:
+        "この端末は利用可能な動画ワークスペースを受信していません。更新して再試行し、継続する場合はサーバーの動画機能エンドポイントを確認してください。",
+      retryCapabilities: "再取得",
+      bootstrapEndpointMissing: "サーバーに動画機能エンドポイントがありません",
+      bootstrapEndpointMissingHint:
+        "メインプラットフォームを更新してから再取得してください。その間、チャットモデルを動画モデルとして使用しません。",
+      bootstrapUnauthorized: "動画機能のログインが期限切れです",
+      bootstrapUnauthorizedHint:
+        "動画機能を取得する前に再ログインしてください。チャットまたは画像セッションには置き換えません。",
+      bootstrapFailed: "サーバー動画機能を一時的に取得できません",
+      bootstrapFailedHint:
+        "ネットワークを確認して再取得してください。解決しない場合はサーバーの動画機能エンドポイントを確認してください。",
+      serverCheckedNoVideo:
+        "サーバーの確認は完了しましたが、このアカウントで実行できる動画モデルはありません",
+      unavailableReasons: {
+        not_mapped: "モデルが実行可能なアカウントに紐付いていません",
+        capability_not_declared: "モデルに動画機能が宣言されていません",
+        price_missing: "モデルの動画料金が設定されていません",
+        adapter_unsupported:
+          "現在の実行アダプターはこの動画機能に対応していません",
+        no_schedulable_account: "現在実行可能なアカウントがありません",
+        group_permission_denied:
+          "このアカウントは選択したグループを利用できません",
+        subscription_reservation_unsupported:
+          "サブスクリプショングループでは動画タスクの予約に対応していません。残高課金グループを選択してください。",
+        unknown: "サーバーはこの動画モデルを利用可能にしていません",
+      },
+      resolution: "解像度",
+      ratio: "縦横比",
+      duration: "長さ",
+      seconds: "秒",
+      smartDuration: "スマート時間",
+      audio: "音声を生成",
+      watermark: "透かしを追加",
+      reference: "参考素材",
+      choose: "選択",
+      generate: "動画を生成",
+      generating: "生成中",
+      cancel: "生成をキャンセル",
+      retry: "再試行",
+      download: "端末に保存",
+      saveAsset: "素材ライブラリに保存",
+      ready: "動画が完成しました",
+      timeout: "生成がタイムアウトしました。再試行できます",
+      failed: "動画生成に失敗しました",
+      noResult: "動画結果を取得できませんでした",
+      history: "端末内の動画履歴",
+      emptyHistory: "完成した動画がここに保存されます",
+      refresh: "機能を更新",
+      selectPrompt: "プロンプト",
+      unsupported: "このモデルはこの項目に対応していません",
+      materialLibrary: "素材ライブラリから選択",
+      clearReferences: "参考素材を解除",
+      materialEmpty: "このモデルで使える同期済み素材はありません",
+      materialLoading: "素材の更新を確認中",
+      materialKinds: { image: "画像", video: "動画", audio: "音声" },
+    },
+    ko: {
+      title: "동영상 만들기",
+      image: "이미지",
+      video: "동영상",
+      group: "동영상 그룹",
+      model: "동영상 모델",
+      prompt: "동영상 프롬프트",
+      placeholder: "원하는 장면, 움직임, 카메라를 설명하세요",
+      script: "AI로 프롬프트 작성",
+      scriptModel: "스크립트 모델",
+      scriptFollowing: "현재 채팅을 따름",
+      scriptNoModel: "현재 채팅에서 사용할 수 있는 텍스트 모델이 없습니다",
+      scripting: "프롬프트 작성 중",
+      scriptFailed: "프롬프트를 작성할 수 없습니다",
+      noGroup: "이 계정에서 사용할 수 있는 동영상 그룹이 없습니다",
+      noModel: "이 그룹에 승인된 동영상 모델이 없습니다",
+      groupHint: "관리자에게 동영상 모델과 요금 설정을 요청하세요.",
+      loadingCapabilities: "서버 동영상 기능을 불러오는 중",
+      compatibilityTitle: "동기화된 동영상 기능 사용 중",
+      compatibilityHint:
+        "서버 동영상 기능 엔드포인트를 사용할 수 없어 이번 로그인에서 선언된 동영상 작업 영역을 사용합니다. 새로고침하여 다시 확인할 수 있습니다.",
+      capabilitiesUnavailable: "동영상 기능을 일시적으로 가져올 수 없습니다",
+      capabilitiesUnavailableHint:
+        "이 기기에서 사용 가능한 동영상 작업 영역을 받지 못했습니다. 새로고침하여 재시도하고 계속되면 서버 동영상 기능 엔드포인트를 확인하세요.",
+      retryCapabilities: "다시 가져오기",
+      bootstrapEndpointMissing: "서버에 동영상 기능 엔드포인트가 없습니다",
+      bootstrapEndpointMissingHint:
+        "메인 플랫폼을 업데이트한 뒤 다시 가져오세요. 그 전까지 채팅 모델을 동영상 모델로 사용하지 않습니다.",
+      bootstrapUnauthorized: "동영상 기능 로그인이 만료되었습니다",
+      bootstrapUnauthorizedHint:
+        "동영상 기능을 불러오기 전에 다시 로그인하세요. 채팅 또는 이미지 세션으로 대체하지 않습니다.",
+      bootstrapFailed: "서버 동영상 기능을 일시적으로 가져올 수 없습니다",
+      bootstrapFailedHint:
+        "네트워크를 확인한 후 다시 가져오세요. 계속되면 서버 동영상 기능 엔드포인트를 확인하세요.",
+      serverCheckedNoVideo:
+        "서버 확인은 완료되었지만 이 계정에서 실행 가능한 동영상 모델이 없습니다",
+      unavailableReasons: {
+        not_mapped: "모델이 실행 가능한 계정에 연결되어 있지 않습니다",
+        capability_not_declared: "모델에 동영상 기능이 선언되지 않았습니다",
+        price_missing: "모델의 동영상 가격이 설정되지 않았습니다",
+        adapter_unsupported:
+          "현재 실행 어댑터가 이 동영상 기능을 지원하지 않습니다",
+        no_schedulable_account: "현재 실행 가능한 계정이 없습니다",
+        group_permission_denied: "이 계정은 선택한 그룹을 사용할 수 없습니다",
+        subscription_reservation_unsupported:
+          "구독 그룹에서는 동영상 작업 예약을 지원하지 않습니다. 잔액 결제 그룹을 선택하세요.",
+        unknown: "서버가 이 동영상 모델을 사용할 수 있게 하지 않았습니다",
+      },
+      resolution: "해상도",
+      ratio: "화면 비율",
+      duration: "길이",
+      seconds: "초",
+      smartDuration: "스마트 길이",
+      audio: "오디오 생성",
+      watermark: "워터마크 추가",
+      reference: "참고 자료",
+      choose: "선택",
+      generate: "동영상 생성",
+      generating: "생성 중",
+      cancel: "생성 취소",
+      retry: "다시 시도",
+      download: "기기에 저장",
+      saveAsset: "자료실에 저장",
+      ready: "동영상이 완성되었습니다",
+      timeout: "생성 시간이 초과되었습니다. 다시 시도할 수 있습니다",
+      failed: "동영상 생성 실패",
+      noResult: "동영상 결과를 받지 못했습니다",
+      history: "로컬 동영상 기록",
+      emptyHistory: "완성된 동영상이 여기에 보관됩니다",
+      refresh: "기능 새로고침",
+      selectPrompt: "프롬프트",
+      unsupported: "이 모델은 이 옵션을 지원하지 않습니다",
+      materialLibrary: "자료실에서 선택",
+      clearReferences: "참고 자료 비우기",
+      materialEmpty: "이 모델에서 사용할 수 있는 동기화된 자료가 없습니다",
+      materialLoading: "자료 업데이트 확인 중",
+      materialKinds: { image: "이미지", video: "동영상", audio: "오디오" },
+    },
+  } as const;
+  return copies[locale] || copies.cn;
+}
+
+function localizedVideoUnavailableReason(
+  copy: ReturnType<typeof videoStudioCopy>,
+  code: string,
+) {
+  const key = String(code || "").trim() as keyof typeof copy.unavailableReasons;
+  return copy.unavailableReasons[key] || copy.unavailableReasons.unknown;
+}
+
+function videoBootstrapFailureCopy(
+  copy: ReturnType<typeof videoStudioCopy>,
+  failure: MobileVideoBootstrapFailure | null,
+) {
+  switch (failure) {
+    case "not_found":
+      return {
+        title: copy.bootstrapEndpointMissing,
+        hint: copy.bootstrapEndpointMissingHint,
+      };
+    case "unauthorized":
+      return {
+        title: copy.bootstrapUnauthorized,
+        hint: copy.bootstrapUnauthorizedHint,
+      };
+    default:
+      return {
+        title: copy.bootstrapFailed,
+        hint: copy.bootstrapFailedHint,
+      };
+  }
+}
+
+function AndroidCreationStudio() {
+  const installedRelease = useInstalledAndroidReleaseVersion();
+  const playDistribution = isPlayDistribution(installedRelease);
+  const [mode, setMode] = useState<"image" | "video">(() => {
+    if (typeof localStorage === "undefined") return "image";
+    return !playDistribution &&
+      localStorage.getItem("jisudeng-mobile-creation-mode") === "video"
+      ? "video"
+      : "image";
+  });
+  useEffect(() => {
+    if (playDistribution && mode === "video") setMode("image");
+  }, [mode, playDistribution]);
+  const setCreationMode = (next: "image" | "video") => {
+    setMode(next);
+    try {
+      localStorage.setItem("jisudeng-mobile-creation-mode", next);
+    } catch {
+      // Private browsing can disable localStorage; the in-memory mode still works.
+    }
+  };
+  const copy = videoStudioCopy();
+  return (
+    <div className={styles["creation-screen"]}>
+      <div className={styles["creation-mode-switch"]} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "image"}
+          className={clsx(styles["creation-mode-button"], {
+            [styles["creation-mode-active"]]: mode === "image",
+          })}
+          onClick={() => setCreationMode("image")}
+        >
+          <span>
+            <ImageIcon />
+            {copy.image}
+          </span>
+        </button>
+        {!playDistribution && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "video"}
+            className={clsx(styles["creation-mode-button"], {
+              [styles["creation-mode-active"]]: mode === "video",
+            })}
+            onClick={() => setCreationMode("video")}
+          >
+            <span>
+              <PlayIcon />
+              {copy.video}
+            </span>
+          </button>
+        )}
+      </div>
+      {!playDistribution && mode === "video" ? (
+        <AndroidVideoStudio />
+      ) : (
+        <AndroidImageStudio />
+      )}
+    </div>
+  );
+}
+
+type MobileVideoPrompt = {
+  id: number | string;
+  title: string;
+  description?: string;
+  prompt_text?: string;
+  purpose?: string;
+  category?: string;
+  categories?: string[];
+  version?: number;
+  updated_at?: string;
+  media?: Array<{ url?: string; media_type?: string }>;
+  coverUrl?: string;
+};
+
+type MobileVideoServerTask = {
+  id: string;
+  status?:
+    | "queued"
+    | "running"
+    | "streaming"
+    | "completed"
+    | "partial"
+    | "failed"
+    | "cancelled";
+  progress?: number;
+  artifacts?: Array<{
+    url?: string;
+    content_url?: string;
+    content_type?: string;
+    kind?: string;
+  }>;
+  error?: { code?: string; message?: string } | null;
+};
+
+type MobileVideoHistoryItem = LocalVideoEntry & { url: string };
+
+function localPromptCatalogItemToVideoPrompt(
+  item: LocalPromptCatalogItem,
+  coverUrl = "",
+): MobileVideoPrompt {
+  return {
+    // Canvas prompt IDs are stable strings (for example
+    // `gpt-image-2-prompts-598`). Never coerce them to a number: NaN IDs
+    // break React keys, local cover lookups, and delta tombstones.
+    id: item.id,
+    title: item.title,
+    description: item.description,
+    prompt_text: item.prompt_text,
+    purpose: item.purpose,
+    category: item.category,
+    categories: item.categories,
+    version: item.version,
+    updated_at: item.updated_at,
+    coverUrl: coverUrl || undefined,
+    media: item.media,
+  };
+}
+
+function AndroidVideoStudio() {
+  const managed = useManagedNextChatStore();
+  const mobileStore = useManagedMobileAppStore();
+  const text = useMobileText();
+  const copy = videoStudioCopy();
+  const activeAccountId = String(
+    managed.user?.id ||
+      managed.session?.user_id ||
+      managed.workspace?.user?.id ||
+      "",
+  );
+  const preferenceKey = videoStudioPreferenceKey(activeAccountId);
+  const [preferences, setPreferences] = useState(() =>
+    readStoredJSON(preferenceKey, DEFAULT_VIDEO_STUDIO_PREFERENCES),
+  );
+  const [serverGroups, setServerGroups] = useState<ManagedWorkspaceGroup[]>([]);
+  const [serverBootstrapState, setServerBootstrapState] = useState<
+    "idle" | "loading" | "ready" | "failed"
+  >("idle");
+  const [serverBootstrapFailure, setServerBootstrapFailure] =
+    useState<MobileVideoBootstrapFailure | null>(null);
+  const serverBootstrapLoaded = serverBootstrapState === "ready";
+  const serverBootstrapLoading = serverBootstrapState === "loading";
+  const loadServerCapabilities = useCallback(async () => {
+    if (!managed.accessToken) {
+      setServerGroups([]);
+      setServerBootstrapState("idle");
+      setServerBootstrapFailure(null);
+      return;
+    }
+    setServerBootstrapState("loading");
+    setServerBootstrapFailure(null);
+    try {
+      const payload =
+        await managedAuthenticatedJsonRequest<MobileVideoServerBootstrap>(
+          "/api/v1/mobile/video/bootstrap",
+        );
+      setServerGroups(
+        normalizeMobileVideoBootstrapGroups(
+          payload?.groups,
+          payload?.capabilities_version,
+          Boolean(payload?.protocol_version || payload?.capabilities_version),
+        ),
+      );
+      // A successful empty response is authoritative: it means the server
+      // completed the availability check, not that the request failed.
+      setServerBootstrapState("ready");
+    } catch (error) {
+      // Keep the managed bootstrap as a short-lived compatibility fallback;
+      // creation still uses the server-owned task API and will fail closed if
+      // its capabilities are unavailable.
+      setServerGroups([]);
+      setServerBootstrapState("failed");
+      setServerBootstrapFailure(classifyMobileVideoBootstrapFailure(error));
+    }
+  }, [managed.accessToken]);
+  useEffect(() => {
+    void loadServerCapabilities();
+  }, [loadServerCapabilities]);
+  const resolvedVideoGroups = useMemo(
+    () =>
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded,
+        serverGroups,
+        workspace: managed.workspace,
+      }),
+    [managed.workspace, serverBootstrapLoaded, serverGroups],
+  );
+  const groups = resolvedVideoGroups.groups;
+  const videoGroupSource = resolvedVideoGroups.source;
+  const bootstrapFailureCopy = videoBootstrapFailureCopy(
+    copy,
+    serverBootstrapFailure,
+  );
+  const unavailableVideoDiagnostic = resolvedVideoGroups.suppressed[0];
+  const serverCheckedWithoutVideo =
+    serverBootstrapState === "ready" &&
+    videoGroupSource === "server" &&
+    groups.length === 0;
+  const serverUnavailableHint = unavailableVideoDiagnostic
+    ? [unavailableVideoDiagnostic.groupName, unavailableVideoDiagnostic.model]
+        .filter(Boolean)
+        .join(" / ") +
+      `: ${localizedVideoUnavailableReason(
+        copy,
+        unavailableVideoDiagnostic.code,
+      )}`
+    : copy.groupHint;
+  const preferredGroup = groups.find(
+    (group) => group.id === Number(preferences.groupId),
+  );
+  const selectedGroup = preferredGroup || groups[0];
+  const videoModels = managedVideoModels(selectedGroup);
+  const fallbackModel = videoModels[0];
+  const selectedModel =
+    videoModels.find((model) => modelMatches(model, preferences.model)) ||
+    fallbackModel;
+  const capabilities = managedVideoCapabilities(selectedModel, selectedGroup);
+  const resolutions: string[] =
+    capabilities?.resolutions || capabilities?.supported_resolutions || [];
+  const ratios: string[] =
+    capabilities?.ratios || capabilities?.supported_ratios || [];
+  const durations: number[] =
+    capabilities?.durations || capabilities?.supported_durations || [];
+  const resolutionOptionsKey = resolutions.join(",");
+  const ratioOptionsKey = ratios.join(",");
+  const durationOptionsKey = durations.join(",");
+  const [prompt, setPrompt] = useState("");
+  const [scriptRunning, setScriptRunning] = useState(false);
+  const [references, setReferences] = useState<string[]>([]);
+  const [referenceAssetIDs, setReferenceAssetIDs] = useState<string[]>([]);
+  const [referenceAssetKinds, setReferenceAssetKinds] = useState<
+    Record<string, LocalMaterialKind>
+  >({});
+  const [referenceMaterials, setReferenceMaterials] = useState<LocalMaterial[]>(
+    [],
+  );
+  const [referenceMaterialsLoading, setReferenceMaterialsLoading] =
+    useState(false);
+  const [referenceLibraryOpen, setReferenceLibraryOpen] = useState(false);
+  const [status, setStatus] = useState<
+    "idle" | "running" | "completed" | "failed" | "cancelled"
+  >("idle");
+  const [progress, setProgress] = useState(0);
+  const [resultUrl, setResultUrl] = useState("");
+  const [taskID, setTaskID] = useState("");
+  const [error, setError] = useState("");
+  const [videoPrompts, setVideoPrompts] = useState<MobileVideoPrompt[]>([]);
+  const [videoPromptCategories, setVideoPromptCategories] = useState<
+    Array<{ id: string; label: string }>
+  >([]);
+  const [videoPromptCategory, setVideoPromptCategory] = useState("all");
+  const [videoPromptQuery, setVideoPromptQuery] = useState("");
+  const [history, setHistory] = useState<MobileVideoHistoryItem[]>([]);
+  const historyObjectURLsRef = useRef<string[]>([]);
+  const videoPromptObjectURLsRef = useRef<string[]>([]);
+  const abortRef = useRef<AbortController | null>(null);
+  const referenceInputRef = useRef<HTMLInputElement | null>(null);
+  const referenceObjectURLsRef = useRef<string[]>([]);
+  const resultObjectURLRef = useRef<string>("");
+  const scriptAbortRef = useRef<AbortController | null>(null);
+
+  const referenceLimitForKind = useCallback(
+    (kind: LocalMaterialKind) => {
+      switch (kind) {
+        case "image":
+          return Math.max(
+            0,
+            Number(
+              capabilities?.max_reference_images ??
+                (capabilities?.image_to_video ? 1 : 0),
+            ),
+          );
+        case "video":
+          return Math.max(
+            0,
+            Number(
+              capabilities?.max_reference_videos ??
+                (capabilities?.video_reference ? 1 : 0),
+            ),
+          );
+        case "audio":
+          return Math.max(
+            0,
+            Number(
+              capabilities?.max_reference_audios ??
+                (capabilities?.audio_reference ? 1 : 0),
+            ),
+          );
+        default:
+          return 0;
+      }
+    },
+    [capabilities],
+  );
+
+  const selectableReferenceMaterials = useMemo(
+    () =>
+      referenceMaterials.filter(
+        (material) =>
+          Boolean(material.remoteId) &&
+          referenceLimitForKind(material.kind) > 0,
+      ),
+    [referenceLimitForKind, referenceMaterials],
+  );
+
+  const refreshReferenceMaterials = useCallback(async () => {
+    if (!activeAccountId) {
+      setReferenceMaterials([]);
+      return;
+    }
+    setReferenceMaterialsLoading(true);
+    try {
+      const items =
+        managed.accessToken && managed.backendBaseUrl
+          ? (
+              await syncLocalMaterials(
+                activeAccountId,
+                managed.backendBaseUrl,
+                managed.accessToken,
+              )
+            ).materials
+          : await listLocalMaterials(activeAccountId);
+      setReferenceMaterials(items);
+    } catch {
+      // The current device cache remains selectable if a lightweight delta
+      // check is offline or temporarily unavailable.
+      setReferenceMaterials(await listLocalMaterials(activeAccountId));
+    } finally {
+      setReferenceMaterialsLoading(false);
+    }
+  }, [activeAccountId, managed.accessToken, managed.backendBaseUrl]);
+
+  const scriptSelection = useMemo(
+    () =>
+      resolveMobileVideoScriptSelection({
+        workspace: managed.workspace,
+        chatSessions: mobileStore.chatSessions,
+        currentChatId: mobileStore.currentChatId,
+        preference: readChatPreference(),
+      }),
+    [managed.workspace, mobileStore.chatSessions, mobileStore.currentChatId],
+  );
+  const scriptGroup = useMemo(
+    () =>
+      scriptSelection.groupId
+        ? managed.workspace?.models?.groups?.find(
+            (group) => group.id === scriptSelection.groupId,
+          )
+        : undefined,
+    [managed.workspace, scriptSelection.groupId],
+  );
+
+  useEffect(() => {
+    setPreferences(
+      readStoredJSON(preferenceKey, DEFAULT_VIDEO_STUDIO_PREFERENCES),
+    );
+  }, [preferenceKey]);
+
+  useEffect(() => {
+    void refreshReferenceMaterials();
+  }, [refreshReferenceMaterials]);
+
+  useEffect(() => {
+    referenceObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    referenceObjectURLsRef.current = [];
+    setReferences([]);
+    setReferenceAssetIDs([]);
+    setReferenceAssetKinds({});
+    setReferenceLibraryOpen(false);
+  }, [activeAccountId]);
+
+  useEffect(() => {
+    let disposed = false;
+    const loadHistory = async () => {
+      historyObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      historyObjectURLsRef.current = [];
+      setHistory([]);
+      if (!activeAccountId) return;
+      const cachedEntries = await listLocalVideosWithBlobs(activeAccountId);
+      const hydrated: MobileVideoHistoryItem[] = [];
+      for (const { entry, blob } of cachedEntries) {
+        const url = URL.createObjectURL(blob);
+        historyObjectURLsRef.current.push(url);
+        hydrated.push({ ...entry, url });
+      }
+      if (!disposed) setHistory(hydrated);
+
+      // Reconcile completed server tasks so a result generated on another
+      // session/device is downloaded once into this account's local cache.
+      if (!managed.accessToken || disposed) return;
+      try {
+        const page = await managedAuthenticatedJsonRequest<{
+          items?: MobileVideoServerTask[];
+        }>("/api/v1/mobile/video/jobs?page=1&page_size=24");
+        // The index can survive Android/WebView storage eviction while an
+        // individual IndexedDB blob does not. Only entries returned with a
+        // binary are actually cached, so missing blobs get one authenticated
+        // repair download below.
+        const known = new Set(cachedEntries.map(({ entry }) => entry.taskId));
+        const next = [...hydrated];
+        for (const task of page?.items || []) {
+          const state = String(task.status || "").toLowerCase();
+          if (
+            !task.id ||
+            known.has(task.id) ||
+            !["completed", "partial"].includes(state)
+          )
+            continue;
+          const artifact = task.artifacts?.find(
+            (item) => item.url || item.content_url,
+          );
+          const artifactURL = artifact?.url || artifact?.content_url;
+          if (!artifactURL) continue;
+          const blob = await managedDownloadBlob(
+            managed.backendBaseUrl,
+            artifactURL,
+            managed.accessToken,
+          );
+          const entry = await saveLocalVideo(activeAccountId, task.id, blob, {
+            prompt: "",
+            createdAt:
+              Date.parse(String((task as any).created_at || "")) || Date.now(),
+          });
+          const url = URL.createObjectURL(blob);
+          historyObjectURLsRef.current.push(url);
+          next.push({ ...entry, url });
+          known.add(task.id);
+        }
+        if (!disposed) setHistory(next.slice(0, 24));
+      } catch {
+        // Local history remains usable when the server is temporarily offline.
+      }
+    };
+    void loadHistory();
+    return () => {
+      disposed = true;
+      historyObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      historyObjectURLsRef.current = [];
+    };
+  }, [activeAccountId, managed.accessToken, managed.backendBaseUrl]);
+
+  useEffect(() => {
+    return () => {
+      scriptAbortRef.current?.abort();
+      referenceObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      referenceObjectURLsRef.current = [];
+      if (resultObjectURLRef.current)
+        URL.revokeObjectURL(resultObjectURLRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const appLocale = mobileTextLocale(text);
+    const locale =
+      appLocale === "cn" ? "zh" : appLocale === "jp" ? "ja" : appLocale;
+    const releasePromptObjectURLs = () => {
+      videoPromptObjectURLsRef.current.forEach((url) =>
+        URL.revokeObjectURL(url),
+      );
+      videoPromptObjectURLsRef.current = [];
+    };
+    const applyCatalog = async (catalog: LocalPromptCatalog) => {
+      const entries = await Promise.all(
+        catalog.items.map(async (item) => ({
+          item,
+          coverUrl: await createLocalPromptCoverObjectURL(
+            catalog.accountId,
+            catalog.locale,
+            "video",
+            item.id,
+            catalog.source,
+          ),
+        })),
+      );
+      if (disposed) {
+        entries.forEach(({ coverUrl }) => {
+          if (coverUrl) URL.revokeObjectURL(coverUrl);
+        });
+        return;
+      }
+      releasePromptObjectURLs();
+      videoPromptObjectURLsRef.current = entries
+        .map(({ coverUrl }) => coverUrl)
+        .filter(Boolean);
+      setVideoPrompts(
+        entries.map(({ item, coverUrl }) => ({
+          ...localPromptCatalogItemToVideoPrompt(item, coverUrl),
+          id: item.id,
+        })),
+      );
+      setVideoPromptCategories([
+        { id: "all", label: copy.selectPrompt },
+        ...catalog.categories.map((category) => ({
+          id: category.id,
+          label: category.label,
+        })),
+      ]);
+    };
+    const loadPromptCatalog = async () => {
+      releasePromptObjectURLs();
+      setVideoPrompts([]);
+      setVideoPromptCategories([]);
+      setVideoPromptCategory("all");
+      if (!activeAccountId) return;
+      // Video creation reuses the same published Creation Space prompt
+      // directory as the image studio. The Canvas mirror owns the prompt
+      // bodies and covers, so it must be synced in the canvas namespace.
+      const cached = await readLocalPromptCatalog(
+        activeAccountId,
+        locale,
+        "video",
+        "canvas",
+      );
+      if (cached) await applyCatalog(cached);
+      if (!managed.accessToken || !managed.backendBaseUrl || disposed) return;
+      try {
+        const synced = await syncLocalPromptCatalog(
+          activeAccountId,
+          locale,
+          "video",
+          managed.backendBaseUrl,
+          managed.accessToken,
+          undefined,
+          "canvas",
+        );
+        await applyCatalog(synced.catalog);
+      } catch {
+        // The cached catalog remains usable while the server is unavailable.
+      }
+    };
+    void loadPromptCatalog();
+    return () => {
+      disposed = true;
+      releasePromptObjectURLs();
+    };
+  }, [
+    activeAccountId,
+    managed.accessToken,
+    managed.backendBaseUrl,
+    text,
+    copy.selectPrompt,
+  ]);
+
+  const visibleVideoPrompts = useMemo(() => {
+    const query = videoPromptQuery.trim().toLowerCase();
+    return videoPrompts.filter((item) => {
+      const categories = [
+        item.category,
+        item.purpose,
+        ...(item.categories || []),
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      if (
+        videoPromptCategory !== "all" &&
+        !categories.includes(videoPromptCategory.toLowerCase())
+      ) {
+        return false;
+      }
+      if (!query) return true;
+      return [item.title, item.description, item.prompt_text]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [videoPromptCategory, videoPromptQuery, videoPrompts]);
+
+  useEffect(() => {
+    const next = {
+      ...preferences,
+      groupId: selectedGroup?.id || 0,
+      model: modelValue(selectedModel),
+      resolution: resolutions.includes(preferences.resolution)
+        ? preferences.resolution
+        : resolutions[0],
+      ratio: ratios.includes(preferences.ratio) ? preferences.ratio : ratios[0],
+      duration: durations.includes(Number(preferences.duration))
+        ? Number(preferences.duration)
+        : durations[0],
+    };
+    setPreferences(next);
+    writeStoredJSON(preferenceKey, next);
+    // The dependency list intentionally follows server capability changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    preferenceKey,
+    selectedGroup?.id,
+    selectedModel?.id,
+    resolutionOptionsKey,
+    ratioOptionsKey,
+    durationOptionsKey,
+  ]);
+
+  function clearSelectedReferences() {
+    referenceObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    referenceObjectURLsRef.current = [];
+    setReferences([]);
+    setReferenceAssetIDs([]);
+    setReferenceAssetKinds({});
+  }
+
+  function toggleReferenceMaterial(material: LocalMaterial) {
+    const id = String(material.remoteId || "").trim();
+    if (!id) return;
+    if (referenceAssetIDs.includes(id)) {
+      setReferenceAssetIDs((items) => items.filter((item) => item !== id));
+      setReferenceAssetKinds((items) => {
+        const next = { ...items };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+    const count = Object.values(referenceAssetKinds).filter(
+      (kind) => kind === material.kind,
+    ).length;
+    if (count >= referenceLimitForKind(material.kind)) {
+      setError(copy.unsupported);
+      return;
+    }
+    setReferenceAssetIDs((items) => [...items, id]);
+    setReferenceAssetKinds((items) => ({ ...items, [id]: material.kind }));
+    setError("");
+  }
+
+  async function chooseReferences(event: ChangeEvent<HTMLInputElement>) {
+    const currentTotal = referenceAssetIDs.length;
+    const maxReferences = ["image", "video", "audio"]
+      .map((kind) => referenceLimitForKind(kind as LocalMaterialKind))
+      .reduce((total, value) => total + value, 0);
+    const files = Array.from(event.currentTarget.files || []).slice(
+      0,
+      Math.max(0, maxReferences - currentTotal),
+    );
+    try {
+      const counts = files.reduce(
+        (result, file) => {
+          const kind = localMaterialKind(file);
+          result[kind] = (result[kind] || 0) + 1;
+          return result;
+        },
+        Object.values(referenceAssetKinds).reduce(
+          (result, kind) => ({ ...result, [kind]: (result[kind] || 0) + 1 }),
+          {} as Record<string, number>,
+        ),
+      );
+      if (
+        !files.length ||
+        (counts.image || 0) > referenceLimitForKind("image") ||
+        (counts.video || 0) > referenceLimitForKind("video") ||
+        (counts.audio || 0) > referenceLimitForKind("audio")
+      ) {
+        throw new Error(copy.unsupported);
+      }
+      const objectURLs = files.map((file) => URL.createObjectURL(file));
+      const uploaded = await Promise.all(
+        files.map(async (file) => {
+          const form = new FormData();
+          form.append("file", file, file.name);
+          form.append("kind", localMaterialKind(file));
+          form.append("source", "upload");
+          return managedFormDataRequest<{ id?: string }>(
+            "/api/v1/mobile/assets",
+            form,
+            text,
+            { idempotencyKey: clientRequestID("mobile-video-asset") },
+          );
+        }),
+      );
+      const ids = uploaded
+        .map((asset) => String(asset?.id || ""))
+        .filter(Boolean);
+      if (ids.length !== files.length) throw new Error(copy.failed);
+      referenceObjectURLsRef.current.push(...objectURLs);
+      setReferences((items) => [...items, ...objectURLs]);
+      setReferenceAssetIDs((items) => [...new Set([...items, ...ids])]);
+      setReferenceAssetKinds((items) => {
+        const next = { ...items };
+        ids.forEach((id, index) => {
+          next[id] = localMaterialKind(files[index]);
+        });
+        return next;
+      });
+      await refreshReferenceMaterials();
+      setError("");
+    } catch (referenceError) {
+      setError(
+        referenceError instanceof Error &&
+          referenceError.message === copy.unsupported
+          ? copy.unsupported
+          : copy.failed,
+      );
+    } finally {
+      event.currentTarget.value = "";
+    }
+  }
+
+  async function writeVideoPromptWithChatModel() {
+    const brief = prompt.trim();
+    if (!brief) {
+      setError(copy.placeholder);
+      return;
+    }
+    if (
+      !scriptSelection.groupId ||
+      !scriptSelection.model ||
+      !managed.session
+    ) {
+      setError(copy.scriptNoModel);
+      return;
+    }
+    const modelIsStillAvailable = scriptGroup?.models?.some(
+      (model) =>
+        isChatModel(model) && modelValue(model) === scriptSelection.model,
+    );
+    if (!modelIsStillAvailable) {
+      setError(copy.scriptNoModel);
+      return;
+    }
+
+    const controller = new AbortController();
+    scriptAbortRef.current?.abort();
+    scriptAbortRef.current = controller;
+    setScriptRunning(true);
+    setError("");
+    const requestID = clientRequestID("mobile-video-script");
+    try {
+      let activeManaged = useManagedNextChatStore.getState();
+      if (shouldRefreshManagedSession(activeManaged.session)) {
+        await managed.bootstrap({ silent: true });
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (!activeManaged.session?.api_key)
+        throw new Error(text.errors.loginRequired);
+      if (currentGroupID(activeManaged.workspace) !== scriptSelection.groupId) {
+        await managed.switchGroup(scriptSelection.groupId);
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (controller.signal.aborted) return;
+      const chatAPIKey = activeManaged.session?.api_key;
+      if (!chatAPIKey) throw new Error(text.errors.loginRequired);
+      const response = await managedGatewayRequestText(
+        activeManaged.backendBaseUrl,
+        "/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "Idempotency-Key": requestID,
+            "X-Request-ID": requestID,
+            "X-Client-Request-ID": requestID,
+          },
+          body: JSON.stringify({
+            model: scriptSelection.model,
+            stream: false,
+            messages: [
+              {
+                role: "user",
+                content: buildMobileVideoScriptPrompt(brief, text.dateLocale),
+              },
+            ],
+          }),
+          signal: controller.signal,
+        },
+        chatAPIKey,
+        text,
+      );
+      if (!response.ok) {
+        throw new Error(
+          parseOpenAIError(
+            response.text,
+            response.status,
+            "/v1/chat/completions",
+            response.requestId || requestID,
+          ),
+        );
+      }
+      let output = "";
+      try {
+        output = extractChatContent(JSON.parse(response.text || "{}"));
+      } catch {
+        output = response.text;
+      }
+      if (!output.trim()) throw new Error(copy.scriptFailed);
+      setPrompt(output.trim());
+    } catch (scriptError) {
+      if (!controller.signal.aborted) {
+        setError(
+          scriptError instanceof Error
+            ? localizedMobileErrorMessage(scriptError, copy.scriptFailed)
+            : copy.scriptFailed,
+        );
+      }
+    } finally {
+      if (scriptAbortRef.current === controller) scriptAbortRef.current = null;
+      if (!controller.signal.aborted) setScriptRunning(false);
+    }
+  }
+
+  async function waitForVideoTask(
+    initialTask: MobileVideoServerTask,
+    requestID: string,
+    controller: AbortController,
+  ) {
+    const id = String(initialTask?.id || "");
+    if (!id) throw new Error(copy.noResult);
+    setTaskID(id);
+    const deadline = Date.now() + MOBILE_VIDEO_POLL_TIMEOUT_MS;
+    let latest: MobileVideoServerTask = initialTask;
+    let attempt = 0;
+    while (Date.now() < deadline) {
+      if (controller.signal.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const state = String(latest.status || "").toLowerCase();
+      const artifact = latest.artifacts?.find(
+        (item) => item.url || item.content_url,
+      );
+      if (artifact && ["completed", "partial"].includes(state)) break;
+      if (["failed", "cancelled"].includes(state)) {
+        throw new Error(latest.error?.message || copy.failed);
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, MOBILE_VIDEO_POLL_INTERVAL_MS),
+      );
+      latest = await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}`,
+        {
+          method: "GET",
+          headers: { "X-Request-ID": requestID },
+          signal: controller.signal,
+        },
+      );
+      setProgress(Math.min(94, 12 + Math.min(80, ++attempt * 5)));
+    }
+    if (Date.now() >= deadline) throw new Error(copy.timeout);
+    const artifact = latest.artifacts?.find(
+      (item) => item.url || item.content_url,
+    );
+    const url =
+      artifact?.url ||
+      artifact?.content_url ||
+      `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}/content`;
+    if (!url || !managed.accessToken) throw new Error(copy.noResult);
+    const blob = await managedDownloadBlob(
+      managed.backendBaseUrl,
+      url,
+      managed.accessToken,
+      controller.signal,
+    );
+    const localEntry = await saveLocalVideo(activeAccountId, id, blob, {
+      prompt: prompt.trim(),
+      createdAt: Date.now(),
+    });
+    // Keep the private relay object while the user can still download this
+    // result. Android's DownloadManager reads that authenticated URL after the
+    // click, so acknowledging it here would race the download and delete the
+    // source before the native transfer begins.
+    if (resultObjectURLRef.current) {
+      URL.revokeObjectURL(resultObjectURLRef.current);
+    }
+    resultObjectURLRef.current = URL.createObjectURL(blob);
+    setResultUrl(resultObjectURLRef.current);
+    setStatus("completed");
+    setProgress(100);
+    const historyURL = URL.createObjectURL(blob);
+    historyObjectURLsRef.current.push(historyURL);
+    const entry: MobileVideoHistoryItem = { ...localEntry, url: historyURL };
+    setHistory((items) =>
+      [entry, ...items.filter((item) => item.taskId !== id)].slice(0, 24),
+    );
+  }
+
+  function handleVideoRunError(controller: AbortController, runError: unknown) {
+    if (controller.signal.aborted) {
+      setStatus("cancelled");
+      setError(text.errors.requestCancelled);
+      return;
+    }
+    setStatus("failed");
+    setError(runError instanceof Error ? runError.message : copy.failed);
+  }
+
+  async function runVideo() {
+    if (!selectedGroup || !selectedModel || !capabilities) {
+      setError(
+        videoGroupSource === "unavailable"
+          ? serverBootstrapLoading
+            ? copy.loadingCapabilities
+            : copy.capabilitiesUnavailable
+          : serverCheckedWithoutVideo
+          ? copy.serverCheckedNoVideo
+          : groups.length
+          ? copy.noModel
+          : copy.noGroup,
+      );
+      return;
+    }
+    if (!prompt.trim()) {
+      setError(copy.placeholder);
+      return;
+    }
+    if (!managed.accessToken || videoGroupSource === "unavailable") {
+      setError(
+        serverBootstrapLoading
+          ? copy.loadingCapabilities
+          : copy.capabilitiesUnavailable,
+      );
+      return;
+    }
+
+    const referenceCounts = Object.values(referenceAssetKinds).reduce(
+      (counts, kind) => {
+        counts[kind] = (counts[kind] || 0) + 1;
+        return counts;
+      },
+      {} as Record<LocalMaterialKind, number>,
+    );
+    const videoValidation = validateManagedVideoRequest({
+      model: selectedModel,
+      models:
+        videoGroupSource === "workspace"
+          ? managed.workspace?.workspaces?.video?.models
+          : undefined,
+      resolution: preferences.resolution,
+      ratio: preferences.ratio,
+      duration: Number(preferences.duration),
+      referenceAssetCount: referenceAssetIDs.length,
+      referenceImageCount: referenceCounts.image || 0,
+      referenceVideoCount: referenceCounts.video || 0,
+      referenceAudioCount: referenceCounts.audio || 0,
+    });
+    if (!videoValidation.valid) {
+      setError(copy.unsupported);
+      return;
+    }
+
+    try {
+      let activeManaged = useManagedNextChatStore.getState();
+      if (shouldRefreshManagedSession(activeManaged.videoSession)) {
+        await managed.bootstrap({ silent: true });
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      const activeVideoSession = selectManagedVideoSession({
+        video: activeManaged.videoSession || undefined,
+      });
+      if (!activeVideoSession) {
+        throw new Error(copy.capabilitiesUnavailable);
+      }
+      if (
+        activeVideoSession.group_id !== selectedGroup.id ||
+        currentVideoGroupID(activeManaged.workspace) !== selectedGroup.id
+      ) {
+        await managed.switchVideoGroup(selectedGroup.id);
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (
+        !selectManagedVideoSessionForGroup(
+          {
+            video: activeManaged.videoSession || undefined,
+          },
+          selectedGroup.id,
+        )
+      ) {
+        throw new Error(copy.capabilitiesUnavailable);
+      }
+    } catch (sessionError) {
+      setError(
+        localizedMobileErrorMessage(sessionError, copy.capabilitiesUnavailable),
+      );
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const requestID = clientRequestID("mobile-video");
+    setStatus("running");
+    setProgress(8);
+    setTaskID("");
+    setResultUrl("");
+    setError("");
+    try {
+      const createData = await managedAuthenticatedJsonRequest<{
+        task?: MobileVideoServerTask;
+      }>("/api/v1/mobile/video/jobs", {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": requestID,
+          "X-Request-ID": requestID,
+        },
+        body: JSON.stringify({
+          group_id: Number(selectedGroup.id),
+          model: modelValue(selectedModel),
+          purpose: "video",
+          prompt: prompt.trim(),
+          resolution: preferences.resolution,
+          ratio: preferences.ratio,
+          duration_seconds: Number(preferences.duration),
+          reference_asset_ids: referenceAssetIDs,
+          generate_audio: Boolean(
+            capabilities.generate_audio && preferences.generateAudio,
+          ),
+          watermark: Boolean(capabilities.watermark && preferences.watermark),
+          client_request_id: requestID,
+        }),
+        signal: controller.signal,
+      });
+      await waitForVideoTask(
+        createData?.task || (createData as unknown as MobileVideoServerTask),
+        requestID,
+        controller,
+      );
+    } catch (runError) {
+      handleVideoRunError(controller, runError);
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }
+
+  async function retryVideo() {
+    if (!taskID || !managed.accessToken) {
+      await runVideo();
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const requestID = clientRequestID("mobile-video-retry");
+    setStatus("running");
+    setProgress(8);
+    setResultUrl("");
+    setError("");
+    try {
+      const current =
+        await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
+          `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}`,
+          {
+            method: "GET",
+            headers: { "X-Request-ID": requestID },
+            signal: controller.signal,
+          },
+        );
+      const currentState = String(current.status || "").toLowerCase();
+      if (!["failed", "cancelled"].includes(currentState)) {
+        // A client-side polling timeout must not submit a second provider job.
+        // Resume the durable server task first; only a terminal retryable task
+        // is allowed to create a new task.
+        await waitForVideoTask(current, requestID, controller);
+      } else {
+        const retry =
+          await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
+            `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/retry`,
+            {
+              method: "POST",
+              headers: {
+                "Idempotency-Key": requestID,
+                "X-Request-ID": requestID,
+              },
+              body: JSON.stringify({ client_request_id: requestID }),
+              signal: controller.signal,
+            },
+          );
+        await waitForVideoTask(retry, requestID, controller);
+      }
+    } catch (retryError) {
+      handleVideoRunError(controller, retryError);
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }
+
+  function cancelVideo() {
+    abortRef.current?.abort();
+    if (taskID && managed.accessToken) {
+      void managedAuthenticatedJsonRequest(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/cancel`,
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      ).catch(() => undefined);
+    }
+  }
+
+  async function removeHistoryItem(item: MobileVideoHistoryItem) {
+    try {
+      await deleteLocalVideos(activeAccountId, [item.id]);
+      URL.revokeObjectURL(item.url);
+      historyObjectURLsRef.current = historyObjectURLsRef.current.filter(
+        (url) => url !== item.url,
+      );
+      setHistory((items) =>
+        items.filter((candidate) => candidate.id !== item.id),
+      );
+      if (item.taskId === taskID) {
+        setResultUrl("");
+        setTaskID("");
+      }
+      // The user has explicitly removed the only device copy. Release the
+      // temporary relay object best-effort; a cleanup failure must not restore
+      // deleted private local history.
+      void managedAuthenticatedJsonRequest(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(
+          item.taskId,
+        )}/content/ack`,
+        { method: "POST" },
+      ).catch(() => undefined);
+    } catch {
+      setError(copy.failed);
+    }
+  }
+
+  async function downloadVideo(url: string, id: string) {
+    try {
+      // Local history is played from an IndexedDB blob URL. Android's
+      // DownloadManager cannot consume blob: URLs, so it downloads the same
+      // server-owned task artifact with the active account's short-lived JWT.
+      // The token remains a request header and is never put in a URL or file.
+      const useAuthenticatedTaskDownload = Boolean(
+        isNativeAndroid() &&
+          id &&
+          managed.accessToken &&
+          managed.backendBaseUrl,
+      );
+      const downloadURL = useAuthenticatedTaskDownload
+        ? managedApiUrl(
+            managed.backendBaseUrl,
+            `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}/content`,
+          )
+        : url;
+      await startNativeDownload(
+        downloadURL,
+        `jisudeng-video-${id}.mp4`,
+        copy.title,
+        useAuthenticatedTaskDownload
+          ? { authorization: `Bearer ${managed.accessToken}` }
+          : undefined,
+      );
+    } catch {
+      setError(text.errors.downloadFailed);
+    }
+  }
+
+  async function saveVideoAsAsset() {
+    if (!taskID || !managed.accessToken) return;
+    try {
+      const requestID = clientRequestID("mobile-video-save-asset");
+      const localVideo = (await listLocalVideosWithBlobs(activeAccountId)).find(
+        ({ entry }) => entry.taskId === taskID,
+      );
+      if (!localVideo) throw new Error(copy.noResult);
+      const form = new FormData();
+      form.append("file", localVideo.blob, `video-${taskID}.mp4`);
+      form.append("kind", "video");
+      form.append("source", "video_result");
+      await managedFormDataRequest("/api/v1/mobile/assets", form, text, {
+        requestId: requestID,
+        idempotencyKey: requestID,
+      });
+      await refreshReferenceMaterials();
+      // The user requested a durable account asset, so the temporary relay
+      // object is no longer required for later playback or native downloads.
+      void managedAuthenticatedJsonRequest(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/content/ack`,
+        { method: "POST" },
+      ).catch(() => undefined);
+      setError("");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : copy.failed);
+    }
+  }
+
+  const noCapability =
+    !selectedGroup ||
+    !selectedModel ||
+    !capabilities ||
+    resolutions.length === 0 ||
+    ratios.length === 0 ||
+    durations.length === 0;
+  return (
+    <AndroidAppShell active="create" text={text}>
+      <header className={styles["app-header"]}>
+        <div>
+          <span>{selectedGroup?.name || copy.video}</span>
+          <h1>{copy.title}</h1>
+        </div>
+        <IconButton
+          label={copy.refresh}
+          disabled={serverBootstrapLoading}
+          onClick={() => {
+            void Promise.all([managed.bootstrap(), loadServerCapabilities()]);
+          }}
+        >
+          <ReloadIcon />
+        </IconButton>
+      </header>
+      <section className={styles["image-panel"]}>
+        {videoGroupSource === "workspace" && (
+          <div className={styles["image-routing-hint"]}>
+            <div>
+              <strong>{copy.compatibilityTitle}</strong>
+              <span>
+                {serverBootstrapFailure
+                  ? bootstrapFailureCopy.hint
+                  : copy.compatibilityHint}
+              </span>
+            </div>
+          </div>
+        )}
+        {videoGroupSource === "unavailable" && (
+          <div className={styles["image-routing-hint"]}>
+            <div>
+              <strong>
+                {serverBootstrapLoading
+                  ? copy.loadingCapabilities
+                  : serverBootstrapFailure
+                  ? bootstrapFailureCopy.title
+                  : copy.capabilitiesUnavailable}
+              </strong>
+              <span>
+                {serverBootstrapFailure
+                  ? bootstrapFailureCopy.hint
+                  : copy.capabilitiesUnavailableHint}
+              </span>
+            </div>
+            {!serverBootstrapLoading && (
+              <button
+                type="button"
+                onClick={() => void loadServerCapabilities()}
+              >
+                {copy.retryCapabilities}
+              </button>
+            )}
+          </div>
+        )}
+        {serverCheckedWithoutVideo && (
+          <div className={styles["image-routing-hint"]}>
+            <div>
+              <strong>{copy.serverCheckedNoVideo}</strong>
+              <span>{serverUnavailableHint}</span>
+            </div>
+          </div>
+        )}
+        {noCapability &&
+          videoGroupSource !== "unavailable" &&
+          !serverCheckedWithoutVideo && (
+            <div className={styles["image-routing-hint"]}>
+              <div>
+                <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
+                <span>{copy.groupHint}</span>
+              </div>
+            </div>
+          )}
+        <div className={styles["form-grid"]}>
+          <label>
+            <span>{copy.group}</span>
+            <select
+              value={String(selectedGroup?.id || "")}
+              onChange={(event) => {
+                const group = groups.find(
+                  (item) => String(item.id) === event.currentTarget.value,
+                );
+                setPreferences((current) => ({
+                  ...current,
+                  groupId: group?.id || 0,
+                  model: "",
+                }));
+              }}
+              disabled={!groups.length}
+            >
+              {groups.length ? (
+                groups.map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))
+              ) : (
+                <option value="">{copy.noGroup}</option>
+              )}
+            </select>
+          </label>
+          <label>
+            <span>{copy.model}</span>
+            <select
+              value={modelValue(selectedModel)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  model: event.currentTarget.value,
+                }))
+              }
+              disabled={!videoModels.length}
+            >
+              {videoModels.length ? (
+                videoModels.map((model) => (
+                  <option key={modelValue(model)} value={modelValue(model)}>
+                    {modelLabel(model)}
+                  </option>
+                ))
+              ) : (
+                <option value="">{copy.noModel}</option>
+              )}
+            </select>
+          </label>
+          <label>
+            <span>{copy.resolution}</span>
+            <select
+              value={String(preferences.resolution)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  resolution: event.currentTarget.value,
+                }))
+              }
+              disabled={noCapability}
+            >
+              {resolutions.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>{copy.ratio}</span>
+            <select
+              value={String(preferences.ratio)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  ratio: event.currentTarget.value,
+                }))
+              }
+              disabled={noCapability}
+            >
+              {ratios.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>{copy.duration}</span>
+            <select
+              value={String(preferences.duration)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  duration: Number(event.currentTarget.value),
+                }))
+              }
+              disabled={noCapability}
+            >
+              {durations.map((value) => (
+                <option key={value} value={value}>
+                  {value === -1
+                    ? copy.smartDuration
+                    : `${value} ${copy.seconds}`}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <textarea
+          aria-label="video-prompt"
+          value={prompt}
+          onChange={(event) => setPrompt(event.currentTarget.value)}
+          placeholder={copy.placeholder}
+          disabled={noCapability}
+        />
+        <div className={styles["video-script-helper"]}>
+          <span>
+            <small>{copy.scriptModel}</small>
+            <strong>
+              {scriptSelection.model
+                ? `${groupNameByID(
+                    managed.workspace,
+                    scriptSelection.groupId,
+                    text,
+                  )} · ${scriptSelection.model}`
+                : copy.scriptNoModel}
+            </strong>
+            <em>{copy.scriptFollowing}</em>
+          </span>
+          <button
+            type="button"
+            onClick={() => void writeVideoPromptWithChatModel()}
+            disabled={!prompt.trim() || !scriptSelection.model || scriptRunning}
+          >
+            <PromptIcon />
+            {scriptRunning ? copy.scripting : copy.script}
+          </button>
+        </div>
+        {videoPrompts.length > 0 && (
+          <div
+            className={styles["video-prompt-library"]}
+            aria-label={copy.selectPrompt}
+          >
+            <span>{copy.selectPrompt}</span>
+            <div className={styles["video-prompt-filters"]}>
+              <select
+                aria-label={copy.selectPrompt}
+                value={videoPromptCategory}
+                onChange={(event) =>
+                  setVideoPromptCategory(event.currentTarget.value)
+                }
+              >
+                {(videoPromptCategories.length
+                  ? videoPromptCategories
+                  : [{ id: "all", label: text.common.all }]
+                ).map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.id === "all" ? text.common.all : category.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="search"
+                aria-label={copy.selectPrompt}
+                value={videoPromptQuery}
+                onChange={(event) =>
+                  setVideoPromptQuery(event.currentTarget.value)
+                }
+                placeholder={copy.selectPrompt}
+              />
+            </div>
+            <div className={styles["video-prompt-scroller"]}>
+              {visibleVideoPrompts.map((item) => {
+                return (
+                  <button
+                    type="button"
+                    key={String(item.id)}
+                    onClick={() => setPrompt(item.prompt_text || item.title)}
+                    disabled={noCapability}
+                  >
+                    {item.coverUrl && (
+                      <img src={item.coverUrl} alt="" loading="lazy" />
+                    )}
+                    <strong>{item.title}</strong>
+                    <small>{item.prompt_text || item.description}</small>
+                  </button>
+                );
+              })}
+              {!visibleVideoPrompts.length && <span>{text.common.empty}</span>}
+            </div>
+          </div>
+        )}
+        <div className={styles["library-action-row"]}>
+          <button
+            type="button"
+            onClick={() => referenceInputRef.current?.click()}
+            disabled={noCapability}
+          >
+            <UploadIcon />
+            <span>{copy.reference}</span>
+            <strong>
+              {referenceAssetIDs.length
+                ? `${referenceAssetIDs.length}`
+                : copy.choose}
+            </strong>
+          </button>
+          <button
+            type="button"
+            onClick={() => setReferenceLibraryOpen((open) => !open)}
+            disabled={noCapability || referenceMaterialsLoading}
+            aria-expanded={referenceLibraryOpen}
+          >
+            <UploadIcon />
+            <span>{copy.materialLibrary}</span>
+            <strong>
+              {referenceMaterialsLoading
+                ? copy.materialLoading
+                : selectableReferenceMaterials.length}
+            </strong>
+          </button>
+          <button
+            type="button"
+            onClick={clearSelectedReferences}
+            disabled={!referenceAssetIDs.length}
+          >
+            <DeleteIcon />
+            <span>{copy.clearReferences}</span>
+            <strong>{referenceAssetIDs.length || ""}</strong>
+          </button>
+          <input
+            ref={referenceInputRef}
+            type="file"
+            accept="image/*,video/*,audio/*"
+            multiple
+            hidden
+            onChange={(event) => void chooseReferences(event)}
+          />
+        </div>
+        {referenceLibraryOpen && (
+          <div
+            className={styles["video-reference-library"]}
+            aria-label={copy.materialLibrary}
+          >
+            {referenceMaterialsLoading ? (
+              <span>{copy.materialLoading}</span>
+            ) : selectableReferenceMaterials.length ? (
+              selectableReferenceMaterials.map((material) => {
+                const id = String(material.remoteId || "");
+                const selected = referenceAssetIDs.includes(id);
+                const kind = material.kind as "image" | "video" | "audio";
+                return (
+                  <button
+                    key={material.id}
+                    type="button"
+                    aria-pressed={selected}
+                    className={clsx({
+                      [styles["reference-selected"]]: selected,
+                    })}
+                    onClick={() => toggleReferenceMaterial(material)}
+                  >
+                    <UploadIcon />
+                    <span>
+                      <strong>{material.name}</strong>
+                      <small>{copy.materialKinds[kind]}</small>
+                    </span>
+                    <b>{selected ? "-" : "+"}</b>
+                  </button>
+                );
+              })
+            ) : (
+              <span>{copy.materialEmpty}</span>
+            )}
+          </div>
+        )}
+        <div className={styles["form-grid"]}>
+          <label className={styles["checkbox-row"]}>
+            <input
+              type="checkbox"
+              checked={Boolean(preferences.generateAudio)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  generateAudio: event.currentTarget.checked,
+                }))
+              }
+              disabled={!capabilities?.generate_audio}
+            />
+            <span>{copy.audio}</span>
+          </label>
+          <label className={styles["checkbox-row"]}>
+            <input
+              type="checkbox"
+              checked={Boolean(preferences.watermark)}
+              onChange={(event) =>
+                setPreferences((current) => ({
+                  ...current,
+                  watermark: event.currentTarget.checked,
+                }))
+              }
+              disabled={!capabilities?.watermark}
+            />
+            <span>{copy.watermark}</span>
+          </label>
+        </div>
+        {error && <div className={styles["form-error"]}>{error}</div>}
+        {status === "running" && (
+          <div className={styles["content-kit-preflight"]}>
+            <span>
+              {copy.generating} · {progress}%
+            </span>
+            <button type="button" onClick={cancelVideo}>
+              {copy.cancel}
+            </button>
+          </div>
+        )}
+        {(status === "failed" || status === "cancelled") && taskID && (
+          <div className={styles["content-kit-preflight"]}>
+            <span>{error || copy.failed}</span>
+            <button type="button" onClick={() => void retryVideo()}>
+              {copy.retry}
+            </button>
+          </div>
+        )}
+        <button
+          type="button"
+          className={styles["primary-action"]}
+          disabled={noCapability || status === "running"}
+          onClick={() => void runVideo()}
+        >
+          <PlayIcon />
+          {status === "running" ? copy.generating : copy.generate}
+        </button>
+        {resultUrl && status === "completed" && (
+          <div className={styles["video-result-card"]}>
+            <video controls playsInline src={resultUrl} />
+            <div>
+              <strong>{copy.ready}</strong>
+              <button
+                type="button"
+                onClick={() => void downloadVideo(resultUrl, taskID)}
+              >
+                <DownloadIcon />
+                {copy.download}
+              </button>
+              <button type="button" onClick={() => void saveVideoAsAsset()}>
+                <UploadIcon />
+                {copy.saveAsset}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+      <section className={styles["section"]}>
+        <div className={styles["section-head"]}>
+          <h2>{copy.history}</h2>
+          <span>{history.length}</span>
+        </div>
+        {history.length === 0 && (
+          <p className={styles["empty-copy"]}>{copy.emptyHistory}</p>
+        )}
+        <div className={styles["content-kit-project-list"]}>
+          {history.map((item) => (
+            <div className={styles["content-kit-project"]} key={item.id}>
+              <video muted playsInline src={item.url} />
+              <span>
+                <strong>{item.prompt.slice(0, 50) || item.taskId}</strong>
+                <small>{new Date(item.createdAt).toLocaleString()}</small>
+              </span>
+              <button
+                type="button"
+                onClick={() => void downloadVideo(item.url, item.taskId)}
+              >
+                <DownloadIcon />
+              </button>
+              <button
+                type="button"
+                aria-label={text.common.delete}
+                onClick={() => void removeHistoryItem(item)}
+              >
+                <DeleteIcon />
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </AndroidAppShell>
+  );
+}
+
 function AndroidImageStudio() {
   const managed = useManagedNextChatStore();
   const text = useMobileText();
@@ -11422,18 +16076,22 @@ function AndroidImageStudio() {
     number | undefined
   >(() => Number(imagePrefs.groupId) || imageGroup?.id);
   const effectiveImageGroupId = selectedImageGroupId || imageGroup?.id;
-  const models = modelsForGroup(workspace, effectiveImageGroupId);
   const imageModelOptions = imageModelsForGroup(
     workspace,
     effectiveImageGroupId,
   );
-  // The backend must declare image capabilities. Never infer edit support from
-  // a model name; older servers therefore show an explicit unsupported state.
-  const allowLegacyImageCapabilityFallback = false;
   const fallbackModel = imageModelOptions[0];
   const [selectedModel, setSelectedModel] = useState(
     String(imagePrefs.model || modelValue(fallbackModel)),
   );
+  const selectedImageModelInfo =
+    imageModelOptions.find((model) => modelMatches(model, selectedModel)) ||
+    fallbackModel;
+  const selectedReferenceLimit =
+    selectedImageModelInfo &&
+    imageModelSupportsReferences(selectedImageModelInfo)
+      ? managedImageReferenceLimit(selectedImageModelInfo)
+      : 0;
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState(String(imagePrefs.size || "1024x1024"));
   const [quality, setQuality] = useState(String(imagePrefs.quality || "auto"));
@@ -11485,9 +16143,15 @@ function AndroidImageStudio() {
 
   useEffect(() => {
     const fallback = modelValue(fallbackModel);
-    const selectedBelongsToImageGroup = imageModelOptions.some(
-      (model) => modelValue(model) === selectedModel,
+    const selectedImageModel = imageModelOptions.find((model) =>
+      modelMatches(model, selectedModel),
     );
+    const canonicalSelectedModel = modelValue(selectedImageModel);
+    if (canonicalSelectedModel && canonicalSelectedModel !== selectedModel) {
+      setSelectedModel(canonicalSelectedModel);
+      return;
+    }
+    const selectedBelongsToImageGroup = Boolean(selectedImageModel);
     if (fallback && (!selectedModel || !selectedBelongsToImageGroup)) {
       setSelectedModel(fallback);
     }
@@ -11514,13 +16178,31 @@ function AndroidImageStudio() {
     const state = location.state as any;
     const dataUrl = String(state?.materialDataUrl || "");
     if (!dataUrl) return;
-    setReferences((items) => [...items, dataUrl].slice(0, 6));
+    if (!selectedReferenceLimit) {
+      setError(text.image.noReferenceModel);
+      navigate(Path.Sd, { replace: true, state: null });
+      return;
+    }
+    setReferences((items) =>
+      [...items, dataUrl].slice(0, selectedReferenceLimit),
+    );
     navigate(Path.Sd, { replace: true, state: null });
-  }, [location.state, navigate]);
+  }, [
+    location.state,
+    navigate,
+    selectedReferenceLimit,
+    text.image.noReferenceModel,
+  ]);
+
+  useEffect(() => {
+    if (references.length > selectedReferenceLimit) {
+      setReferences((items) => items.slice(0, selectedReferenceLimit));
+    }
+  }, [references.length, selectedReferenceLimit]);
 
   const sizeOptions = useMemo(
-    () => imageSizeOptionsForModel(selectedModel || modelValue(fallbackModel)),
-    [fallbackModel, selectedModel],
+    () => imageSizeOptionsForModel(selectedImageModelInfo || selectedModel),
+    [selectedImageModelInfo, selectedModel],
   );
   const qualityOptions = useMemo(
     () =>
@@ -11653,25 +16335,21 @@ function AndroidImageStudio() {
     const files = input.files;
     if (!files?.length) return;
     try {
-      const selectedFiles = Array.from(files).slice(0, 6);
-      const urls = await readImageFiles(selectedFiles, 6);
-      setReferences((items) => [...items, ...urls].slice(0, 6));
-      if (
-        !imageModelSupportsReferences(
-          selectedModel,
-          imageModelOptions,
-          allowLegacyImageCapabilityFallback,
-        )
-      ) {
+      if (!selectedReferenceLimit) {
         setError(
-          firstReferenceImageModel(
-            imageModelOptions,
-            allowLegacyImageCapabilityFallback,
-          )
+          firstReferenceImageModel(imageModelOptions)
             ? text.image.referenceModelUnsupported(selectedModel)
             : text.image.noReferenceModel,
         );
+        return;
       }
+      const remaining = Math.max(0, selectedReferenceLimit - references.length);
+      if (!remaining) return;
+      const selectedFiles = Array.from(files).slice(0, remaining);
+      const urls = await readImageFiles(selectedFiles, remaining);
+      setReferences((items) =>
+        [...items, ...urls].slice(0, selectedReferenceLimit),
+      );
     } catch (err) {
       setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     } finally {
@@ -11695,11 +16373,7 @@ function AndroidImageStudio() {
           setError(text.errors.noImageModelsInCurrentGroup);
         } else if (
           references.length &&
-          !imageModelSupportsReferences(
-            nextModel,
-            [],
-            allowLegacyImageCapabilityFallback,
-          )
+          !imageModelSupportsReferences(nextModel, [])
         ) {
           setError(text.image.referenceModelUnsupported(modelValue(nextModel)));
         }
@@ -11740,39 +16414,20 @@ function AndroidImageStudio() {
     const imageOperation = taskReferences.length
       ? "images.edits"
       : "images.generations";
-    const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
-      image502ThenSuccess: false,
-    }));
-    const useLocalImageFixture = e2eFixture.image502ThenSuccess === true;
-
-    if (
-      taskReferences.length &&
-      !imageModelSupportsReferences(
-        model,
-        imageModelOptions,
-        allowLegacyImageCapabilityFallback,
-      )
-    ) {
-      setError(
-        firstReferenceImageModel(
-          imageModelOptions,
-          allowLegacyImageCapabilityFallback,
-        )
-          ? text.image.referenceModelUnsupported(model)
-          : text.image.noReferenceModel,
-      );
-      return;
-    }
 
     if (!promptText) {
       setError(text.errors.emptyPrompt);
       return;
     }
-    if (!managed.imageSession) {
+    if (
+      !selectManagedImageSession({
+        image: managed.imageSession || undefined,
+      })
+    ) {
       setError(text.errors.loginRequired);
       return;
     }
-    if (!model || imageModelOptions.length === 0) {
+    if (imageModelOptions.length === 0) {
       setError(
         describeImageError("", {
           text,
@@ -11784,11 +16439,43 @@ function AndroidImageStudio() {
       return;
     }
 
+    const requestedModel = model;
+    const modelInfo = imageModelOptions.find((item) =>
+      modelMatches(item, requestedModel),
+    );
+    model = modelValue(modelInfo);
+    if (!model) {
+      setError(
+        describeImageError("", {
+          text,
+          selectedModel: requestedModel,
+          imageModelCount: imageModelOptions.length,
+          hasImageGroup,
+        }),
+      );
+      return;
+    }
+    const imageValidation = validateManagedImageRequest({
+      model: modelInfo,
+      models: workspace?.models,
+      operation: taskReferences.length ? "edit" : "create",
+      size: taskSize,
+      referenceCount: taskReferences.length,
+    });
+    if (!imageValidation.valid) {
+      setError(
+        describeManagedImageValidation(imageValidation.code, model, text),
+      );
+      return;
+    }
+
+    const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
+      image502ThenSuccess: false,
+    }));
+    const useLocalImageFixture = e2eFixture.image502ThenSuccess === true;
+
     const id = `image-${Date.now()}`;
     const createdAt = new Date().toLocaleString(text.dateLocale);
-    const modelInfo = models.find(
-      (item) => item.name === model || item.id === model,
-    );
     const draft = {
       id,
       status: "queued",
@@ -11820,6 +16507,15 @@ function AndroidImageStudio() {
     abortRef.current = controller;
     updateTask(id, { status: "running", progress: 12 });
     startProgress(id);
+    const performanceTraceId = await startNativePerformanceTrace(
+      "image_generation",
+      {
+        operation: imageOperation === "images.edits" ? "edit" : "generate",
+        batch: taskCount,
+        references: Boolean(taskReferences.length),
+      },
+    ).catch(() => "");
+    let performanceOutcome = "success";
 
     // Project the local image batch into the mobile task history. This is
     // deliberately best-effort: the image gateway remains the source of
@@ -11880,7 +16576,6 @@ function AndroidImageStudio() {
         ? "/images/edits"
         : "/images/generations";
     const taskBackendBaseUrl = managed.backendBaseUrl;
-    const initialImageApiKey = managed.imageSession?.api_key || "";
     const basePayload: Record<string, any> = {
       model,
       prompt: promptText,
@@ -11893,10 +16588,7 @@ function AndroidImageStudio() {
     }
     if (taskReferences.length) basePayload.input_fidelity = "high";
 
-    function buildImageRequest(
-      requestIndex: number,
-      imageApiKey = initialImageApiKey,
-    ) {
+    function buildImageRequest(requestIndex: number, imageApiKey: string) {
       const payload: Record<string, any> = { ...basePayload, n: 1 };
       const headers: Record<string, string> = {
         Accept: "application/json",
@@ -11930,10 +16622,14 @@ function AndroidImageStudio() {
       let lastError: unknown = null;
       while (authAttempt <= 1) {
         const latestManaged = useManagedNextChatStore.getState();
-        const request = buildImageRequest(
-          requestIndex,
-          latestManaged.imageSession?.api_key || "",
+        const imageSession = selectManagedImageSessionForGroup(
+          { image: latestManaged.imageSession || undefined },
+          taskGroupId || 0,
         );
+        if (!imageSession) {
+          throw new Error(text.errors.switchGroupFailed);
+        }
+        const request = buildImageRequest(requestIndex, imageSession.api_key);
         try {
           const response = await managedGatewayRequestText(
             taskBackendBaseUrl,
@@ -11944,7 +16640,7 @@ function AndroidImageStudio() {
               body: request.body,
               signal: controller.signal,
             },
-            latestManaged.imageSession?.api_key || "",
+            imageSession.api_key,
             text,
           );
           if (
@@ -11976,13 +16672,29 @@ function AndroidImageStudio() {
     }));
     try {
       let activeManaged = useManagedNextChatStore.getState();
+      const activeImageSession = selectManagedImageSessionForGroup(
+        { image: activeManaged.imageSession || undefined },
+        taskGroupId || 0,
+      );
+      const activeImageGroupID =
+        activeImageSession?.group_id ??
+        currentImageGroupID(activeManaged.workspace);
       if (
         !useLocalImageFixture &&
         taskGroupId &&
-        currentGroupID(activeManaged.workspace) !== taskGroupId
+        (!activeImageSession || activeImageGroupID !== taskGroupId)
       ) {
         await managed.switchImageGroup(taskGroupId);
         activeManaged = useManagedNextChatStore.getState();
+      }
+      if (
+        !useLocalImageFixture &&
+        !selectManagedImageSessionForGroup(
+          { image: activeManaged.imageSession || undefined },
+          taskGroupId || 0,
+        )
+      ) {
+        throw new Error(text.errors.switchGroupFailed);
       }
       for (let requestIndex = 0; requestIndex < taskCount; requestIndex += 1) {
         if (controller.signal.aborted)
@@ -12188,6 +16900,7 @@ function AndroidImageStudio() {
       await managed.bootstrap({ silent: true }).catch(() => {});
     } catch (err) {
       const aborted = controller.signal.aborted;
+      performanceOutcome = aborted ? "cancelled" : "error";
       const message = aborted
         ? text.errors.requestCancelled
         : err instanceof ManagedTransportError
@@ -12223,6 +16936,10 @@ function AndroidImageStudio() {
       });
       if (abortRef.current === controller) setError(message);
     } finally {
+      void stopNativePerformanceTrace(
+        performanceTraceId,
+        performanceOutcome,
+      ).catch(() => undefined);
       if (platformTaskPollRef.current) {
         window.clearInterval(platformTaskPollRef.current);
         platformTaskPollRef.current = null;
@@ -12279,6 +16996,13 @@ function AndroidImageStudio() {
     }
     setImageActionTarget(null);
     setError("");
+  }
+
+  function reportImageTask(item: any) {
+    writeMobileReportDraft(buildImageReportDraft(item, text));
+    setImageActionTarget(null);
+    setPreview(null);
+    navigate(Path.AccountFeedback);
   }
 
   function retrySingleImage(item: any, index: number) {
@@ -12360,7 +17084,7 @@ function AndroidImageStudio() {
 
   function adaptPromptTemplate(template: ImagePromptTemplate) {
     const sizeOptionsForCurrentModel = imageSizeOptionsForModel(
-      selectedModel || modelValue(fallbackModel),
+      selectedImageModelInfo || selectedModel,
     );
     const preferredSize =
       template.params.size &&
@@ -12423,9 +17147,6 @@ function AndroidImageStudio() {
     await shareImages(images, shareTextValue);
   }
 
-  const selectedImageModelInfo = imageModelOptions.find(
-    (model) => modelValue(model) === selectedModel,
-  );
   const currentGroupValue = String(effectiveImageGroupId || "");
   const selectedSizeOption = sizeOptions.find((item) => item.id === size);
   const styleOptions = [
@@ -12474,7 +17195,7 @@ function AndroidImageStudio() {
   });
 
   return (
-    <AndroidAppShell active="image" text={text}>
+    <AndroidAppShell active="create" text={text}>
       <header className={styles["app-header"]}>
         <div>
           <span>{groupNameByID(workspace, effectiveImageGroupId, text)}</span>
@@ -12597,30 +17318,21 @@ function AndroidImageStudio() {
           <button
             aria-label="image-add-reference"
             onClick={() => fileRef.current?.click()}
+            disabled={!selectedReferenceLimit}
           >
             <UploadIcon />
             <span>{text.image.addReference}</span>
           </button>
         </div>
         {references.length > 0 &&
-          !imageModelSupportsReferences(
-            selectedModel,
-            imageModelOptions,
-            allowLegacyImageCapabilityFallback,
-          ) && (
+          !imageModelSupportsReferences(selectedModel, imageModelOptions) && (
             <div className={styles["reference-model-picker"]}>
               <strong>
                 {text.image.referenceModelUnsupported(selectedModel)}
               </strong>
               <div>
                 {imageModelOptions
-                  .filter((model) =>
-                    imageModelSupportsReferences(
-                      model,
-                      [],
-                      allowLegacyImageCapabilityFallback,
-                    ),
-                  )
+                  .filter((model) => imageModelSupportsReferences(model, []))
                   .map((model) => (
                     <button
                       key={modelValue(model)}
@@ -12689,7 +17401,9 @@ function AndroidImageStudio() {
           disabled={
             Boolean(activeTask) ||
             !prompt.trim() ||
-            !managed.session ||
+            !selectManagedImageSession({
+              image: managed.imageSession || undefined,
+            }) ||
             imageModelOptions.length === 0
           }
         >
@@ -12836,6 +17550,10 @@ function AndroidImageStudio() {
                     <DownloadIcon />
                     <span>{text.image.saveToAlbum}</span>
                   </button>
+                  <button onClick={() => reportImageTask(preview)}>
+                    <CloudFailIcon />
+                    <span>{text.account.aiContentReport}</span>
+                  </button>
                 </>
               )}
             </div>
@@ -12859,6 +17577,7 @@ function AndroidImageStudio() {
           retryTask(imageActionTarget);
           setImageActionTarget(null);
         }}
+        onReport={() => reportImageTask(imageActionTarget)}
         onDelete={() => {
           if (!imageActionTarget) return;
           void deleteImageTasks([String(imageActionTarget.id)]).then(
@@ -12876,7 +17595,7 @@ function AndroidImageStudio() {
           id: String(group.id),
           title: group.name,
           detail: text.modelCount(
-            group.models?.filter(isImageModel).length || 0,
+            imageModelsForGroup(workspace, group.id).length,
           ),
           active: String(group.id) === currentGroupValue,
         }))}
@@ -12892,12 +17611,7 @@ function AndroidImageStudio() {
         items={imageModelOptions
           .filter(
             (model) =>
-              !references.length ||
-              imageModelSupportsReferences(
-                model,
-                [],
-                allowLegacyImageCapabilityFallback,
-              ),
+              !references.length || imageModelSupportsReferences(model, []),
           )
           .map((model) => ({
             id: modelValue(model),
@@ -12915,6 +17629,9 @@ function AndroidImageStudio() {
         open={promptSheetOpen}
         text={text}
         currentModel={selectedModel}
+        accountId={activeAccountId}
+        backendBaseUrl={managed.backendBaseUrl}
+        accessToken={managed.accessToken}
         onClose={() => setPromptSheetOpen(false)}
         onApply={applyPromptTemplate}
         onAdapt={adaptPromptTemplate}
@@ -13080,7 +17797,16 @@ function AndroidGallery() {
     }
     setLocalMaterialsLoading(true);
     try {
-      setLocalMaterials(await listLocalMaterials(activeAccountId));
+      if (managed.accessToken && managed.backendBaseUrl) {
+        const synced = await syncLocalMaterials(
+          activeAccountId,
+          managed.backendBaseUrl,
+          managed.accessToken,
+        );
+        setLocalMaterials(synced.materials);
+      } else {
+        setLocalMaterials(await listLocalMaterials(activeAccountId));
+      }
       setError("");
     } catch {
       setError(text.platform.materialRefreshFailed);
@@ -13102,6 +17828,46 @@ function AndroidGallery() {
     try {
       const imported = await importLocalMaterials(activeAccountId, files);
       setLocalMaterials((items) => [...imported, ...items]);
+      // A local import remains available if the network fails, but an online
+      // import must also become a server-owned asset. Otherwise it cannot be
+      // selected by video jobs, synced to a second device, or removed remotely.
+      if (managed.accessToken && managed.backendBaseUrl) {
+        const uploadedAssets = await Promise.all(
+          files.map((file) => uploadMaterial(file, file.name, "upload")),
+        );
+        const synced = await syncLocalMaterials(
+          activeAccountId,
+          managed.backendBaseUrl,
+          managed.accessToken,
+        );
+        // Do not remove the device copy until every upload is visible in the
+        // authoritative sync response. A successful upload followed by a
+        // transient sync/ETag race must never turn into local data loss.
+        const uploadedIDs = uploadedAssets
+          .map((asset) => String(asset?.id || "").trim())
+          .filter(Boolean);
+        const syncedIDs = new Set(
+          synced.materials
+            .map((material) => String(material.remoteId || "").trim())
+            .filter(Boolean),
+        );
+        if (
+          uploadedIDs.length !== files.length ||
+          uploadedIDs.some((id) => !syncedIDs.has(id))
+        ) {
+          throw new Error(text.platform.materialRefreshFailed);
+        }
+        // The server copy is now cached under its remote ID. Remove only the
+        // temporary local import records to avoid showing duplicate material.
+        await deleteLocalMaterials(
+          activeAccountId,
+          imported.map((material) => material.id),
+        );
+        setLocalMaterials(await listLocalMaterials(activeAccountId));
+        if (!synced.materials.length && imported.length) {
+          throw new Error(text.platform.materialRefreshFailed);
+        }
+      }
       showNotice(text.platform.uploadReady);
     } catch {
       setError(text.platform.uploadFailedHint);
@@ -13114,6 +17880,12 @@ function AndroidGallery() {
   async function deleteLocalMaterial(material: LocalMaterial) {
     if (!window.confirm(text.platform.deleteAssetConfirm)) return;
     try {
+      if (material.remoteId) {
+        const client = await mobilePlatformClient();
+        await client.assets.delete(material.remoteId, {
+          headers: { "X-Request-ID": clientRequestID("mobile-asset-delete") },
+        });
+      }
       await deleteLocalMaterials(activeAccountId, [material.id]);
       setLocalMaterials((items) =>
         items.filter((item) => item.id !== material.id),
@@ -13380,7 +18152,7 @@ function AndroidGallery() {
   });
 
   return (
-    <AndroidAppShell active="gallery" text={text}>
+    <AndroidAppShell active="projects" text={text}>
       <header className={styles["app-header"]}>
         <div>
           <span>{text.image.referenceHint}</span>
@@ -13892,31 +18664,64 @@ function localizedSubscriptionStatus(status: string, text: ManagedMobileText) {
   const key = String(status || "")
     .trim()
     .toLowerCase();
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
-  const labels: Record<string, string> = zh
-    ? {
-        active: "生效中",
-        pending: "待生效",
-        queued: "待生效",
-        exhausted: "额度已用完",
-        expired: "已过期",
-        suspended: "已暂停",
-        revoked: "已撤销",
-        cancelled: "已取消",
-        canceled: "已取消",
-      }
-    : {
-        active: "Active",
-        pending: "Pending activation",
-        queued: "Queued",
-        exhausted: "Quota exhausted",
-        expired: "Expired",
-        suspended: "Suspended",
-        revoked: "Revoked",
-        cancelled: "Cancelled",
-        canceled: "Cancelled",
-      };
-  return labels[key] || (zh ? "状态未知" : "Status unavailable");
+  const labelsByLocale: Record<ManagedMobileLocale, Record<string, string>> = {
+    cn: {
+      active: "生效中",
+      pending: "待生效",
+      queued: "待生效",
+      exhausted: "额度已用完",
+      expired: "已过期",
+      suspended: "已暂停",
+      revoked: "已撤销",
+      cancelled: "已取消",
+      canceled: "已取消",
+    },
+    en: {
+      active: "Active",
+      pending: "Pending activation",
+      queued: "Queued",
+      exhausted: "Quota exhausted",
+      expired: "Expired",
+      suspended: "Suspended",
+      revoked: "Revoked",
+      cancelled: "Cancelled",
+      canceled: "Cancelled",
+    },
+    jp: {
+      active: "有効",
+      pending: "有効化待ち",
+      queued: "待機中",
+      exhausted: "枠を使い切りました",
+      expired: "期限切れ",
+      suspended: "一時停止",
+      revoked: "取り消し済み",
+      cancelled: "キャンセル済み",
+      canceled: "キャンセル済み",
+    },
+    ko: {
+      active: "활성",
+      pending: "활성 대기",
+      queued: "대기 중",
+      exhausted: "한도 소진",
+      expired: "만료됨",
+      suspended: "일시 중지",
+      revoked: "철회됨",
+      cancelled: "취소됨",
+      canceled: "취소됨",
+    },
+  };
+  const locale = mobileTextLocale(text);
+  const labels = labelsByLocale[locale] || labelsByLocale.en;
+  const fallback = localizedValue(
+    {
+      cn: "状态未知",
+      en: "Status unavailable",
+      jp: "状態不明",
+      ko: "상태 알 수 없음",
+    },
+    text,
+  );
+  return labels[key] || fallback;
 }
 
 function SubscriptionUsageRows(props: {
@@ -13972,8 +18777,31 @@ function paymentMethodsFromCheckout(checkout?: CheckoutInfo) {
     .filter((method) => method.available !== false);
 }
 
+function isWechatPaymentMethod(method: CheckoutMethod) {
+  const searchable = [
+    method.payment_type,
+    method.display_name,
+    method.display_name_zh,
+    method.display_name_en,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return /(^|[_\s-])wx(pay)?($|[_\s-])|wechat|weixin|微信/.test(searchable);
+}
+
+function directActualPaymentMethodsFromCheckout(checkout?: CheckoutInfo) {
+  return paymentMethodsFromCheckout(checkout).filter(
+    (method) => !isWechatPaymentMethod(method),
+  );
+}
+
+function hasWechatPaymentMethod(checkout?: CheckoutInfo) {
+  return paymentMethodsFromCheckout(checkout).some(isWechatPaymentMethod);
+}
+
 function mobileDisplayLocale(text: ManagedMobileText) {
-  return text.dateLocale.toLowerCase().startsWith("zh") ? "cn" : "en";
+  return mobileTextLocale(text);
 }
 
 function localizedApiField(
@@ -14003,6 +18831,244 @@ function planDisplayName(
   text: ManagedMobileText,
 ) {
   return localizedApiField(plan, text, ["product_name", "name"]);
+}
+
+type PlayBillingOrderType = "balance" | "subscription";
+
+type PlayBillingCandidate = {
+  productId: string;
+  productType: NativePlayBillingProductType;
+  title: string;
+  description?: string;
+  formattedPrice?: string;
+  amount?: number;
+  planId?: number | string;
+  orderType: PlayBillingOrderType;
+  offerToken?: string;
+};
+
+function asPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringField(
+  record: Record<string, unknown>,
+  fields: string[],
+): string {
+  for (const field of fields) {
+    const value = record[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value))
+      return String(value);
+  }
+  return "";
+}
+
+function numberField(
+  record: Record<string, unknown>,
+  fields: string[],
+): number | undefined {
+  for (const field of fields) {
+    const value = record[field];
+    const numberValue =
+      typeof value === "number"
+        ? value
+        : typeof value === "string"
+        ? Number.parseFloat(value)
+        : Number.NaN;
+    if (Number.isFinite(numberValue)) return numberValue;
+  }
+  return undefined;
+}
+
+function normalizePlayBillingProductType(
+  value: unknown,
+  fallback: NativePlayBillingProductType,
+): NativePlayBillingProductType {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (/^subs|subscription/.test(normalized)) return "subs";
+  if (/^inapp|one[-_\s]?time|consumable|managed/.test(normalized))
+    return "inapp";
+  return fallback;
+}
+
+function normalizePlayBillingOrderType(
+  value: unknown,
+  fallback: PlayBillingOrderType,
+): PlayBillingOrderType {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (/sub|plan|package|member|权益|套餐/.test(normalized))
+    return "subscription";
+  if (/balance|recharge|top[_-\s]?up|credit|wallet|充值|余额/.test(normalized))
+    return "balance";
+  return fallback;
+}
+
+function playBillingProductId(record: Record<string, unknown>) {
+  return stringField(record, [
+    "google_play_product_id",
+    "googlePlayProductId",
+    "play_billing_product_id",
+    "playBillingProductId",
+    "play_product_id",
+    "playProductId",
+    "android_product_id",
+    "androidProductId",
+    "product_id",
+    "sku",
+  ]);
+}
+
+function playBillingCandidateFromRecord(
+  rawRecord: unknown,
+  text: ManagedMobileText,
+  fallback: {
+    orderType: PlayBillingOrderType;
+    productType: NativePlayBillingProductType;
+  },
+): PlayBillingCandidate | null {
+  const record = asPlainRecord(rawRecord);
+  const productId = playBillingProductId(record);
+  if (!productId) return null;
+  const orderType = normalizePlayBillingOrderType(
+    record.order_type ?? record.orderType ?? record.kind ?? record.type,
+    fallback.orderType,
+  );
+  const productType = normalizePlayBillingProductType(
+    record.play_billing_product_type ??
+      record.google_play_product_type ??
+      record.android_product_type ??
+      record.billing_product_type ??
+      record.playBillingProductType ??
+      record.googlePlayProductType ??
+      record.androidProductType ??
+      record.billingProductType ??
+      record.product_type ??
+      record.productType,
+    fallback.productType,
+  );
+  const amount = numberField(record, [
+    "amount",
+    "price",
+    "pay_amount",
+    "value",
+    "balance",
+  ]);
+  const title =
+    localizedApiField(record, text, [
+      "title",
+      "name",
+      "display_name",
+      "product_name",
+    ]) ||
+    stringField(record, ["title", "name", "display_name", "product_name"]) ||
+    productId;
+  const formattedPrice =
+    stringField(record, [
+      "formatted_price",
+      "formattedPrice",
+      "price_text",
+      "display_price",
+    ]) || (amount !== undefined ? formatMoney(amount) : "");
+  return {
+    productId,
+    productType,
+    title,
+    description:
+      localizedApiField(record, text, ["description", "summary", "subtitle"]) ||
+      stringField(record, ["description", "summary", "subtitle"]),
+    formattedPrice,
+    amount,
+    planId: stringField(record, ["plan_id", "planId", "id"]),
+    orderType,
+    offerToken: stringField(record, [
+      "offer_token",
+      "offerToken",
+      "base_plan_offer_token",
+      "basePlanOfferToken",
+    ]),
+  };
+}
+
+function playBillingCandidateKey(candidate: PlayBillingCandidate) {
+  return [
+    candidate.orderType,
+    candidate.productType,
+    candidate.productId,
+    candidate.planId || "",
+  ].join(":");
+}
+
+function dedupePlayBillingCandidates(candidates: PlayBillingCandidate[]) {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = playBillingCandidateKey(candidate);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function playBillingCandidatesForOrder(
+  checkout: CheckoutInfo | undefined,
+  accountData: AccountData,
+  text: ManagedMobileText,
+  orderType: PlayBillingOrderType,
+) {
+  const records: PlayBillingCandidate[] = [];
+  const checkoutRecord = asPlainRecord(checkout);
+  const productFields = [
+    "play_billing_products",
+    "playBillingProducts",
+    "google_play_products",
+    "googlePlayProducts",
+    "android_products",
+    "androidProducts",
+    "recharge_play_billing_products",
+    "rechargePlayBillingProducts",
+    "balance_play_billing_products",
+    "balancePlayBillingProducts",
+    "subscription_play_billing_products",
+    "subscriptionPlayBillingProducts",
+  ];
+  productFields.forEach((field) => {
+    arrayPayload(checkoutRecord[field]).forEach((item: unknown) => {
+      const fallbackOrderType: PlayBillingOrderType =
+        /subscription|plan|package/i.test(field) ? "subscription" : "balance";
+      const candidate = playBillingCandidateFromRecord(item, text, {
+        orderType: fallbackOrderType,
+        productType: "inapp",
+      });
+      if (candidate) records.push(candidate);
+    });
+  });
+  const plans = [
+    ...arrayPayload(checkout?.plans),
+    ...arrayPayload(accountData.plans),
+  ];
+  plans.forEach((plan) => {
+    const candidate = playBillingCandidateFromRecord(plan, text, {
+      orderType: "subscription",
+      productType: "inapp",
+    });
+    if (candidate) {
+      records.push({
+        ...candidate,
+        title: planDisplayName(asPlainRecord(plan), text) || candidate.title,
+        orderType: "subscription",
+        productType: candidate.productType || "inapp",
+      });
+    }
+  });
+  return dedupePlayBillingCandidates(
+    records.filter((candidate) => candidate.orderType === orderType),
+  );
 }
 
 function planDescription(
@@ -14054,23 +19120,88 @@ function paymentMethodLabel(method: CheckoutMethod, text: ManagedMobileText) {
   );
   if (localizedName) return localizedName;
   const key = (method.payment_type || "").toLowerCase();
-  const zh = text.dateLocale.toLowerCase().startsWith("zh");
-  const labels: Record<string, string> = zh
-    ? {
-        alipay: "支付宝",
-        wxpay: "微信支付",
-        stripe: "银行卡",
-        airwallex: "国际支付",
-        easypay: "快捷支付",
-      }
-    : {
-        alipay: "Alipay",
-        wxpay: "WeChat Pay",
-        stripe: "Card",
-        airwallex: "Airwallex",
-        easypay: "EasyPay",
-      };
+  const labelsByLocale: Record<ManagedMobileLocale, Record<string, string>> = {
+    cn: {
+      alipay: "支付宝",
+      wxpay: "微信支付",
+      wxpay_direct: "微信支付",
+      stripe: "银行卡",
+      airwallex: "国际支付",
+      easypay: "快捷支付",
+      usdt: "USDT 支付",
+      usdt_trc20: "USDT TRC20",
+      "usdt.trc20": "USDT TRC20",
+      bepusdt: "USDT 支付",
+      epusdt: "USDT 支付",
+      ldc: "USDT 支付",
+      paynow: "PayNow",
+    },
+    en: {
+      alipay: "Alipay",
+      wxpay: "WeChat Pay",
+      wxpay_direct: "WeChat Pay",
+      stripe: "Card",
+      airwallex: "Airwallex",
+      easypay: "EasyPay",
+      usdt: "USDT",
+      usdt_trc20: "USDT TRC20",
+      "usdt.trc20": "USDT TRC20",
+      bepusdt: "USDT",
+      epusdt: "USDT",
+      ldc: "USDT",
+      paynow: "PayNow",
+    },
+    jp: {
+      alipay: "Alipay",
+      wxpay: "WeChat Pay",
+      wxpay_direct: "WeChat Pay",
+      stripe: "カード",
+      airwallex: "国際決済",
+      easypay: "EasyPay",
+      usdt: "USDT",
+      usdt_trc20: "USDT TRC20",
+      "usdt.trc20": "USDT TRC20",
+      bepusdt: "USDT",
+      epusdt: "USDT",
+      ldc: "USDT",
+      paynow: "PayNow",
+    },
+    ko: {
+      alipay: "Alipay",
+      wxpay: "WeChat Pay",
+      wxpay_direct: "WeChat Pay",
+      stripe: "카드",
+      airwallex: "국제 결제",
+      easypay: "EasyPay",
+      usdt: "USDT",
+      usdt_trc20: "USDT TRC20",
+      "usdt.trc20": "USDT TRC20",
+      bepusdt: "USDT",
+      epusdt: "USDT",
+      ldc: "USDT",
+      paynow: "PayNow",
+    },
+  };
+  const labels = labelsByLocale[mobileTextLocale(text)] || labelsByLocale.en;
   return labels[key] || method.payment_type || text.account.paymentMethod;
+}
+
+function DirectWechatReplacementPaymentButton(props: {
+  text: ManagedMobileText;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={styles["primary-payment-action"]}
+      data-distribution-commerce="direct-wechat-replaced-code-shop"
+      onClick={props.onOpen}
+    >
+      <strong>{props.text.account.directWechatReplacementTitle}</strong>
+      <small>{props.text.account.directWechatReplacementHint}</small>
+      <em>{props.text.account.directCodeShopAction}</em>
+    </button>
+  );
 }
 
 function isPendingOrderStatus(status?: string) {
@@ -14162,7 +19293,9 @@ function AndroidDetailShell(props: {
     <main className={clsx(styles["mobile-app"], styles["native-page"])}>
       <section className={styles["app-shell"]}>
         <div className={clsx(styles["app-scroll"], styles["detail-scroll"])}>
-          <header className={styles["app-header"]}>
+          <header
+            className={clsx(styles["app-header"], styles["detail-header"])}
+          >
             <IconButton
               label={props.text.common.back}
               onClick={() =>
@@ -14185,7 +19318,7 @@ function AndroidDetailShell(props: {
                 <ReloadIcon />
               </IconButton>
             ) : (
-              <span className={styles["header-spacer"]} />
+              <span className={styles["header-spacer"]} aria-hidden="true" />
             )}
           </header>
           {props.children}
@@ -14210,6 +19343,171 @@ function AccountMenuItem(props: {
       </span>
       <em>›</em>
     </button>
+  );
+}
+
+function ConfirmSheet(props: {
+  open: boolean;
+  title: string;
+  body: string;
+  cancelLabel: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  if (!props.open) return null;
+  return (
+    <div
+      className={styles["sheet-mask"]}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-sheet-title"
+      onClick={props.onClose}
+    >
+      <div
+        className={styles["confirm-dialog"]}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="confirm-sheet-title">{props.title}</h2>
+        <p>{props.body}</p>
+        <div className={styles["dialog-actions"]}>
+          <button onClick={props.onClose}>{props.cancelLabel}</button>
+          <button
+            className={clsx({ [styles["danger-inline"]]: props.danger })}
+            onClick={props.onConfirm}
+          >
+            {props.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AndroidSystemSettings() {
+  const text = useMobileText();
+  const navigate = useNavigate();
+  const installedRelease = useInstalledAndroidReleaseVersion();
+  const currentVersion = formatAndroidReleaseVersion(
+    installedRelease,
+    text.account.unknownVersion,
+  );
+
+  return (
+    <AndroidDetailShell
+      title={text.account.systemSettings}
+      subtitle={text.account.systemSettingsHint}
+      text={text}
+      fallback={Path.Settings}
+    >
+      <section className={styles["account-menu-group"]}>
+        <div className={styles["account-menu-list"]}>
+          <AccountMenuItem
+            icon={<PaletteIcon />}
+            title={text.account.appearance}
+            detail={text.account.appearanceModes}
+            onClick={() => navigate(Path.AccountAppearance)}
+          />
+          <AccountMenuItem
+            icon={<PromptIcon />}
+            title={text.account.appLanguage}
+            detail={text.account.languageSystem}
+            onClick={() => navigate(Path.AccountLanguage)}
+          />
+          <AccountMenuItem
+            icon={<DiscoveryIcon />}
+            title={text.account.webOpenMode}
+            detail={text.account.webOpenInApp}
+            onClick={() => navigate(Path.AccountWebOpenMode)}
+          />
+          <AccountMenuItem
+            icon={<EyeIcon />}
+            title={text.account.permissions}
+            detail={text.account.permissionDetail}
+            onClick={() => navigate(Path.AccountPermissions)}
+          />
+          <AccountMenuItem
+            icon={<DownloadIcon />}
+            title={text.account.version}
+            detail={`${text.account.currentVersion} ${currentVersion}`}
+            onClick={() => navigate(Path.AccountUpdate)}
+          />
+          <AccountMenuItem
+            icon={<ChatIcon />}
+            title={text.account.feedback}
+            detail={text.account.feedbackProgress}
+            onClick={() => navigate(Path.AccountFeedback)}
+          />
+        </div>
+      </section>
+    </AndroidDetailShell>
+  );
+}
+
+function AndroidAppearanceSettings() {
+  const text = useMobileText();
+  return (
+    <AndroidDetailShell
+      title={text.account.appearance}
+      subtitle={text.account.appearanceModes}
+      text={text}
+      fallback={Path.AccountSystemSettings}
+    >
+      <section className={styles["section"]}>
+        <ThemeSwitch text={text} />
+      </section>
+    </AndroidDetailShell>
+  );
+}
+
+function AndroidLanguageSettings() {
+  const text = useMobileText();
+  return (
+    <AndroidDetailShell
+      title={text.account.appLanguage}
+      subtitle={text.account.languageSystem}
+      text={text}
+      fallback={Path.AccountSystemSettings}
+    >
+      <section className={styles["section"]}>
+        <MobileLanguageSettings text={text} />
+      </section>
+    </AndroidDetailShell>
+  );
+}
+
+function AndroidWebOpenModeSettings() {
+  const text = useMobileText();
+  const [webOpenMode, setWebOpenMode] = useState<WebOpenMode>(() =>
+    readWebOpenMode(),
+  );
+  return (
+    <AndroidDetailShell
+      title={text.account.webOpenMode}
+      subtitle={text.account.systemSettings}
+      text={text}
+      fallback={Path.AccountSystemSettings}
+    >
+      <section className={styles["section"]}>
+        <div className={styles["web-open-mode"]}>
+          {(["in_app", "external"] as WebOpenMode[]).map((mode) => (
+            <button
+              key={mode}
+              className={clsx({ [styles["active"]]: webOpenMode === mode })}
+              onClick={() => {
+                setWebOpenMode(mode);
+                writeWebOpenMode(mode);
+              }}
+            >
+              {mode === "in_app"
+                ? text.account.webOpenInApp
+                : text.account.webOpenExternal}
+            </button>
+          ))}
+        </div>
+      </section>
+    </AndroidDetailShell>
   );
 }
 
@@ -14355,6 +19653,85 @@ function AccountDataNotice(props: {
   );
 }
 
+function AndroidPlayBillingPanel(props: {
+  text: ManagedMobileText;
+  candidates: PlayBillingCandidate[];
+  products: Record<string, NativePlayBillingProduct>;
+  loading: boolean;
+  busyProductId: string;
+  error: string;
+  message: string;
+  onBuy: (candidate: PlayBillingCandidate) => void;
+  onRedeem: () => void;
+}) {
+  return (
+    <section
+      className={styles["section"]}
+      data-distribution-commerce="play-billing"
+    >
+      <div className={styles["section-head"]}>
+        <h2>{props.text.account.playBillingTitle}</h2>
+        <span>
+          {props.loading
+            ? props.text.loading
+            : props.text.shortCount(props.candidates.length)}
+        </span>
+      </div>
+      <p className={styles["empty-copy"]}>
+        {props.text.account.playBillingHint}
+      </p>
+      {!props.candidates.length && (
+        <div className={styles["form-error"]}>
+          {props.text.account.playBillingNoProducts}
+        </div>
+      )}
+      {props.error && <div className={styles["form-error"]}>{props.error}</div>}
+      {props.message && (
+        <div className={styles["form-success"]}>{props.message}</div>
+      )}
+      <div className={styles["payment-method-list"]}>
+        {props.candidates.map((candidate) => {
+          const product = props.products[candidate.productId];
+          const title = product?.title || candidate.title;
+          const description =
+            product?.description ||
+            candidate.description ||
+            candidate.productId;
+          const price =
+            product?.formattedPrice ||
+            candidate.formattedPrice ||
+            (candidate.amount !== undefined
+              ? formatMoney(candidate.amount)
+              : props.text.account.playBillingPricePending);
+          const busy = props.busyProductId === candidate.productId;
+          return (
+            <button
+              key={playBillingCandidateKey(candidate)}
+              type="button"
+              className={styles["primary-payment-action"]}
+              onClick={() => props.onBuy(candidate)}
+              disabled={busy || props.loading}
+            >
+              <strong>{title}</strong>
+              <small>
+                {price} · {description}
+              </small>
+              <em>
+                {busy
+                  ? props.text.account.playBillingBuying
+                  : props.text.account.playBillingBuy}
+              </em>
+            </button>
+          );
+        })}
+      </div>
+      <button className={styles["wide-soft-action"]} onClick={props.onRedeem}>
+        {props.text.account.openRedeemCenter}
+      </button>
+    </section>
+  );
+}
+
 function AndroidAccountSettings() {
   const managed = useManagedNextChatStore();
   const mobileStore = useManagedMobileAppStore();
@@ -14387,6 +19764,13 @@ function AndroidAccountSettings() {
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [redeemMessage, setRedeemMessage] = useState("");
   const [redeemError, setRedeemError] = useState("");
+  const [playBillingProducts, setPlayBillingProducts] = useState<
+    Record<string, NativePlayBillingProduct>
+  >({});
+  const [playBillingLoading, setPlayBillingLoading] = useState(false);
+  const [playBillingBusyProductId, setPlayBillingBusyProductId] = useState("");
+  const [playBillingMessage, setPlayBillingMessage] = useState("");
+  const [playBillingError, setPlayBillingError] = useState("");
   const [createdOrder, setCreatedOrder] =
     useState<PaymentOrderCreateResult | null>(() => readPendingPaymentOrder());
   const paymentVerifyInFlightRef = useRef(false);
@@ -14408,17 +19792,73 @@ function AndroidAccountSettings() {
   const [cameraGranted, setCameraGranted] = useState(false);
   const [microphoneGranted, setMicrophoneGranted] = useState(false);
   const [notificationGranted, setNotificationGranted] = useState(false);
+  const [pushInbox, setPushInbox] = useState<NativePushInboxItem[]>([]);
+  const [pushInboxLoading, setPushInboxLoading] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [feedbackTitle, setFeedbackTitle] = useState("");
+  const feedbackDraft = useRef(
+    readStoredJSON<{
+      title: string;
+      category: MobileFeedbackCategory;
+      content: string;
+    }>(FEEDBACK_DRAFT_STORAGE_KEY, {
+      title: "",
+      category: "bug",
+      content: "",
+    }),
+  );
+  const [feedbackTitle, setFeedbackTitle] = useState(
+    feedbackDraft.current.title,
+  );
   const [feedbackCategory, setFeedbackCategory] =
-    useState<MobileFeedbackCategory>("bug");
-  const [feedbackContent, setFeedbackContent] = useState("");
+    useState<MobileFeedbackCategory>(
+      MOBILE_FEEDBACK_CATEGORIES.includes(feedbackDraft.current.category)
+        ? feedbackDraft.current.category
+        : "bug",
+    );
+  const [feedbackContent, setFeedbackContent] = useState(
+    feedbackDraft.current.content,
+  );
   const [feedbackScreenshots, setFeedbackScreenshots] = useState<
     MobileFeedbackScreenshotDraft[]
   >([]);
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState("");
   const [feedbackError, setFeedbackError] = useState("");
+
+  useEffect(() => {
+    writeStoredJSON(FEEDBACK_DRAFT_STORAGE_KEY, {
+      title: feedbackTitle,
+      category: feedbackCategory,
+      content: feedbackContent,
+    });
+  }, [feedbackCategory, feedbackContent, feedbackTitle]);
+  const [webOpenMode, setWebOpenMode] = useState<WebOpenMode>(() =>
+    readWebOpenMode(),
+  );
+  const [profile, setProfile] = useState<MobileUserProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileMessage, setProfileMessage] = useState("");
+  const [profileError, setProfileError] = useState("");
+  const [profileUsername, setProfileUsername] = useState("");
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [confirmResetPassword, setConfirmResetPassword] = useState("");
+  const [totpStatus, setTotpStatus] = useState<MobileTotpStatus | null>(null);
+  const [totpSetup, setTotpSetup] = useState<MobileTotpSetup | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [accountDeletionReason, setAccountDeletionReason] = useState("");
+  const [accountDeletionVerifyCode, setAccountDeletionVerifyCode] =
+    useState("");
+  const [accountDeletionConfirm, setAccountDeletionConfirm] = useState("");
+  const [accountDeletionBusy, setAccountDeletionBusy] = useState(false);
+  const [accountDeletionMessage, setAccountDeletionMessage] = useState("");
+  const [accountDeletionError, setAccountDeletionError] = useState("");
   const [inviteSummary, setInviteSummary] = useState<{
     aff_code: string;
     campaign_id?: string;
@@ -14427,8 +19867,6 @@ function AndroidAccountSettings() {
   } | null>(null);
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteShareBusy, setInviteShareBusy] = useState(false);
-  const [appShareBusy, setAppShareBusy] = useState(false);
-  const [appShareMessage, setAppShareMessage] = useState("");
   const [inviteMessage, setInviteMessage] = useState("");
   const [inviteCampaign, setInviteCampaign] =
     useState<InviteCampaignProgress | null>(null);
@@ -14498,6 +19936,8 @@ function AndroidAccountSettings() {
         );
       }
       await clearLocalMaterials(activeAccountId).catch(() => undefined);
+      await clearLocalPromptCatalogs(activeAccountId).catch(() => undefined);
+      await clearLocalVideos(activeAccountId).catch(() => undefined);
       clearAccountScopedLocalStorage(activeAccountId);
       mobileStore.clearActiveAccount();
       sdStore.clearActiveAccount();
@@ -14514,6 +19954,10 @@ function AndroidAccountSettings() {
   );
   const selectedTransactionID = useMemo(
     () => new URLSearchParams(location.search).get("tx") || "",
+    [location.search],
+  );
+  const selectedSupportTicketID = useMemo(
+    () => new URLSearchParams(location.search).get("ticket") || "",
     [location.search],
   );
 
@@ -14536,13 +19980,81 @@ function AndroidAccountSettings() {
     updateState.manifest,
   );
   const hasUpdate = updateDecision.hasUpdate;
-  const notes = manifestNotes(updateState.manifest);
+  const playDistribution = isPlayDistribution(installedRelease);
+  const notes = manifestNotes(updateState.manifest, text);
   const supportLines = extractSupportLines(workspace?.support_contact);
-  const paymentMethods = paymentMethodsFromCheckout(checkoutInfo);
+  const paymentMethods = playDistribution
+    ? []
+    : directActualPaymentMethodsFromCheckout(checkoutInfo);
+  const directRedeemShopUrl = playDistribution
+    ? ""
+    : String(clientConfig?.androidDirectRedeemShopUrl || "").trim();
+  const replacedWechatPaymentAvailable =
+    !playDistribution &&
+    !!directRedeemShopUrl &&
+    hasWechatPaymentMethod(checkoutInfo);
+  const visiblePaymentOptionCount =
+    paymentMethods.length + (replacedWechatPaymentAvailable ? 1 : 0);
+  const route = location.pathname;
+  const legacySystemRoute = (
+    {
+      "/account/permissions": Path.AccountPermissions,
+      "/account/update": Path.AccountUpdate,
+      "/account/feedback": Path.AccountFeedback,
+      "/account/support": Path.AccountFeedback,
+    } as Record<string, Path>
+  )[route];
+  useEffect(() => {
+    if (legacySystemRoute) {
+      navigate(legacySystemRoute, { replace: true });
+    }
+  }, [legacySystemRoute, navigate]);
+  const playRechargeCandidates = useMemo(
+    () =>
+      playBillingCandidatesForOrder(checkoutInfo, accountData, text, "balance"),
+    [checkoutInfo, accountData, text],
+  );
+  const playPlanCandidates = useMemo(
+    () =>
+      playBillingCandidatesForOrder(
+        checkoutInfo,
+        accountData,
+        text,
+        "subscription",
+      ),
+    [checkoutInfo, accountData, text],
+  );
+  const activePlayBillingCandidates = useMemo(() => {
+    if (route === Path.AccountRecharge) return playRechargeCandidates;
+    if (route === Path.AccountPlans) return playPlanCandidates;
+    return [] as PlayBillingCandidate[];
+  }, [playPlanCandidates, playRechargeCandidates, route]);
+  const playBillingProductQueryKey = activePlayBillingCandidates
+    .map((candidate) => `${candidate.productType}:${candidate.productId}`)
+    .sort()
+    .join("|");
   const accountGroupID = storedChatGroupID(workspace);
   const accountGroupName = stableChatGroupName(workspace, text);
-  const route = location.pathname;
   const isAdmin = isMobileAdminAvailable(managed.mobileProtocol);
+  const unreadPushCount = pushInbox.filter((item) => !item.read).length;
+  const refreshPushInbox = useCallback(async () => {
+    setPushInboxLoading(true);
+    try {
+      setPushInbox(await getNativePushInbox());
+    } finally {
+      setPushInboxLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (route !== Path.AccountFeedbackNew) return;
+    const draft = readMobileReportDraft();
+    if (!draft) return;
+    setFeedbackCategory("ai_content_report");
+    setFeedbackTitle(draft.title);
+    setFeedbackContent(draft.content);
+    setFeedbackError("");
+    setFeedbackMessage("");
+  }, [route]);
   const adminClient = useMemo(
     () => ({
       baseUrl: managed.backendBaseUrl,
@@ -15143,7 +20655,11 @@ function AndroidAccountSettings() {
           eventId: getStableInviteEventId(`share-opened:${shareScope}`),
           attributionToken: inviteSummary?.attribution_token,
           metadata: {
-            surface: "account_invite",
+            surface: inviteSummary?.attribution_token
+              ? "account_invite_campaign"
+              : "account_invite_referral",
+            aff_code: inviteSummary?.aff_code || "",
+            campaign_id: inviteSummary?.campaign_id || "",
             poster_theme: invitePosterTheme,
           },
         },
@@ -15163,7 +20679,11 @@ function AndroidAccountSettings() {
           eventId: getStableInviteEventId(`share-completed:${shareScope}`),
           attributionToken: inviteSummary?.attribution_token,
           metadata: {
-            surface: "account_invite",
+            surface: inviteSummary?.attribution_token
+              ? "account_invite_campaign"
+              : "account_invite_referral",
+            aff_code: inviteSummary?.aff_code || "",
+            campaign_id: inviteSummary?.campaign_id || "",
             poster_theme: invitePosterTheme,
           },
         },
@@ -15180,7 +20700,13 @@ function AndroidAccountSettings() {
           {
             eventId: getStableInviteEventId(`share-opened:${shareScope}`),
             attributionToken: inviteSummary?.attribution_token,
-            metadata: { surface: "account_invite_text_fallback" },
+            metadata: {
+              surface: inviteSummary?.attribution_token
+                ? "account_invite_campaign_text_fallback"
+                : "account_invite_referral_text_fallback",
+              aff_code: inviteSummary?.aff_code || "",
+              campaign_id: inviteSummary?.campaign_id || "",
+            },
           },
         ).catch(() => undefined);
         await shareText(poster.shareText, text.account.inviteGrowth);
@@ -15194,7 +20720,11 @@ function AndroidAccountSettings() {
             eventId: getStableInviteEventId(`share-completed:${shareScope}`),
             attributionToken: inviteSummary?.attribution_token,
             metadata: {
-              surface: "account_invite_text_fallback",
+              surface: inviteSummary?.attribution_token
+                ? "account_invite_campaign_text_fallback"
+                : "account_invite_referral_text_fallback",
+              aff_code: inviteSummary?.aff_code || "",
+              campaign_id: inviteSummary?.campaign_id || "",
               poster_theme: invitePosterTheme,
             },
           },
@@ -15218,41 +20748,6 @@ function AndroidAccountSettings() {
     }
   }
 
-  async function shareAppPoster() {
-    if (appShareBusy) return;
-    setAppShareBusy(true);
-    setAppShareMessage("");
-    const appUrl = resolveWebUrl("/download/android", clientConfig);
-    const registerUrl = resolveWebUrl("/register", clientConfig);
-    const poster = buildInvitePosterPayload({
-      registerUrl,
-      appUrl,
-      headline: text.account.appShareTitle,
-      body: text.account.appShareBody,
-      locale: text.dateLocale,
-      theme: invitePosterTheme,
-      mode: "app",
-    });
-    try {
-      const dataUrl = await createInvitePosterDataUrl(poster);
-      await shareImage(
-        dataUrl,
-        `jisudeng-app-${Date.now()}.png`,
-        `${text.account.appShareTitle}\n${appUrl}`,
-      );
-      setAppShareMessage(text.account.appShareReady);
-    } catch {
-      try {
-        await shareText(poster.shareText, text.account.appShare);
-        setAppShareMessage(text.account.appShareReady);
-      } catch {
-        setAppShareMessage(text.account.appShareUnavailable);
-      }
-    } finally {
-      setAppShareBusy(false);
-    }
-  }
-
   async function refreshSupportTickets() {
     if (!managed.accessToken) return;
     setSupportBusy(true);
@@ -15264,8 +20759,12 @@ function AndroidAccountSettings() {
       });
       setSupportTickets(page.items || []);
       setSupportError("");
-      if (supportTicket) {
-        setSupportTicket(await client.support.tickets.detail(supportTicket.id));
+      const detailID =
+        route === Path.AccountFeedbackDetail ? selectedSupportTicketID : "";
+      if (detailID) {
+        setSupportTicket(await client.support.tickets.detail(detailID));
+      } else {
+        setSupportTicket(null);
       }
     } catch (error) {
       setSupportError(
@@ -15279,20 +20778,9 @@ function AndroidAccountSettings() {
   }
 
   async function openSupportTicket(ticket: MobileSupportTicket) {
-    setSupportBusy(true);
-    try {
-      const client = await mobilePlatformClient();
-      setSupportTicket(await client.support.tickets.detail(ticket.id));
-      setSupportError("");
-    } catch (error) {
-      setSupportError(
-        error instanceof Error && error.message
-          ? localizeManagedMobileError({ message: error.message })
-          : text.platform.supportTicketRefreshFailed,
-      );
-    } finally {
-      setSupportBusy(false);
-    }
+    navigate(
+      `${Path.AccountFeedbackDetail}?ticket=${encodeURIComponent(ticket.id)}`,
+    );
   }
 
   async function replySupportTicket() {
@@ -15341,6 +20829,377 @@ function AndroidAccountSettings() {
       );
     } finally {
       setSupportBusy(false);
+    }
+  }
+
+  async function refreshProfile() {
+    if (!managed.accessToken) return;
+    setProfileLoading(true);
+    setProfileError("");
+    try {
+      const [profileResult, totpResult] = await Promise.all([
+        managedAuthenticatedJsonRequest<MobileUserProfile>(
+          "/api/v1/user/profile",
+        ),
+        managedAuthenticatedJsonRequest<MobileTotpStatus>(
+          "/api/v1/user/totp/status",
+        ),
+      ]);
+      const nextProfile = profileResult || {};
+      setProfile(nextProfile);
+      setProfileUsername(
+        nextProfile.username || workspace?.user?.username || "",
+      );
+      setProfileAvatarUrl(
+        nextProfile.avatar_url || workspace?.user?.avatar_url || "",
+      );
+      setResetEmail(nextProfile.email || workspace?.user?.email || "");
+      setTotpStatus(totpResult || {});
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.syncFailed),
+      );
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  async function saveProfile() {
+    if (profileBusy) return;
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      const result = await managedAuthenticatedJsonRequest<MobileUserProfile>(
+        "/api/v1/user",
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            username: profileUsername.trim(),
+            avatar_url: profileAvatarUrl.trim() || null,
+          }),
+        },
+      );
+      setProfile(
+        result || {
+          ...profile,
+          username: profileUsername.trim(),
+          avatar_url: profileAvatarUrl.trim() || null,
+        },
+      );
+      setProfileMessage(text.account.profileSaved);
+      await managed.bootstrap({ silent: true }).catch(() => undefined);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function changePassword() {
+    if (profileBusy) return;
+    if (!currentPassword || newPassword.length < 6) {
+      setProfileError(text.account.passwordChangeRequired);
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setProfileError(text.login.passwordMismatch);
+      return;
+    }
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      await managedAuthenticatedJsonRequest("/api/v1/user/password", {
+        method: "PUT",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setProfileMessage(text.account.passwordChanged);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function sendProfileResetCode() {
+    if (profileBusy || !resetEmail.trim()) return;
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      await managedAuthenticatedJsonRequest(
+        "/api/v1/auth/mobile/forgot-password",
+        {
+          method: "POST",
+          body: JSON.stringify({ email: resetEmail.trim() }),
+        },
+      );
+      setProfileMessage(text.account.resetCodeSent);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.networkFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function resetProfilePassword() {
+    if (profileBusy) return;
+    if (!resetEmail.trim() || !resetCode.trim() || resetPassword.length < 6) {
+      setProfileError(text.account.resetPasswordRequired);
+      return;
+    }
+    if (resetPassword !== confirmResetPassword) {
+      setProfileError(text.login.passwordMismatch);
+      return;
+    }
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      await managedAuthenticatedJsonRequest(
+        "/api/v1/auth/mobile/reset-password",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email: resetEmail.trim(),
+            verify_code: resetCode.trim(),
+            new_password: resetPassword,
+          }),
+        },
+      );
+      setResetCode("");
+      setResetPassword("");
+      setConfirmResetPassword("");
+      setProfileMessage(text.account.resetPasswordDone);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function startTotpSetup() {
+    if (profileBusy) return;
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      const setup = await managedAuthenticatedJsonRequest<MobileTotpSetup>(
+        "/api/v1/user/totp/setup",
+        { method: "POST" },
+      );
+      setTotpSetup(setup || null);
+      setProfileMessage(text.account.totpSetupStarted);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function sendTotpEmailCode() {
+    if (profileBusy) return;
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      await managedAuthenticatedJsonRequest("/api/v1/user/totp/send-code", {
+        method: "POST",
+      });
+      setProfileMessage(text.account.totpCodeSent);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function enableTotp() {
+    if (profileBusy || !totpCode.trim()) return;
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      await managedAuthenticatedJsonRequest("/api/v1/user/totp/enable", {
+        method: "POST",
+        body: JSON.stringify({
+          code: totpCode.trim(),
+          totp_code: totpCode.trim(),
+          setup_token: totpSetup?.setup_token,
+        }),
+      });
+      setTotpCode("");
+      setTotpSetup(null);
+      setTotpStatus({ ...(totpStatus || {}), enabled: true });
+      setProfileMessage(text.account.totpEnabled);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function disableTotp() {
+    if (profileBusy || !totpCode.trim()) return;
+    setProfileBusy(true);
+    setProfileMessage("");
+    setProfileError("");
+    try {
+      await managedAuthenticatedJsonRequest("/api/v1/user/totp/disable", {
+        method: "POST",
+        body: JSON.stringify({
+          code: totpCode.trim(),
+          totp_code: totpCode.trim(),
+        }),
+      });
+      setTotpCode("");
+      setTotpStatus({ ...(totpStatus || {}), enabled: false });
+      setProfileMessage(text.account.totpDisabled);
+    } catch (error) {
+      setProfileError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function sendAccountDeletionCode() {
+    if (accountDeletionBusy) return;
+    const email = profile?.email || workspace?.user?.email || resetEmail;
+    setAccountDeletionBusy(true);
+    setAccountDeletionMessage("");
+    setAccountDeletionError("");
+    try {
+      try {
+        await managedAuthenticatedJsonRequest("/api/v1/user/totp/send-code", {
+          method: "POST",
+        });
+      } catch (error) {
+        if (
+          !(
+            error instanceof ManagedApiError &&
+            [404, 405, 501].includes(error.status || 0) &&
+            email
+          )
+        ) {
+          throw error;
+        }
+        await managedAuthenticatedJsonRequest(
+          "/api/v1/auth/mobile/forgot-password",
+          {
+            method: "POST",
+            body: JSON.stringify({ email }),
+          },
+        );
+      }
+      setAccountDeletionMessage(text.account.accountDeletionCodeSent);
+    } catch (error) {
+      setAccountDeletionError(
+        localizedMobileErrorMessage(error, text.errors.networkFailed),
+      );
+    } finally {
+      setAccountDeletionBusy(false);
+    }
+  }
+
+  async function submitAccountDeletionRequest() {
+    if (!managed.accessToken) {
+      setAccountDeletionError(text.errors.loginRequired);
+      return;
+    }
+    if (
+      accountDeletionReason.trim().length < 5 ||
+      !accountDeletionVerifyCode.trim() ||
+      accountDeletionConfirm.trim().toUpperCase() !== "DELETE"
+    ) {
+      setAccountDeletionError(text.account.accountDeletionRequired);
+      return;
+    }
+    setAccountDeletionBusy(true);
+    setAccountDeletionMessage("");
+    setAccountDeletionError("");
+    try {
+      const deviceInfo = (await getNativeDeviceInfo().catch(
+        () => ({}),
+      )) as Record<string, any>;
+      const userId =
+        profile?.id || workspace?.user?.id || managed.user?.id || "";
+      const email = profile?.email || workspace?.user?.email || "";
+      const balance = formatMoney(workspace?.user?.balance);
+      const content = [
+        "account_deletion_request",
+        `user_id: ${userId || "-"}`,
+        `email: ${email || "-"}`,
+        `balance: ${balance}`,
+        `app_version: ${installedRelease.name}`,
+        `verification_code: ${accountDeletionVerifyCode.trim()}`,
+        `confirmation: ${accountDeletionConfirm.trim()}`,
+        `reason: ${accountDeletionReason.trim()}`,
+        text.account.accountDeletionTicketBody,
+      ].join("\n");
+      const form = new FormData();
+      form.append("title", text.account.accountDeletionTicketTitle);
+      form.append("category", "account_deletion_request");
+      form.append("content", content);
+      form.append("app_version", installedRelease.name);
+      form.append("platform", "android");
+      form.append("installation_id", getInviteInstallationId());
+      form.append("channel", "official_android");
+      form.append("backend_url", managed.backendBaseUrl);
+      form.append(
+        "device_model",
+        [deviceInfo.manufacturer, deviceInfo.model].filter(Boolean).join(" "),
+      );
+      form.append("android_version", String(deviceInfo.androidVersion || ""));
+      form.append("system_version", String(deviceInfo.sdkInt || ""));
+      form.append(
+        "device_info",
+        JSON.stringify({
+          ...deviceInfo,
+          userAgent: navigator.userAgent,
+          language: navigator.language,
+          screen: `${window.screen.width}x${window.screen.height}`,
+        }),
+      );
+      const result = await submitFeedbackForm(form, "account-deletion");
+      setAccountDeletionMessage(
+        result?.ticket_id || result?.id
+          ? `${text.account.accountDeletionSubmitted} · #${
+              result.ticket_id || result.id
+            }`
+          : text.account.accountDeletionSubmitted,
+      );
+      setAccountDeletionReason("");
+      setAccountDeletionVerifyCode("");
+      setAccountDeletionConfirm("");
+    } catch (error) {
+      setAccountDeletionError(
+        localizedMobileErrorMessage(error, text.errors.saveFailed),
+      );
+    } finally {
+      setAccountDeletionBusy(false);
     }
   }
 
@@ -15530,7 +21389,11 @@ function AndroidAccountSettings() {
 
   function applyCheckoutInfo(info: CheckoutInfo) {
     setCheckoutInfo(info);
-    const methods = paymentMethodsFromCheckout(info);
+    if (playDistribution) {
+      setPaymentMethod("");
+      return;
+    }
+    const methods = directActualPaymentMethodsFromCheckout(info);
     const firstMethod = methods[0]?.payment_type || "";
     setPaymentMethod((value) =>
       methods.some((method) => method.payment_type === value)
@@ -15582,6 +21445,12 @@ function AndroidAccountSettings() {
     orderType: "balance" | "subscription",
     plan?: any,
   ) {
+    if (playDistribution) {
+      setSelectedCouponID(null);
+      setCouponQuote(null);
+      setCouponError(text.account.playCommerceUnavailable);
+      return;
+    }
     setSelectedCouponID(couponID);
     setCouponQuote(null);
     setCouponError("");
@@ -15617,13 +21486,16 @@ function AndroidAccountSettings() {
   }
 
   async function ensurePaymentMethod() {
+    if (playDistribution) {
+      throw new Error(text.account.playCommerceUnavailable);
+    }
     let methods = paymentMethods;
     if (!methods.length) {
       setCheckoutLoading(true);
       try {
         const info = await loadCheckoutInfo();
         applyCheckoutInfo(info);
-        methods = paymentMethodsFromCheckout(info);
+        methods = directActualPaymentMethodsFromCheckout(info);
       } finally {
         setCheckoutLoading(false);
       }
@@ -15636,6 +21508,15 @@ function AndroidAccountSettings() {
   }
 
   async function checkUpdate() {
+    if (playDistribution) {
+      setUpdateState((state) => ({
+        ...state,
+        loading: false,
+        checked: true,
+        error: "",
+      }));
+      return;
+    }
     const manifestUrl = getAndroidManifestUrl(clientConfig);
     if (!manifestUrl) {
       setUpdateState({
@@ -15851,6 +21732,41 @@ function AndroidAccountSettings() {
     setFeedbackScreenshots((items) => items.filter((item) => item.id !== id));
   }
 
+  async function submitFeedbackForm(
+    form: FormData,
+    requestPrefix = "feedback",
+  ) {
+    // Reuse the same keys when the canonical support route falls back to
+    // its legacy compatibility route. Native transport retries are then
+    // traceable and the backend can deduplicate the approved submission.
+    const feedbackRequestId = clientRequestID(requestPrefix);
+    const feedbackRequestOptions = {
+      requestId: feedbackRequestId,
+      idempotencyKey: feedbackRequestId,
+    };
+    try {
+      return await managedFormDataRequest<any>(
+        "/api/v1/mobile/support/tickets",
+        form,
+        text,
+        feedbackRequestOptions,
+      );
+    } catch (error) {
+      if (
+        error instanceof ManagedApiError &&
+        [404, 405, 501].includes(error.status || 0)
+      ) {
+        return managedFormDataRequest<any>(
+          "/api/v1/play/mobile-feedback",
+          form,
+          text,
+          feedbackRequestOptions,
+        );
+      }
+      throw error;
+    }
+  }
+
   async function submitFeedback() {
     if (!managed.accessToken) {
       setFeedbackError(text.errors.loginRequired);
@@ -15920,37 +21836,7 @@ function AndroidAccountSettings() {
           shot.fileName || `feedback-${index + 1}.png`,
         );
       });
-      let result: any;
-      // Reuse the same keys when the canonical support route falls back to
-      // its legacy compatibility route. Native transport retries are then
-      // traceable and the backend can deduplicate the approved submission.
-      const feedbackRequestId = clientRequestID("feedback");
-      const feedbackRequestOptions = {
-        requestId: feedbackRequestId,
-        idempotencyKey: feedbackRequestId,
-      };
-      try {
-        result = await managedFormDataRequest<any>(
-          "/api/v1/mobile/support/tickets",
-          form,
-          text,
-          feedbackRequestOptions,
-        );
-      } catch (error) {
-        if (
-          error instanceof ManagedApiError &&
-          [404, 405, 501].includes(error.status || 0)
-        ) {
-          result = await managedFormDataRequest<any>(
-            "/api/v1/play/mobile-feedback",
-            form,
-            text,
-            feedbackRequestOptions,
-          );
-        } else {
-          throw error;
-        }
-      }
+      const result = await submitFeedbackForm(form, "feedback");
       setFeedbackMessage(
         result?.ticket_id || result?.id
           ? `${text.account.feedbackSubmitted} · #${
@@ -15962,6 +21848,8 @@ function AndroidAccountSettings() {
       setFeedbackContent("");
       setFeedbackCategory("bug");
       setFeedbackScreenshots([]);
+      navigate(Path.AccountFeedback, { replace: true });
+      await refreshSupportTickets();
     } catch (error) {
       setFeedbackError(
         localizedMobileErrorMessage(error, text.errors.saveFailed),
@@ -16044,10 +21932,151 @@ function AndroidAccountSettings() {
     }
   }
 
+  async function openDirectRedeemCodeShop() {
+    if (!directRedeemShopUrl) return;
+    if (webOpenMode === "in_app") {
+      navigate(Path.AccountDirectCodeShop);
+      return;
+    }
+    try {
+      await openExternalUrl(directRedeemShopUrl);
+      setRedeemError("");
+      setPaymentError("");
+    } catch (error) {
+      const message = localizedMobileErrorMessage(
+        error,
+        text.errors.paymentFailed,
+      );
+      setRedeemError(message);
+      setPaymentError(message);
+      void showNativeToast(message).catch(() => undefined);
+    }
+  }
+
+  async function submitPlayBillingPurchase(
+    candidate: PlayBillingCandidate,
+    purchase: NativePlayBillingPurchase,
+  ) {
+    const purchaseToken = purchase.purchaseToken;
+    if (!purchaseToken) {
+      throw new Error("play_billing_missing_purchase_token");
+    }
+    const client = await mobilePlatformClient();
+    const requestId = clientRequestID("play-billing");
+    const result = await client.playBilling.submitPurchase(
+      {
+        product_id: candidate.productId,
+        product_type: candidate.productType,
+        purchase_token: purchaseToken,
+        order_id: purchase.orderId,
+        package_name: purchase.packageName || "com.jisudeng.chat",
+        purchase_time: purchase.purchaseTime,
+        purchase_state: purchase.purchaseState,
+        acknowledged: purchase.acknowledged,
+        quantity: purchase.quantity,
+        original_json: purchase.originalJson,
+        signature: purchase.signature,
+        plan_id: candidate.planId,
+        amount: candidate.amount,
+        order_type: candidate.orderType,
+        locale: text.dateLocale,
+        client_request_id: requestId,
+      },
+      {
+        headers: {
+          "X-Request-ID": requestId,
+          "X-Client-Request-ID": requestId,
+          "Idempotency-Key": requestId,
+        },
+      },
+    );
+    if (result.consume && !result.consumed) {
+      await consumePlayBillingPurchase(purchaseToken);
+    }
+    if (result.acknowledge && !result.acknowledged) {
+      await acknowledgePlayBillingPurchase(purchaseToken);
+    }
+    return result;
+  }
+
+  async function purchasePlayBillingItem(candidate: PlayBillingCandidate) {
+    if (!managed.accessToken) {
+      setPlayBillingError(text.errors.loginRequired);
+      return;
+    }
+    if (playBillingBusyProductId) return;
+    setPlayBillingBusyProductId(candidate.productId);
+    setPlayBillingError("");
+    setPlayBillingMessage("");
+    try {
+      const product = playBillingProducts[candidate.productId];
+      const result = await launchPlayBillingPurchase({
+        productId: candidate.productId,
+        productType: candidate.productType,
+        offerToken: product?.offerToken || candidate.offerToken,
+        obfuscatedAccountId: activeAccountId || undefined,
+      });
+      if (result.status === "cancelled") {
+        setPlayBillingMessage(text.account.playBillingCancelled);
+        return;
+      }
+      if (result.status === "pending") {
+        setPlayBillingMessage(text.account.playBillingPending);
+        return;
+      }
+      if (result.status !== "purchased") {
+        throw new Error(
+          result.debugMessage ||
+            result.reason ||
+            "play_billing_purchase_failed",
+        );
+      }
+      const purchases = result.purchases || [];
+      if (!purchases.length) throw new Error("play_billing_missing_purchase");
+      const serverResults = [];
+      for (const purchase of purchases) {
+        serverResults.push(
+          await submitPlayBillingPurchase(candidate, purchase),
+        );
+      }
+      const successMessage =
+        serverResults
+          .map((item) => item.message)
+          .filter(Boolean)
+          .join(" · ") || text.account.playBillingSubmitted;
+      setPlayBillingMessage(successMessage);
+      await Promise.all([
+        refreshAccountData().catch(() => undefined),
+        managed.bootstrap({ silent: true }).catch(() => undefined),
+      ]);
+    } catch (error) {
+      const fallback =
+        error instanceof ManagedApiError &&
+        [404, 501, 503].includes(error.status || 0)
+          ? text.account.playBillingBackendRequired
+          : text.account.playBillingFailed;
+      setPlayBillingError(localizedMobileErrorMessage(error, fallback));
+    } finally {
+      setPlayBillingBusyProductId("");
+    }
+  }
+
   async function createPaymentOrder(
     orderType: "balance" | "subscription",
     plan?: any,
   ) {
+    if (playDistribution) {
+      setPaymentError(text.account.playCommerceUnavailable);
+      window.setTimeout(
+        () =>
+          paymentFeedbackRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          }),
+        0,
+      );
+      return;
+    }
     const amount =
       orderType === "subscription"
         ? Number(plan?.price || plan?.amount || 0)
@@ -16417,6 +22446,86 @@ function AndroidAccountSettings() {
   }, [route]);
 
   useEffect(() => {
+    if (!playDistribution) return;
+    setCreatedOrder(null);
+    setPaymentMethod("");
+    setPaymentError("");
+    setCouponQuote(null);
+  }, [playDistribution]);
+
+  useEffect(() => {
+    if (!playDistribution) return;
+    if (route !== Path.AccountRecharge && route !== Path.AccountPlans) {
+      return;
+    }
+    if (!activePlayBillingCandidates.length) {
+      setPlayBillingProducts({});
+      setPlayBillingError(text.account.playBillingNoProducts);
+      return;
+    }
+    let cancelled = false;
+    setPlayBillingLoading(true);
+    setPlayBillingError("");
+    const grouped = activePlayBillingCandidates.reduce(
+      (groups, candidate) => {
+        const ids = groups[candidate.productType] || [];
+        if (!ids.includes(candidate.productId)) ids.push(candidate.productId);
+        groups[candidate.productType] = ids;
+        return groups;
+      },
+      {} as Record<NativePlayBillingProductType, string[]>,
+    );
+    Promise.all(
+      (
+        Object.entries(grouped) as Array<
+          [NativePlayBillingProductType, string[]]
+        >
+      ).map(([productType, productIds]) =>
+        queryPlayBillingProducts(productIds, productType),
+      ),
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const nextProducts: Record<string, NativePlayBillingProduct> = {};
+        const errors: string[] = [];
+        results.forEach((result) => {
+          result.products?.forEach((product) => {
+            nextProducts[product.productId] = product;
+          });
+          if (!result.available && result.reason) errors.push(result.reason);
+          if (result.debugMessage && result.responseCode)
+            errors.push(result.debugMessage);
+        });
+        setPlayBillingProducts(nextProducts);
+        setPlayBillingError(
+          errors.length ? text.account.playBillingUnavailable(errors[0]) : "",
+        );
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setPlayBillingProducts({});
+        setPlayBillingError(
+          localizedMobileErrorMessage(
+            error,
+            text.account.playBillingUnavailable("query_failed"),
+          ),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setPlayBillingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activePlayBillingCandidates,
+    playBillingProductQueryKey,
+    playDistribution,
+    route,
+    text.account,
+  ]);
+
+  useEffect(() => {
     persistPendingPaymentOrder(createdOrder);
   }, [createdOrder]);
 
@@ -16450,13 +22559,14 @@ function AndroidAccountSettings() {
   useEffect(() => {
     if (
       route === Path.AccountUpdate &&
+      !playDistribution &&
       !updateState.checked &&
       !updateState.loading
     ) {
       checkUpdate().catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route, updateState.checked, updateState.loading]);
+  }, [playDistribution, route, updateState.checked, updateState.loading]);
 
   useEffect(() => {
     if (route === Path.AccountOrders && selectedOrderID) {
@@ -16467,8 +22577,26 @@ function AndroidAccountSettings() {
 
   useEffect(() => {
     if (route === Path.AccountSupport) void refreshSupportTickets();
+    if (route === Path.AccountFeedback) void refreshSupportTickets();
+    if (route === Path.AccountFeedbackDetail) void refreshSupportTickets();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route]);
+  }, [route, selectedSupportTicketID]);
+
+  useEffect(() => {
+    const refresh = () => void refreshPushInbox();
+    refresh();
+    window.addEventListener("jisudeng:push-inbox-change", refresh);
+    window.addEventListener("jisudeng-native-resume", refresh);
+    return () => {
+      window.removeEventListener("jisudeng:push-inbox-change", refresh);
+      window.removeEventListener("jisudeng-native-resume", refresh);
+    };
+  }, [refreshPushInbox]);
+
+  useEffect(() => {
+    if (route === Path.AccountProfile) void refreshProfile();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route, managed.accessToken]);
 
   useEffect(() => {
     if (
@@ -16512,12 +22640,469 @@ function AndroidAccountSettings() {
         onRefresh={() => managed.bootstrap({ silent: true })}
       >
         {isAdmin ? (
-          <MobileAdminWorkspace client={adminClient} text={text} />
+          <Suspense fallback={<MobileLoading />}>
+            <MobileAdminWorkspace client={adminClient} text={text} />
+          </Suspense>
         ) : (
           <p className={styles["empty-copy"]}>
             {text.account.adminUnavailable}
           </p>
         )}
+      </AndroidDetailShell>
+    );
+  }
+
+  if (route === Path.AccountNotifications) {
+    return (
+      <AndroidDetailShell
+        title={text.account.notifications}
+        subtitle={text.account.notificationHint}
+        text={text}
+        onRefresh={() => void refreshPushInbox()}
+      >
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.notifications}</h2>
+            <span>{text.account.notificationUnread(unreadPushCount)}</span>
+          </div>
+          {!!pushInbox.length && (
+            <div className={styles["inline-actions"]}>
+              <button
+                type="button"
+                onClick={() =>
+                  void markNativePushInboxRead().then(setPushInbox)
+                }
+              >
+                {text.account.markAllNotificationsRead}
+              </button>
+              <button
+                type="button"
+                className={styles["danger-inline"]}
+                onClick={() => void clearNativePushInbox().then(setPushInbox)}
+              >
+                {text.account.clearNotifications}
+              </button>
+            </div>
+          )}
+          <div
+            className={styles["notification-inbox-list"]}
+            aria-live="polite"
+            aria-busy={pushInboxLoading}
+          >
+            {!pushInboxLoading && pushInbox.length === 0 && (
+              <p className={styles["empty-copy"]}>
+                {text.account.notificationEmpty}
+              </p>
+            )}
+            {pushInbox.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                className={clsx(styles["notification-inbox-item"], {
+                  [styles["unread"]]: !item.read,
+                })}
+                onClick={() => {
+                  void markNativePushInboxRead([item.id]).then(setPushInbox);
+                  window.dispatchEvent(
+                    new CustomEvent("jisudeng:push-open", { detail: item }),
+                  );
+                }}
+              >
+                <i aria-hidden="true" />
+                <span>
+                  <strong>{item.title || text.account.notifications}</strong>
+                  {!!item.body && <p>{item.body}</p>}
+                  <small>{formatDateTime(item.receivedAt, text)}</small>
+                </span>
+                <em>{text.account.notificationOpen}</em>
+              </button>
+            ))}
+          </div>
+        </section>
+      </AndroidDetailShell>
+    );
+  }
+
+  if (route === Path.AccountDirectCodeShop && directRedeemShopUrl) {
+    return (
+      <AndroidDetailShell
+        title={text.account.directCodeShopTitle}
+        subtitle={text.account.webOpenInApp}
+        text={text}
+        fallback={Path.AccountRedeem}
+      >
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.openShopInApp}</h2>
+            <span>{text.account.webOpenInApp}</span>
+          </div>
+          <iframe
+            className={styles["direct-code-shop-frame"]}
+            title={text.account.directCodeShopTitle}
+            src={directRedeemShopUrl}
+            sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+          />
+          <div className={styles["inline-actions"]}>
+            <button
+              onClick={() => {
+                navigator.clipboard
+                  ?.writeText(directRedeemShopUrl)
+                  .then(() => setRedeemMessage(text.account.shopLinkCopied))
+                  .catch(() => setRedeemError(text.account.copyShopLink));
+              }}
+            >
+              <CopyIcon />
+              <span>{text.account.copyShopLink}</span>
+            </button>
+            <button onClick={() => openExternalUrl(directRedeemShopUrl)}>
+              <DownloadIcon />
+              <span>{text.account.openExternalBrowser}</span>
+            </button>
+          </div>
+          {redeemMessage && (
+            <div className={styles["form-success"]}>{redeemMessage}</div>
+          )}
+          {redeemError && (
+            <div className={styles["form-error"]}>{redeemError}</div>
+          )}
+          <button
+            className={styles["primary-action"]}
+            onClick={() => navigate(Path.AccountRedeem)}
+          >
+            {text.account.directCodeShopRedeemAction}
+          </button>
+        </section>
+      </AndroidDetailShell>
+    );
+  }
+
+  if (route === Path.AccountProfile) {
+    const avatarUrl =
+      profileAvatarUrl ||
+      profile?.avatar_url ||
+      workspace?.user?.avatar_url ||
+      "";
+    const displayName =
+      profileUsername ||
+      profile?.username ||
+      workspace?.user?.username ||
+      workspace?.user?.email ||
+      "JisudengChat";
+    const totpEnabled = Boolean(totpStatus?.enabled || profile?.totp_enabled);
+
+    return (
+      <AndroidDetailShell
+        title={text.account.profile}
+        subtitle={displayName}
+        text={text}
+        onRefresh={refreshProfile}
+      >
+        <AccountDataNotice
+          data={{
+            loading: profileLoading,
+            error: profileError,
+            updatedAt: profile ? Date.now() : undefined,
+          }}
+          text={text}
+        />
+        {profileMessage && (
+          <div className={styles["form-success"]}>{profileMessage}</div>
+        )}
+        {profileError && (
+          <div className={styles["form-error"]}>{profileError}</div>
+        )}
+        <section className={styles["profile-security-section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.profile}</h2>
+            <span>{text.account.profileHint}</span>
+          </div>
+          <div className={styles["profile-avatar-preview"]}>
+            {avatarUrl ? (
+              <img src={avatarUrl} alt={displayName} />
+            ) : (
+              <i>{displayName.slice(0, 1).toUpperCase()}</i>
+            )}
+            <span>
+              <strong>{displayName}</strong>
+              <small>{profile?.email || workspace?.user?.email || "-"}</small>
+            </span>
+          </div>
+          <label className={styles["field-card"]}>
+            <span>{text.account.username}</span>
+            <input
+              value={profileUsername}
+              onChange={(event) =>
+                setProfileUsername(event.currentTarget.value)
+              }
+              placeholder={text.account.username}
+              autoComplete="nickname"
+            />
+          </label>
+          <label className={styles["field-card"]}>
+            <span>{text.account.avatarUrl}</span>
+            <input
+              value={profileAvatarUrl}
+              onChange={(event) =>
+                setProfileAvatarUrl(event.currentTarget.value)
+              }
+              placeholder="https://"
+              inputMode="url"
+              autoComplete="url"
+            />
+          </label>
+          <button
+            className={styles["primary-action"]}
+            onClick={saveProfile}
+            disabled={profileBusy}
+          >
+            {profileBusy ? text.loading : text.account.profileSave}
+          </button>
+        </section>
+
+        <section className={styles["profile-security-section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.changePassword}</h2>
+            <span>{text.account.security}</span>
+          </div>
+          <label className={styles["field-card"]}>
+            <span>{text.account.currentPassword}</span>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(event) =>
+                setCurrentPassword(event.currentTarget.value)
+              }
+              autoComplete="current-password"
+            />
+          </label>
+          <label className={styles["field-card"]}>
+            <span>{text.account.newPassword}</span>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.currentTarget.value)}
+              autoComplete="new-password"
+            />
+          </label>
+          <label className={styles["field-card"]}>
+            <span>{text.account.confirmPassword}</span>
+            <input
+              type="password"
+              value={confirmNewPassword}
+              onChange={(event) =>
+                setConfirmNewPassword(event.currentTarget.value)
+              }
+              autoComplete="new-password"
+            />
+          </label>
+          <button
+            className={styles["primary-action"]}
+            onClick={changePassword}
+            disabled={profileBusy}
+          >
+            {text.account.changePassword}
+          </button>
+        </section>
+
+        <section className={styles["profile-security-section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.forgotPassword}</h2>
+            <span>{text.account.resetPassword}</span>
+          </div>
+          <label className={styles["field-card"]}>
+            <span>{text.login.email}</span>
+            <input
+              value={resetEmail}
+              onChange={(event) => setResetEmail(event.currentTarget.value)}
+              placeholder={text.login.email}
+              inputMode="email"
+              autoComplete="email"
+            />
+          </label>
+          <button
+            className={styles["wide-soft-action"]}
+            onClick={sendProfileResetCode}
+            disabled={profileBusy || !resetEmail.trim()}
+          >
+            {text.account.sendResetCode}
+          </button>
+          <label className={styles["field-card"]}>
+            <span>{text.account.resetCode}</span>
+            <input
+              value={resetCode}
+              onChange={(event) => setResetCode(event.currentTarget.value)}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+            />
+          </label>
+          <label className={styles["field-card"]}>
+            <span>{text.account.newPassword}</span>
+            <input
+              type="password"
+              value={resetPassword}
+              onChange={(event) => setResetPassword(event.currentTarget.value)}
+              autoComplete="new-password"
+            />
+          </label>
+          <label className={styles["field-card"]}>
+            <span>{text.account.confirmPassword}</span>
+            <input
+              type="password"
+              value={confirmResetPassword}
+              onChange={(event) =>
+                setConfirmResetPassword(event.currentTarget.value)
+              }
+              autoComplete="new-password"
+            />
+          </label>
+          <button
+            className={styles["primary-action"]}
+            onClick={resetProfilePassword}
+            disabled={profileBusy}
+          >
+            {text.account.resetPassword}
+          </button>
+        </section>
+
+        <section className={styles["profile-security-section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.totp}</h2>
+            <span>
+              {totpEnabled
+                ? text.account.totpEnabled
+                : text.account.totpDisabled}
+            </span>
+          </div>
+          {!totpEnabled && (
+            <button
+              className={styles["wide-soft-action"]}
+              onClick={startTotpSetup}
+              disabled={profileBusy}
+            >
+              {text.account.startTotpSetup}
+            </button>
+          )}
+          {totpSetup && (
+            <div className={styles["totp-setup-card"]}>
+              {totpSetup.qr_code_url && (
+                <img src={totpSetup.qr_code_url} alt={text.account.totp} />
+              )}
+              {totpSetup.secret && (
+                <code>
+                  {text.account.totpSecret}: {totpSetup.secret}
+                </code>
+              )}
+            </div>
+          )}
+          <label className={styles["field-card"]}>
+            <span>{text.account.totpCode}</span>
+            <input
+              value={totpCode}
+              onChange={(event) => setTotpCode(event.currentTarget.value)}
+              inputMode="numeric"
+              maxLength={8}
+              autoComplete="one-time-code"
+            />
+          </label>
+          <div className={styles["inline-actions"]}>
+            {!totpEnabled ? (
+              <button
+                onClick={enableTotp}
+                disabled={profileBusy || !totpCode.trim()}
+              >
+                <FavoriteIcon />
+                <span>{text.account.enableTotp}</span>
+              </button>
+            ) : (
+              <button
+                className={styles["danger-inline"]}
+                onClick={disableTotp}
+                disabled={profileBusy || !totpCode.trim()}
+              >
+                <CloseIcon />
+                <span>{text.account.disableTotp}</span>
+              </button>
+            )}
+            <button onClick={sendTotpEmailCode} disabled={profileBusy}>
+              <SendIcon />
+              <span>{text.account.sendTotpCode}</span>
+            </button>
+          </div>
+        </section>
+
+        <section className={styles["profile-security-section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{text.account.accountDeletion}</h2>
+            <span>{text.account.accountDeletionReview}</span>
+          </div>
+          <p className={styles["empty-copy"]}>
+            {text.account.accountDeletionHint}
+          </p>
+          <div className={styles["form-error"]}>
+            {text.account.accountDeletionWarning}
+          </div>
+          <label className={styles["field-card"]}>
+            <span>{text.account.accountDeletionReason}</span>
+            <textarea
+              value={accountDeletionReason}
+              onChange={(event) =>
+                setAccountDeletionReason(event.currentTarget.value)
+              }
+              placeholder={text.account.accountDeletionReasonPlaceholder}
+              rows={3}
+            />
+          </label>
+          <div className={styles["inline-actions"]}>
+            <button
+              onClick={sendAccountDeletionCode}
+              disabled={accountDeletionBusy}
+            >
+              <SendIcon />
+              <span>{text.account.accountDeletionSendCode}</span>
+            </button>
+          </div>
+          <label className={styles["field-card"]}>
+            <span>{text.account.accountDeletionVerifyCode}</span>
+            <input
+              value={accountDeletionVerifyCode}
+              onChange={(event) =>
+                setAccountDeletionVerifyCode(event.currentTarget.value)
+              }
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              placeholder={text.account.accountDeletionVerifyCode}
+            />
+          </label>
+          <label className={styles["field-card"]}>
+            <span>{text.account.accountDeletionConfirmLabel}</span>
+            <input
+              value={accountDeletionConfirm}
+              onChange={(event) =>
+                setAccountDeletionConfirm(event.currentTarget.value)
+              }
+              placeholder={text.account.accountDeletionConfirmPlaceholder}
+              autoCapitalize="characters"
+              autoComplete="off"
+            />
+          </label>
+          {accountDeletionError && (
+            <div className={styles["form-error"]}>{accountDeletionError}</div>
+          )}
+          {accountDeletionMessage && (
+            <div className={styles["form-success"]}>
+              {accountDeletionMessage}
+            </div>
+          )}
+          <button
+            className={styles["danger-action"]}
+            onClick={submitAccountDeletionRequest}
+            disabled={accountDeletionBusy}
+          >
+            {accountDeletionBusy
+              ? text.account.feedbackSubmitting
+              : text.account.accountDeletionSubmit}
+          </button>
+        </section>
       </AndroidDetailShell>
     );
   }
@@ -16531,6 +23116,29 @@ function AndroidAccountSettings() {
         onRefresh={refreshAccountData}
       >
         <AccountDataNotice data={accountData} text={text} />
+        {directRedeemShopUrl && (
+          <section
+            className={styles["section"]}
+            data-distribution-commerce="direct-external-code-shop"
+          >
+            <div className={styles["section-head"]}>
+              <h2>{text.account.directCodeShopTitle}</h2>
+              <span>{text.account.redeemShortHint}</span>
+            </div>
+            <p className={styles["empty-copy"]}>
+              {text.account.directCodeShopHint}
+            </p>
+            <button
+              className={styles["primary-action"]}
+              onClick={openDirectRedeemCodeShop}
+            >
+              {text.account.directCodeShopAction}
+            </button>
+            <p className={styles["empty-copy"]}>
+              {text.account.directCodeShopComplianceHint}
+            </p>
+          </section>
+        )}
         <section className={styles["section"]}>
           <div className={styles["section-head"]}>
             <h2>{text.account.redeemCode}</h2>
@@ -16694,6 +23302,40 @@ function AndroidAccountSettings() {
     );
   }
 
+  if (route === Path.AccountRecharge && playDistribution) {
+    return (
+      <AndroidDetailShell
+        title={text.account.recharge}
+        subtitle={text.account.playCommerceSubtitle}
+        text={text}
+        onRefresh={refreshAccountData}
+      >
+        <AccountDataNotice data={accountData} text={text} />
+        <section className={styles["plan-detail-card"]}>
+          <div>
+            <span>{text.account.balance}</span>
+            <strong>{formatMoney(workspace?.user?.balance)}</strong>
+          </div>
+          <div>
+            <span>{text.account.currentGroup}</span>
+            <strong>{accountGroupName}</strong>
+          </div>
+        </section>
+        <AndroidPlayBillingPanel
+          text={text}
+          candidates={playRechargeCandidates}
+          products={playBillingProducts}
+          loading={playBillingLoading}
+          busyProductId={playBillingBusyProductId}
+          error={playBillingError}
+          message={playBillingMessage}
+          onBuy={purchasePlayBillingItem}
+          onRedeem={() => navigate(Path.AccountRedeem)}
+        />
+      </AndroidDetailShell>
+    );
+  }
+
   if (route === Path.AccountRecharge) {
     return (
       <AndroidDetailShell
@@ -16792,11 +23434,17 @@ function AndroidAccountSettings() {
             <span>
               {checkoutLoading
                 ? text.loading
-                : text.shortCount(paymentMethods.length)}
+                : text.shortCount(visiblePaymentOptionCount)}
             </span>
           </div>
           <div className={styles["payment-method-list"]}>
-            {!checkoutLoading && !paymentMethods.length && (
+            {replacedWechatPaymentAvailable && (
+              <DirectWechatReplacementPaymentButton
+                text={text}
+                onOpen={openDirectRedeemCodeShop}
+              />
+            )}
+            {!checkoutLoading && !visiblePaymentOptionCount && (
               <p className={styles["empty-copy"]}>
                 {text.account.noPaymentMethodsHint}
               </p>
@@ -16825,7 +23473,7 @@ function AndroidAccountSettings() {
           <button
             className={styles["primary-action"]}
             onClick={() => createPaymentOrder("balance")}
-            disabled={paymentBusy}
+            disabled={paymentBusy || !paymentMethods.length}
           >
             {paymentBusy
               ? text.account.creatingOrder
@@ -16848,6 +23496,56 @@ function AndroidAccountSettings() {
             />
           )}
         </div>
+      </AndroidDetailShell>
+    );
+  }
+
+  if (route === Path.AccountPlans && playDistribution) {
+    return (
+      <AndroidDetailShell
+        title={text.account.packages}
+        subtitle={text.account.playCommerceSubtitle}
+        text={text}
+        onRefresh={refreshAccountData}
+      >
+        <AccountDataNotice data={accountData} text={text} />
+        <section className={styles["plan-detail-card"]}>
+          <div>
+            <span>{text.account.balance}</span>
+            <strong>{formatMoney(workspace?.user?.balance)}</strong>
+          </div>
+          <div>
+            <span>{text.account.currentGroup}</span>
+            <strong>{accountGroupName}</strong>
+          </div>
+          <div>
+            <span>{text.account.subscriptions}</span>
+            <strong>
+              {accountData.subscriptions?.[0]?.expires_at
+                ? text.account.activeUntil(
+                    formatDateTime(
+                      accountData.subscriptions[0].expires_at,
+                      text,
+                    ),
+                  )
+                : localizedSubscriptionStatus(
+                    accountData.subscriptions?.[0]?.status || "",
+                    text,
+                  ) || text.account.noSubscriptions}
+            </strong>
+          </div>
+        </section>
+        <AndroidPlayBillingPanel
+          text={text}
+          candidates={playPlanCandidates}
+          products={playBillingProducts}
+          loading={playBillingLoading}
+          busyProductId={playBillingBusyProductId}
+          error={playBillingError}
+          message={playBillingMessage}
+          onBuy={purchasePlayBillingItem}
+          onRedeem={() => navigate(Path.AccountRedeem)}
+        />
       </AndroidDetailShell>
     );
   }
@@ -16951,10 +23649,16 @@ function AndroidAccountSettings() {
           <section className={styles["section"]}>
             <div className={styles["section-head"]}>
               <h2>{text.account.paymentMethod}</h2>
-              <span>{text.shortCount(paymentMethods.length)}</span>
+              <span>{text.shortCount(visiblePaymentOptionCount)}</span>
             </div>
             <div className={styles["payment-method-list"]}>
-              {!checkoutLoading && !paymentMethods.length && (
+              {replacedWechatPaymentAvailable && (
+                <DirectWechatReplacementPaymentButton
+                  text={text}
+                  onOpen={openDirectRedeemCodeShop}
+                />
+              )}
+              {!checkoutLoading && !visiblePaymentOptionCount && (
                 <p className={styles["empty-copy"]}>
                   {text.account.noPaymentMethodsHint}
                 </p>
@@ -17033,7 +23737,7 @@ function AndroidAccountSettings() {
             <button
               className={styles["primary-action"]}
               onClick={() => createPaymentOrder("subscription", selectedPlan)}
-              disabled={paymentBusy}
+              disabled={paymentBusy || !paymentMethods.length}
             >
               {paymentBusy
                 ? text.account.creatingOrder
@@ -17100,10 +23804,16 @@ function AndroidAccountSettings() {
         <section className={styles["section"]}>
           <div className={styles["section-head"]}>
             <h2>{text.account.paymentMethod}</h2>
-            <span>{text.shortCount(paymentMethods.length)}</span>
+            <span>{text.shortCount(visiblePaymentOptionCount)}</span>
           </div>
           <div className={styles["payment-method-list"]}>
-            {!checkoutLoading && !paymentMethods.length && (
+            {replacedWechatPaymentAvailable && (
+              <DirectWechatReplacementPaymentButton
+                text={text}
+                onOpen={openDirectRedeemCodeShop}
+              />
+            )}
+            {!checkoutLoading && !visiblePaymentOptionCount && (
               <p className={styles["empty-copy"]}>
                 {text.account.noPaymentMethodsHint}
               </p>
@@ -17215,6 +23925,10 @@ function AndroidAccountSettings() {
           ) : (
             <section className={styles["section"]}>
               <div className={styles["meta-row"]}>
+                <span>{text.account.orderType}</span>
+                <strong>{localizedOrderTitle(detail, text)}</strong>
+              </div>
+              <div className={styles["meta-row"]}>
                 <span>{text.account.orderNo}</span>
                 <strong>{detail.out_trade_no || detail.id}</strong>
               </div>
@@ -17280,9 +23994,7 @@ function AndroidAccountSettings() {
                 navigate(`${Path.AccountOrders}?id=${orderPrimaryId(order)}`)
               }
             >
-              <span>
-                {order.product_name || order.order_type || order.payment_type}
-              </span>
+              <span>{localizedOrderTitle(order, text)}</span>
               <strong>{formatMoney(order.pay_amount || order.amount)}</strong>
               <small>
                 {text.account.orderStatus(
@@ -17617,9 +24329,29 @@ function AndroidAccountSettings() {
     );
   }
 
+  if (route === Path.AccountSystemSettings) {
+    return <AndroidSystemSettings />;
+  }
+
+  if (route === Path.AccountAppearance) {
+    return <AndroidAppearanceSettings />;
+  }
+
+  if (route === Path.AccountLanguage) {
+    return <AndroidLanguageSettings />;
+  }
+
+  if (route === Path.AccountWebOpenMode) {
+    return <AndroidWebOpenModeSettings />;
+  }
+
   if (route === Path.AccountPermissions) {
     return (
-      <AndroidDetailShell title={text.account.permissions} text={text}>
+      <AndroidDetailShell
+        title={text.account.permissions}
+        text={text}
+        fallback={Path.AccountSystemSettings}
+      >
         <div className={styles["permission-list"]}>
           <button
             onClick={async () => {
@@ -17689,6 +24421,26 @@ function AndroidAccountSettings() {
   }
 
   if (route === Path.AccountUpdate) {
+    if (playDistribution) {
+      return (
+        <AndroidDetailShell
+          title={text.account.version}
+          text={text}
+          fallback={Path.AccountSystemSettings}
+        >
+          <div className={styles["version-card"]}>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.installed}</span>
+              <strong>{currentVersion}</strong>
+            </div>
+            <div className={styles["meta-row"]}>
+              <span>{text.account.currentVersion}</span>
+              <strong>{currentVersion}</strong>
+            </div>
+          </div>
+        </AndroidDetailShell>
+      );
+    }
     return (
       <AndroidDetailShell
         title={text.account.version}
@@ -17696,6 +24448,7 @@ function AndroidAccountSettings() {
           hasUpdate ? text.account.updateFound : text.account.currentVersion
         }
         text={text}
+        fallback={Path.AccountSystemSettings}
         onRefresh={checkUpdate}
       >
         <div className={styles["version-card"]}>
@@ -17754,14 +24507,15 @@ function AndroidAccountSettings() {
     );
   }
 
-  if (route === Path.AccountFeedback) {
+  if (route === Path.AccountFeedbackNew) {
     return (
-      <AndroidDetailShell title={text.account.feedback} text={text}>
+      <AndroidDetailShell
+        title={text.account.feedbackNew}
+        subtitle={currentVersion}
+        text={text}
+        fallback={Path.AccountFeedback}
+      >
         <section className={styles["section"]}>
-          <div className={styles["section-head"]}>
-            <h2>{text.account.feedback}</h2>
-            <span>{currentVersion}</span>
-          </div>
           <p className={styles["empty-copy"]}>{text.account.feedbackHint}</p>
           <label className={styles["field-card"]}>
             <span>{text.account.feedbackTitleLabel}</span>
@@ -17865,6 +24619,146 @@ function AndroidAccountSettings() {
     );
   }
 
+  if (route === Path.AccountFeedbackDetail) {
+    return (
+      <AndroidDetailShell
+        title={text.account.feedbackDetail}
+        text={text}
+        fallback={Path.AccountFeedback}
+        onRefresh={refreshSupportTickets}
+      >
+        <section className={styles["section"]}>
+          {supportError && (
+            <div className={styles["form-error"]}>{supportError}</div>
+          )}
+          {!supportTicket && !supportBusy && !supportError && (
+            <p className={styles["empty-copy"]}>
+              {text.platform.supportTicketEmpty}
+            </p>
+          )}
+          {supportTicket && (
+            <>
+              <div className={styles["ticket-detail-head"]}>
+                <strong>
+                  {localizedMobileDisplay(supportTicket, {
+                    fallback: `#${supportTicket.number || supportTicket.id}`,
+                  })}
+                </strong>
+                <span>
+                  {text.platform.supportStatuses[supportTicket.status] ||
+                    text.notSynced}
+                </span>
+              </div>
+              <div className={styles["ticket-messages"]}>
+                {(supportTicket.messages || []).map((message) => (
+                  <article
+                    key={message.id}
+                    className={styles[message.sender_type]}
+                  >
+                    <strong>
+                      {message.sender_type === "user"
+                        ? text.platform.myMessage
+                        : text.platform.supportMessage}
+                    </strong>
+                    <p>
+                      {localizedMobileDisplay(message as any, {
+                        defaultFields: ["content"],
+                      })}
+                    </p>
+                    <small>{formatDateTime(message.created_at, text)}</small>
+                  </article>
+                ))}
+              </div>
+              {!(["closed", "resolved"] as string[]).includes(
+                supportTicket.status,
+              ) && (
+                <div className={styles["support-reply-box"]}>
+                  <textarea
+                    value={supportReply}
+                    onChange={(event) =>
+                      setSupportReply(event.currentTarget.value)
+                    }
+                    placeholder={text.platform.supportReplyPlaceholder}
+                  />
+                  <button
+                    onClick={replySupportTicket}
+                    disabled={supportBusy || !supportReply.trim()}
+                  >
+                    <SendIcon />
+                    <span>{text.login.submit}</span>
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      </AndroidDetailShell>
+    );
+  }
+
+  if (route === Path.AccountFeedback) {
+    return (
+      <AndroidDetailShell
+        title={text.account.feedbackRecords}
+        subtitle={text.account.feedbackRecordsHint}
+        text={text}
+        fallback={Path.AccountSystemSettings}
+        onRefresh={refreshSupportTickets}
+      >
+        <section className={styles["section"]}>
+          <button
+            className={styles["primary-action"]}
+            onClick={() => navigate(Path.AccountFeedbackNew)}
+          >
+            {text.account.feedbackNew}
+          </button>
+          {feedbackMessage && (
+            <div className={styles["form-success"]}>{feedbackMessage}</div>
+          )}
+          {supportError && (
+            <div className={styles["form-error"]}>{supportError}</div>
+          )}
+          <div className={styles["section-head"]}>
+            <h2>{text.account.feedbackProgress}</h2>
+            <span>
+              {supportBusy
+                ? text.account.refreshingData
+                : text.shortCount(supportTickets.length)}
+            </span>
+          </div>
+          <div className={styles["ticket-list"]}>
+            {!supportBusy && supportTickets.length === 0 && (
+              <p className={styles["empty-copy"]}>
+                {text.platform.supportTicketEmpty}
+              </p>
+            )}
+            {supportTickets.map((ticket) => (
+              <button key={ticket.id} onClick={() => openSupportTicket(ticket)}>
+                <span>
+                  <strong>
+                    {localizedMobileDisplay(ticket, {
+                      fallback: `#${ticket.number || ticket.id}`,
+                    })}
+                  </strong>
+                  <small>
+                    {formatDateTime(
+                      ticket.updated_at || ticket.created_at,
+                      text,
+                    )}
+                  </small>
+                </span>
+                <em>
+                  {text.platform.supportStatuses[ticket.status] ||
+                    text.notSynced}
+                </em>
+              </button>
+            ))}
+          </div>
+        </section>
+      </AndroidDetailShell>
+    );
+  }
+
   if (route === Path.AccountWelfare) {
     const growth = welfareData?.hub?.growth;
     const vip = growth?.vip;
@@ -17891,6 +24785,10 @@ function AndroidAccountSettings() {
     const arenaOverview = welfareData?.arenaMonthlyOverview;
     const arenaRows = arenaOverview?.rows || [];
     const latestArenaHistory = arenaOverview?.history?.[0];
+    const arenaDailySummary = welfareData?.arenaDailyRewardSummary;
+    const arenaDailyRows = arenaDailySummary?.current?.rows || [];
+    const arenaDailyRecent = arenaDailySummary?.recent;
+    const arenaDailyCurrent = welfareData?.arenaDailyCurrent;
     const inviteQualified = inviteCampaign?.qualified_count || 0;
     const inviteRank = inviteCampaign?.ranking?.rank;
     const checkinStatus = welfareData?.checkinStatus;
@@ -18788,6 +25686,93 @@ function AndroidAccountSettings() {
                 </p>
               )}
             </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareArenaDailyLeaderboard}</h2>
+                <span>{arenaDailyCurrent?.period?.name || ""}</span>
+              </div>
+              {arenaDailyCurrent &&
+              (arenaDailyCurrent.rank || arenaDailyCurrent.estimated_reward) ? (
+                <div className={styles["meta-list"]}>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaDailyCurrentRank}</span>
+                    <strong>
+                      {arenaDailyCurrent.rank
+                        ? `#${arenaDailyCurrent.rank}`
+                        : text.account.inviteGrowthNotRanked}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaTokensToPrev}</span>
+                    <strong>
+                      {arenaDailyCurrent.tokens_to_prev_rank || 0}
+                    </strong>
+                  </div>
+                  <div className={styles["meta-row"]}>
+                    <span>{text.account.welfareArenaDailyEstimatedReward}</span>
+                    <strong>
+                      {formatMoney(arenaDailyCurrent.estimated_reward)}
+                    </strong>
+                  </div>
+                </div>
+              ) : null}
+              {arenaDailyRows.length ? (
+                <div className={styles["welfare-rank-list"]}>
+                  {arenaDailyRows.map((row) => (
+                    <div key={`${row.rank}-${row.display_name}`}>
+                      <strong>#{row.rank}</strong>
+                      <span>
+                        <b>{row.display_name}</b>
+                        <small>
+                          {text.account.welfareScore}: {row.token_sum}
+                        </small>
+                      </span>
+                      <em>{formatMoney(row.estimated_reward)}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoLeaderboard}
+                </p>
+              )}
+            </section>
+
+            <section className={styles["section"]}>
+              <div className={styles["section-head"]}>
+                <h2>{text.account.welfareArenaDailyRewards}</h2>
+                <span>
+                  {arenaDailyRecent
+                    ? `${text.account.welfareRewardsIssued}: ${formatMoney(
+                        arenaDailyRecent.total_amount,
+                      )} · ${
+                        arenaDailyRecent.paid_today
+                          ? text.account.welfareArenaDailyPaid
+                          : text.account.welfareArenaDailyPayoutPending
+                      }`
+                    : text.notSynced}
+                </span>
+              </div>
+              {arenaDailyRecent?.winners?.length ? (
+                <div className={styles["welfare-rank-list"]}>
+                  {arenaDailyRecent.winners.slice(0, 10).map((winner) => (
+                    <div key={`${winner.rank}-${winner.display_name}`}>
+                      <strong>#{winner.rank}</strong>
+                      <span>
+                        <b>{winner.display_name}</b>
+                        <small>{arenaDailyRecent.period?.name || ""}</small>
+                      </span>
+                      <em>{formatMoney(winner.amount)}</em>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={styles["empty-copy"]}>
+                  {text.account.welfareNoRewards}
+                </p>
+              )}
+            </section>
           </>
         )}
       </AndroidDetailShell>
@@ -18833,6 +25818,54 @@ function AndroidAccountSettings() {
           )}
           {inviteMessage && (
             <div className={styles["form-success"]}>{inviteMessage}</div>
+          )}
+          {!inviteLoading && (
+            <div className={styles["invite-share-panel"]}>
+              <div className={styles["invite-growth-block-head"]}>
+                <h3>{text.account.inviteGrowthShare}</h3>
+                <span>
+                  {inviteSummary?.aff_code
+                    ? `${text.account.inviteCode}: ${inviteSummary.aff_code}`
+                    : text.account.inviteGrowthUnavailable}
+                </span>
+              </div>
+              <div className={styles["invite-poster-themes"]}>
+                {INVITE_POSTER_THEMES.map((theme) => (
+                  <button
+                    key={theme}
+                    type="button"
+                    className={clsx({
+                      [styles["active"]]: invitePosterTheme === theme,
+                    })}
+                    onClick={() => setInvitePosterTheme(theme)}
+                  >
+                    {text.account.invitePosterThemes[theme]}
+                  </button>
+                ))}
+              </div>
+              <div className={styles["inline-actions"]}>
+                <button
+                  onClick={shareInviteGrowth}
+                  disabled={
+                    inviteShareBusy || !inviteRegisterUrl || !inviteAppUrl
+                  }
+                >
+                  <ShareIcon />
+                  <span>
+                    {inviteShareBusy
+                      ? text.account.inviteGrowthSharing
+                      : text.account.inviteGrowthShare}
+                  </span>
+                </button>
+                <button
+                  onClick={copyInviteGrowthLink}
+                  disabled={!inviteRegisterUrl}
+                >
+                  <CopyIcon />
+                  <span>{text.account.inviteGrowthCopy}</span>
+                </button>
+              </div>
+            </div>
           )}
           {inviteLoading ? (
             <div className={styles["sync-notice"]}>{text.loading}</div>
@@ -18942,45 +25975,6 @@ function AndroidAccountSettings() {
                       );
                     })}
                   </div>
-                  <div className={styles["invite-growth-block-head"]}>
-                    <h3>{text.account.inviteGrowthShare}</h3>
-                  </div>
-                  <div className={styles["invite-poster-themes"]}>
-                    {INVITE_POSTER_THEMES.map((theme) => (
-                      <button
-                        key={theme}
-                        type="button"
-                        className={clsx({
-                          [styles["active"]]: invitePosterTheme === theme,
-                        })}
-                        onClick={() => setInvitePosterTheme(theme)}
-                      >
-                        {text.account.invitePosterThemes[theme]}
-                      </button>
-                    ))}
-                  </div>
-                  <div className={styles["inline-actions"]}>
-                    <button
-                      onClick={shareInviteGrowth}
-                      disabled={
-                        inviteShareBusy || !inviteSummary?.attribution_token
-                      }
-                    >
-                      <ShareIcon />
-                      <span>
-                        {inviteShareBusy
-                          ? text.account.inviteGrowthSharing
-                          : text.account.inviteGrowthShare}
-                      </span>
-                    </button>
-                    <button
-                      onClick={copyInviteGrowthLink}
-                      disabled={!inviteSummary?.attribution_token}
-                    >
-                      <CopyIcon />
-                      <span>{text.account.inviteGrowthCopy}</span>
-                    </button>
-                  </div>
                 </>
               )}
             </>
@@ -19072,40 +26066,27 @@ function AndroidAccountSettings() {
             <strong>{formatMoney(workspace?.user?.frozen_balance)}</strong>
           </div>
         </div>
-        <div className={styles["inline-actions"]}>
-          <button onClick={() => void shareAppPoster()} disabled={appShareBusy}>
-            <ShareIcon />
-            <span>{appShareBusy ? text.loading : text.account.appShare}</span>
-          </button>
-        </div>
-        {appShareMessage && (
-          <div className={styles["sync-notice"]}>{appShareMessage}</div>
-        )}
-      </section>
-
-      <section className={styles["section"]}>
-        <div className={styles["section-head"]}>
-          <h2>{text.account.appearance}</h2>
-          <span>{text.account.appearanceModes}</span>
-        </div>
-        <ThemeSwitch text={text} />
       </section>
 
       <section className={styles["account-quick-actions"]}>
-        <button onClick={() => navigate(Path.AccountRecharge)}>
-          <DownloadIcon />
-          <strong>{text.account.recharge}</strong>
-          <span>{text.account.appInternalPayment}</span>
-        </button>
-        <button onClick={() => navigate(Path.AccountPlans)}>
-          <BotIcon />
-          <strong>{text.account.packages}</strong>
-          <span>
-            {text.shortCount(
-              (checkoutInfo?.plans || accountData.plans || []).length,
-            )}
-          </span>
-        </button>
+        {!playDistribution && (
+          <button onClick={() => navigate(Path.AccountRecharge)}>
+            <DownloadIcon />
+            <strong>{text.account.recharge}</strong>
+            <span>{text.account.appInternalPayment}</span>
+          </button>
+        )}
+        {!playDistribution && (
+          <button onClick={() => navigate(Path.AccountPlans)}>
+            <BotIcon />
+            <strong>{text.account.packages}</strong>
+            <span>
+              {text.shortCount(
+                (checkoutInfo?.plans || accountData.plans || []).length,
+              )}
+            </span>
+          </button>
+        )}
         <button onClick={() => navigate(Path.AccountRedeem)}>
           <FavoriteIcon />
           <strong>{text.account.redeemCenter}</strong>
@@ -19119,6 +26100,28 @@ function AndroidAccountSettings() {
         </div>
         <div className={styles["account-menu-list"]}>
           <AccountMenuItem
+            icon={<HistoryIcon />}
+            title={text.account.notifications}
+            detail={
+              unreadPushCount
+                ? text.account.notificationUnread(unreadPushCount)
+                : text.account.notificationHint
+            }
+            onClick={() => navigate(Path.AccountNotifications)}
+          />
+          <AccountMenuItem
+            icon={<SettingsIcon />}
+            title={text.account.profile}
+            detail={text.account.profileHint}
+            onClick={() => navigate(Path.AccountProfile)}
+          />
+          <AccountMenuItem
+            icon={<SettingsIcon />}
+            title={text.account.systemSettings}
+            detail={text.account.systemSettingsHint}
+            onClick={() => navigate(Path.AccountSystemSettings)}
+          />
+          <AccountMenuItem
             icon={<FavoriteIcon />}
             title={text.account.accountHubPlay}
             detail={text.account.accountHubPlayHint}
@@ -19126,22 +26129,36 @@ function AndroidAccountSettings() {
           />
           <AccountMenuItem
             icon={<BotIcon />}
-            title={text.account.accountHubBilling}
-            detail={text.account.accountHubBillingHint}
-            onClick={() => navigate(Path.AccountPlans)}
+            title={
+              playDistribution
+                ? text.account.playCommerceBillingTitle
+                : text.account.accountHubBilling
+            }
+            detail={
+              playDistribution
+                ? text.account.playCommerceBillingHint
+                : text.account.accountHubBillingHint
+            }
+            onClick={() =>
+              navigate(
+                playDistribution ? Path.AccountRedeem : Path.AccountPlans,
+              )
+            }
           />
           <AccountMenuItem
-            icon={<ImageIcon />}
-            title={text.account.accountHubProjects}
-            detail={text.account.accountHubProjectsHint}
-            onClick={() => navigate(Path.ContentKit)}
+            icon={<ShareIcon />}
+            title={text.account.inviteGrowth}
+            detail={text.account.inviteGrowthHint}
+            onClick={() => navigate(Path.AccountInvite)}
           />
-          <AccountMenuItem
-            icon={<SettingsIcon />}
-            title={text.account.accountHubHelp}
-            detail={text.account.accountHubHelpHint}
-            onClick={() => navigate(Path.AccountPermissions)}
-          />
+          {isAdmin && (
+            <AccountMenuItem
+              icon={<SettingsIcon />}
+              title={text.account.adminCenter}
+              detail={text.account.adminRecognized}
+              onClick={() => navigate(Path.AccountAdmin)}
+            />
+          )}
         </div>
       </section>
 
@@ -19153,18 +26170,6 @@ function AndroidAccountSettings() {
             <span>{text.account.actualUsageHint}</span>
           </div>
           <div className={styles["account-menu-list"]}>
-            <AccountMenuItem
-              icon={<ShareIcon />}
-              title={text.account.inviteGrowth}
-              detail={text.account.inviteGrowthHint}
-              onClick={() => navigate(Path.AccountInvite)}
-            />
-            <AccountMenuItem
-              icon={<FavoriteIcon />}
-              title={text.account.welfare}
-              detail={text.account.welfareHint}
-              onClick={() => navigate(Path.AccountWelfare)}
-            />
             <AccountMenuItem
               icon={<HistoryIcon />}
               title={text.account.orders}
@@ -19195,51 +26200,6 @@ function AndroidAccountSettings() {
             />
           </div>
         </section>
-
-        <section className={styles["account-menu-group"]}>
-          <div className={styles["section-head"]}>
-            <h2>{text.account.moreServices}</h2>
-            <span>{text.account.platformConnection}</span>
-          </div>
-          <div className={styles["account-menu-list"]}>
-            <AccountMenuItem
-              icon={<UploadIcon />}
-              title={text.account.permissions}
-              detail={text.account.permissionDetail}
-              onClick={() => navigate(Path.AccountPermissions)}
-            />
-            <AccountMenuItem
-              icon={<ReloadIcon />}
-              title={text.account.version}
-              detail={`${text.account.currentVersion} ${currentVersion}`}
-              onClick={() => navigate(Path.AccountUpdate)}
-            />
-            <AccountMenuItem
-              icon={<CopyIcon />}
-              title={text.account.feedback}
-              detail={text.account.feedback}
-              onClick={() => navigate(Path.AccountFeedback)}
-            />
-            <AccountMenuItem
-              icon={<ShareIcon />}
-              title={text.account.support}
-              detail={
-                supportLines.length
-                  ? text.account.synced
-                  : text.account.waitingSync
-              }
-              onClick={() => navigate(Path.AccountSupport)}
-            />
-            {isAdmin && (
-              <AccountMenuItem
-                icon={<SettingsIcon />}
-                title={text.account.adminCenter}
-                detail={text.account.adminRecognized}
-                onClick={() => navigate(Path.AccountAdmin)}
-              />
-            )}
-          </div>
-        </section>
       </details>
 
       {accountData.error && !accountData.updatedAt && (
@@ -19255,7 +26215,7 @@ function AndroidAccountSettings() {
       </button>
 
       {showLogoutConfirm && (
-        <div className={styles["sheet-mask"]}>
+        <div className={styles["sheet-mask"]} role="dialog" aria-modal="true">
           <div className={styles["confirm-dialog"]}>
             <h2>{text.account.logoutConfirmTitle}</h2>
             <p>{text.account.logoutConfirmBody}</p>
@@ -19288,10 +26248,12 @@ function AndroidAccountSettings() {
 function useMobileCrashLog() {
   useEffect(() => {
     function record(type: string, detail: unknown) {
+      const error = detail instanceof Error ? detail : null;
+      const message = error?.message || String(detail);
       const line = JSON.stringify({
         at: new Date().toISOString(),
         type,
-        detail: detail instanceof Error ? detail.message : String(detail),
+        detail: message,
       });
       const key = accountStorageKey(CRASH_LOG_STORAGE_KEY);
       const previous = localStorage.getItem(key) || "";
@@ -19299,6 +26261,11 @@ function useMobileCrashLog() {
         key,
         [line, previous].filter(Boolean).join("\n").slice(0, 6000),
       );
+      void recordNativeCrashlyticsException({
+        category: type,
+        message,
+        stack: error?.stack,
+      }).catch(() => undefined);
     }
     const onError = (event: ErrorEvent) =>
       record("error", event.error || event.message);
@@ -19320,6 +26287,7 @@ function AndroidGlobalUpdatePrompt() {
   const [manifest, setManifest] = useState<AndroidUpdateManifest>();
   const [visible, setVisible] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadError, setDownloadError] = useState("");
   const pollRef = useRef<number | null>(null);
   const currentVersion = formatAndroidReleaseVersion(
@@ -19331,6 +26299,7 @@ function AndroidGlobalUpdatePrompt() {
   const updateDecision = evaluateAndroidUpdate(installedRelease, manifest);
   const required = updateDecision.required;
   const hasUpdate = updateDecision.hasUpdate;
+  const playDistribution = isPlayDistribution(installedRelease);
   const apkUrl = resolveAndroidUrl(
     manifest?.apkUrl || manifest?.androidApkUrl || manifest?.url || "",
     clientConfig,
@@ -19343,6 +26312,7 @@ function AndroidGlobalUpdatePrompt() {
         localStorage.getItem(UPDATE_CHECKED_AT_STORAGE_KEY) || 0,
       );
       if (
+        playDistribution ||
         !installedRelease.loaded ||
         now - checkedAt < UPDATE_CHECK_INTERVAL_MS
       )
@@ -19389,7 +26359,7 @@ function AndroidGlobalUpdatePrompt() {
       document.removeEventListener("visibilitychange", onResume);
       window.removeEventListener("jisudeng-native-resume", onResume);
     };
-  }, [clientConfig, installedRelease]);
+  }, [clientConfig, installedRelease, playDistribution]);
 
   useEffect(
     () => () => {
@@ -19401,6 +26371,7 @@ function AndroidGlobalUpdatePrompt() {
   async function downloadUpdate() {
     if (!apkUrl || downloading) return;
     setDownloading(true);
+    setDownloadProgress(0);
     setDownloadError("");
     try {
       const result = await startNativeDownload(
@@ -19409,12 +26380,14 @@ function AndroidGlobalUpdatePrompt() {
         "JisudengChat Android",
       );
       if (!result.id) {
+        setDownloadProgress(100);
         await installDownloadedApk(undefined, result.path, manifest?.sha256);
         setDownloading(false);
         return;
       }
       pollRef.current = window.setInterval(async () => {
         const status = await getNativeDownloadStatus(String(result.id));
+        setDownloadProgress(Math.round(status.progress || 0));
         if (status.status !== "success" && status.status !== "failed") return;
         if (pollRef.current) window.clearInterval(pollRef.current);
         pollRef.current = null;
@@ -19445,15 +26418,15 @@ function AndroidGlobalUpdatePrompt() {
     }
   }
 
-  if (!visible || (!hasUpdate && !required)) return null;
+  if (playDistribution || !visible || (!hasUpdate && !required)) return null;
   return (
     <div className={styles["sheet-mask"]} role="dialog" aria-modal="true">
       <div className={styles["confirm-dialog"]}>
         <h2>{text.account.updateFound}</h2>
         <p>{`${text.account.installed} ${currentVersion} · ${text.account.latestVersion} ${latestVersion}`}</p>
-        {manifestNotes(manifest).length > 0 && (
+        {manifestNotes(manifest, text).length > 0 && (
           <ul>
-            {manifestNotes(manifest)
+            {manifestNotes(manifest, text)
               .slice(0, 4)
               .map((note) => (
                 <li key={note}>{note}</li>
@@ -19461,7 +26434,19 @@ function AndroidGlobalUpdatePrompt() {
           </ul>
         )}
         {downloadError && (
-          <div className={styles["form-error"]}>{downloadError}</div>
+          <div className={styles["form-error"]} role="alert">
+            {downloadError}
+          </div>
+        )}
+        {downloading && (
+          <div
+            className={styles["download-progress"]}
+            role="status"
+            aria-live="polite"
+          >
+            <progress value={downloadProgress} max={100} />
+            <span>{text.account.downloading(downloadProgress)}</span>
+          </div>
         )}
         <div className={styles["inline-actions"]}>
           {!required && (
@@ -19486,7 +26471,7 @@ function AndroidGlobalUpdatePrompt() {
             <DownloadIcon />
             <span>
               {downloading
-                ? text.account.downloading(0)
+                ? text.account.downloading(downloadProgress)
                 : text.account.downloadUpdate}
             </span>
           </button>
@@ -19521,6 +26506,116 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   );
 
   useMobileCrashLog();
+
+  // Warm the account-scoped material cache when the app becomes active. The
+  // sync endpoint returns only metadata deltas and a 304 when nothing changed;
+  // binary files are therefore downloaded once per device/account and only
+  // revalidated after an app restart or resume.
+  useEffect(() => {
+    const accountID = String(
+      managed.user?.id || managed.session?.user_id || "",
+    ).trim();
+    // The domestic release owns the server material library. Keep the Play
+    // distribution isolated until its separate asset/policy contract is
+    // explicitly enabled; it must not silently start downloading domestic
+    // library data after an account login.
+    if (
+      !accountID ||
+      !managed.accessToken ||
+      !backendBaseUrl ||
+      isPlayDistribution(installedRelease)
+    ) {
+      return;
+    }
+    const sync = () => {
+      if (document.visibilityState !== "visible") return;
+      void syncLocalMaterials(
+        accountID,
+        backendBaseUrl,
+        useManagedNextChatStore.getState().accessToken,
+      ).catch(() => undefined);
+    };
+    sync();
+    window.addEventListener("jisudeng-native-resume", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("jisudeng-native-resume", sync);
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [
+    backendBaseUrl,
+    installedRelease,
+    managed.accessToken,
+    managed.session?.user_id,
+    managed.user?.id,
+  ]);
+
+  // Prompt covers and text follow the same account-scoped local-cache policy
+  // as user materials. Warm both catalogs after login; subsequent resumes only
+  // perform the small manifest/ETag probe and fetch changed entries.
+  useEffect(() => {
+    const accountID = String(
+      managed.user?.id || managed.session?.user_id || "",
+    ).trim();
+    if (
+      !accountID ||
+      !managed.accessToken ||
+      !backendBaseUrl ||
+      isPlayDistribution(installedRelease)
+    ) {
+      return;
+    }
+    const appLocale = mobileTextLocale(text);
+    const locale =
+      appLocale === "cn"
+        ? "zh"
+        : appLocale === "jp"
+        ? "ja"
+        : appLocale === "ko"
+        ? "ko"
+        : "en";
+    const sync = () => {
+      if (document.visibilityState !== "visible") return;
+      const token = useManagedNextChatStore.getState().accessToken;
+      if (!token) return;
+      void Promise.all(
+        (["image", "video"] as const).map((kind) =>
+          syncLocalPromptCatalog(
+            accountID,
+            locale,
+            kind,
+            backendBaseUrl,
+            token,
+            undefined,
+            // Both creation modes share the published Creation Space prompt
+            // mirror. Keep this warm-up source identical to the video page so
+            // a first login downloads the actual video inspiration cards and
+            // every later resume can use the same manifest/ETag delta.
+            "canvas",
+          ),
+        ),
+      ).catch(() => undefined);
+    };
+    sync();
+    window.addEventListener("jisudeng-native-resume", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("jisudeng-native-resume", sync);
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [
+    backendBaseUrl,
+    installedRelease,
+    managed.accessToken,
+    managed.session?.user_id,
+    managed.user?.id,
+    text,
+  ]);
+
+  useEffect(() => {
+    const userId = managed.user?.id || managed.session?.user_id;
+    void configureNativeCrashlyticsUser(userId).catch(() => undefined);
+  }, [managed.session?.user_id, managed.user?.id]);
 
   useEffect(() => {
     if (!backendBaseUrl || !installedRelease.name) return;
@@ -19697,7 +26792,8 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
         current.accessToken &&
         (!current.workspace ||
           shouldRefreshManagedSession(current.session) ||
-          shouldRefreshManagedSession(current.imageSession))
+          shouldRefreshManagedSession(current.imageSession) ||
+          shouldRefreshManagedSession(current.videoSession))
       ) {
         await current
           .bootstrap({ silent: Boolean(current.workspace) })
@@ -19733,6 +26829,51 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   }, [managed, navigate, text]);
 
   useEffect(() => {
+    function onPushOpen(event: Event) {
+      const detail = ((event as CustomEvent).detail || {}) as {
+        eventType?: string;
+        sourceType?: string;
+        sourceId?: string;
+        kind?: string;
+        status?: string;
+      };
+      const eventType = String(detail.eventType || "").toLowerCase();
+      const sourceType = String(detail.sourceType || "").toLowerCase();
+      const sourceId = String(detail.sourceId || "").trim();
+      const kind = String(detail.kind || "").toLowerCase();
+      if (sourceType === "mobile_feedback" || eventType.includes("support")) {
+        navigate(
+          sourceId
+            ? `${Path.AccountFeedbackDetail}?ticket=${encodeURIComponent(
+                sourceId,
+              )}`
+            : Path.AccountFeedback,
+        );
+        return;
+      }
+      if (sourceType === "mobile_task" || eventType.startsWith("task.")) {
+        if (kind === "image") {
+          navigate(Path.Sd);
+          return;
+        }
+        if (kind === "chat") {
+          navigate(Path.Chat);
+          return;
+        }
+        navigate(Path.Activity, { state: { view: "tasks" } });
+        return;
+      }
+      if (sourceType === "payment" || eventType.includes("payment")) {
+        navigate(Path.AccountOrders);
+        return;
+      }
+      navigate(Path.Activity, { state: { view: "notifications" } });
+    }
+    window.addEventListener("jisudeng:push-open", onPushOpen);
+    return () => window.removeEventListener("jisudeng:push-open", onPushOpen);
+  }, [navigate]);
+
+  useEffect(() => {
     if (
       managed._hasHydrated &&
       backendBaseUrl &&
@@ -19744,79 +26885,15 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   }, [managed._hasHydrated, managed.backendBaseUrl, backendBaseUrl]);
 
   useEffect(() => {
-    if (!managed._hasHydrated || !backendBaseUrl || !installedRelease.name)
-      return;
-    const appVersion = installedRelease.name;
-    const reportOpen = () => {
-      void reportMobileAttributionEvent({
-        baseUrl: backendBaseUrl,
-        eventType: "open",
-        appVersion,
-        locale: text.dateLocale,
-        metadata: { surface: "android_app" },
-      });
-    };
-    reportOpen();
-    const onResume = () => {
-      if (document.visibilityState === "visible") reportOpen();
-    };
-    document.addEventListener("visibilitychange", onResume);
-    window.addEventListener("jisudeng-native-resume", reportOpen);
-    return () => {
-      document.removeEventListener("visibilitychange", onResume);
-      window.removeEventListener("jisudeng-native-resume", reportOpen);
-    };
-  }, [
-    managed._hasHydrated,
-    backendBaseUrl,
-    installedRelease.name,
-    text.dateLocale,
-  ]);
-
-  useEffect(() => {
-    if (
-      !managed.accessToken ||
-      !managed.backendBaseUrl ||
-      !installedRelease.name
-    )
-      return;
-    const appVersion = installedRelease.name;
-    const userScope = managed.user?.id || managed.session?.user_id;
-    if (!userScope) return;
-    void reportMobileAttributionEvent({
-      baseUrl: managed.backendBaseUrl,
-      eventType: "login",
-      appVersion,
-      locale: text.dateLocale,
-      accessToken: managed.accessToken,
-      userScope,
-      metadata: { surface: "android_app", event_name: "login" },
-    });
-    void reportMobileAttributionEvent({
-      baseUrl: managed.backendBaseUrl,
-      eventType: "active",
-      appVersion,
-      locale: text.dateLocale,
-      accessToken: managed.accessToken,
-      userScope,
-      metadata: { surface: "android_app", event_name: "active" },
-    });
-  }, [
-    installedRelease.name,
-    managed.accessToken,
-    managed.backendBaseUrl,
-    managed.session?.user_id,
-    managed.user?.id,
-    text.dateLocale,
-  ]);
-
-  useEffect(() => {
     if (
       managed._hasHydrated &&
       backendBaseUrl &&
       managed.backendBaseUrl === backendBaseUrl &&
       managed.accessToken &&
-      (!managed.workspace || shouldRefreshManagedSession(managed.session)) &&
+      (!managed.workspace ||
+        shouldRefreshManagedSession(managed.session) ||
+        shouldRefreshManagedSession(managed.imageSession) ||
+        shouldRefreshManagedSession(managed.videoSession)) &&
       !managed.loading
     ) {
       managed.bootstrap().catch(() => {});
@@ -19847,7 +26924,8 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
         if (
           !latest.workspace ||
           shouldRefreshManagedSession(latest.session) ||
-          shouldRefreshManagedSession(latest.imageSession)
+          shouldRefreshManagedSession(latest.imageSession) ||
+          shouldRefreshManagedSession(latest.videoSession)
         ) {
           await latest
             .bootstrap({ silent: Boolean(latest.workspace) })
@@ -20028,7 +27106,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   if (location.pathname === Path.Sd || location.pathname === Path.SdNew) {
     return (
       <>
-        <AndroidImageStudio />
+        <AndroidCreationStudio />
         <AndroidGlobalUpdatePrompt />
       </>
     );
@@ -20038,6 +27116,24 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidGallery />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
+  }
+
+  if (location.pathname === Path.Activity) {
+    return (
+      <>
+        <AndroidActivityCenter />
+        <AndroidGlobalUpdatePrompt />
+      </>
+    );
+  }
+
+  if (location.pathname === Path.Projects) {
+    return (
+      <>
+        <AndroidProjects />
         <AndroidGlobalUpdatePrompt />
       </>
     );

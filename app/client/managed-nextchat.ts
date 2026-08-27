@@ -101,7 +101,10 @@ export interface ManagedSession {
   api_key: string;
   api_key_id: number;
   expires_at?: string;
-  purpose?: "chat" | "image";
+  purpose?: "chat" | "image" | "video";
+  /** Present only on an immutable purpose/group replacement session. */
+  group_id?: number;
+  binding?: string;
 }
 
 export function shouldRefreshManagedSession(
@@ -129,6 +132,70 @@ export interface ManagedWorkspaceAPIKey {
   group_platform?: string;
 }
 
+/**
+ * Server-owned media classifications. A workspace model can intentionally
+ * belong to more than one modality (for example, chat plus image input), so
+ * callers must not infer an exclusive mode from its name.
+ */
+export type ManagedModelModality = "chat" | "image" | "video" | "audio";
+
+/**
+ * The public, server-owned image contract. Keep this aligned with
+ * `ModelImageCapabilities` on the platform instead of deriving constraints
+ * from a provider or model name in a managed client.
+ */
+export interface ManagedImageCapabilities {
+  operations?: string[];
+  sizing_kind?: string;
+  supported_sizes?: string[];
+  supported_ratios?: string[];
+  supported_formats?: string[];
+  min_dimension?: number;
+  max_dimension?: number;
+  dimension_step?: number;
+  max_aspect_ratio?: number;
+  max_reference_images?: number;
+  max_outputs_per_job?: number;
+  recommended_parallelism?: number;
+  max_queued_outputs?: number;
+}
+
+/**
+ * The public, server-owned video contract. The `resolutions`/`ratios`/
+ * `durations` aliases are retained only while talking to a pre-contract
+ * mobile endpoint; current platform responses use the supported_* fields.
+ */
+export interface ManagedVideoCapabilities {
+  operations?: string[];
+  text_to_video?: boolean;
+  image_to_video?: boolean;
+  video_reference?: boolean;
+  audio_reference?: boolean;
+  resolutions?: string[];
+  ratios?: string[];
+  durations?: number[];
+  generate_audio?: boolean;
+  watermark?: boolean;
+  supported_resolutions?: string[];
+  supported_ratios?: string[];
+  supported_durations?: number[];
+  max_reference_assets?: number;
+  max_reference_images?: number;
+  max_reference_videos?: number;
+  max_reference_audios?: number;
+}
+
+/**
+ * A server-owned reason why a model that is otherwise visible in a group is
+ * not executable for a particular media purpose. The code is deliberately
+ * kept opaque here: UI layers localize known codes while retaining unknown
+ * future codes for diagnostics and safe fallback handling.
+ */
+export interface ManagedVideoSuppressedModel {
+  model: string;
+  code: string;
+}
+
 export interface ManagedWorkspaceModel {
   id: string;
   name: string;
@@ -136,6 +203,11 @@ export interface ManagedWorkspaceModel {
   platform?: string;
   channel?: string;
   use_case?: string;
+  /** Authoritative model modality contract supplied by the platform. */
+  modalities?: ManagedModelModality[];
+  /** Execution adapter and schema revision required for a runnable media model. */
+  adapter?: string;
+  capability_version?: string;
   sort_order?: number;
   effective_input_price?: number;
   effective_output_price?: number;
@@ -145,26 +217,74 @@ export interface ManagedWorkspaceModel {
     web_search?: boolean;
     live?: boolean;
   };
-  image_capabilities?: {
-    operations?: string[];
-    supported_sizes?: string[];
-    max_reference_images?: number;
-    max_outputs_per_job?: number;
-    recommended_parallelism?: number;
-    max_queued_outputs?: number;
-  };
+  image_capabilities?: ManagedImageCapabilities;
+  video_capabilities?: ManagedVideoCapabilities;
+}
+
+/**
+ * Model IDs are the only values that may cross a managed gateway boundary.
+ * `name` existed before the media contract and can be a human-facing label on
+ * older responses, so callers use it only as a compatibility fallback.
+ */
+export function managedWorkspaceModelID(
+  model?: Pick<ManagedWorkspaceModel, "id" | "name"> | null,
+) {
+  return String(model?.id || model?.name || "").trim();
+}
+
+/** Match old persisted model labels without ever sending them as a new request. */
+export function managedWorkspaceModelMatches(
+  model:
+    | Pick<ManagedWorkspaceModel, "id" | "name" | "display_name">
+    | null
+    | undefined,
+  value: string | null | undefined,
+) {
+  const candidate = String(value || "").trim();
+  if (!candidate) return false;
+  return [
+    managedWorkspaceModelID(model),
+    String(model?.name || "").trim(),
+    String(model?.display_name || "").trim(),
+  ].some((known) => known === candidate);
 }
 
 export interface ManagedWorkspaceGroup {
   id: number;
   name: string;
+  name_zh?: string;
+  name_en?: string;
+  name_ja?: string;
+  name_jp?: string;
+  name_ko?: string;
+  localized?: {
+    name?: Record<string, string | undefined>;
+    zh?: string;
+    en?: string;
+    ja?: string;
+    jp?: string;
+    ko?: string;
+  };
   description?: string;
   platform?: string;
+  /** Optional group-level capability summary for an empty or legacy model list. */
+  modalities?: ManagedModelModality[];
   rate_multiplier?: number;
   sort_order?: number;
   is_current?: boolean;
   /** Server-declared group authorization for the managed /v1/live gateway. */
   live_available?: boolean;
+  video_available?: boolean;
+  video_unavailable_code?: string;
+  /**
+   * A root media-contract marker copied onto normalized mobile-video groups.
+   * It prevents a caller that only retains a group from re-enabling legacy
+   * model-name inference after the server has declared capabilities.
+   */
+  media_contract_version?: string;
+  /** Diagnostics returned by the dedicated mobile-video bootstrap. */
+  video_suppressed?: ManagedVideoSuppressedModel[];
+  video_capabilities?: ManagedVideoCapabilities;
   models?: ManagedWorkspaceModel[];
 }
 
@@ -172,6 +292,7 @@ export interface ManagedWorkspaceModels {
   source?: string;
   default_model?: string;
   image_capabilities_version?: string;
+  video_capabilities_version?: string;
   selected_group_id?: number;
   groups?: ManagedWorkspaceGroup[];
 }
@@ -187,6 +308,7 @@ export interface ManagedWorkspaceBootstrap {
   features?: {
     chat?: boolean;
     image_studio?: boolean;
+    video_studio?: boolean;
     prompts?: boolean;
     history_export?: boolean;
     cloud_sync?: boolean;
@@ -208,18 +330,106 @@ export interface ManagedWorkspaceBootstrap {
   managed_api_keys?: {
     chat?: ManagedWorkspaceAPIKey;
     image?: ManagedWorkspaceAPIKey;
+    video?: ManagedWorkspaceAPIKey;
   };
   workspaces?: {
     chat?: { models?: ManagedWorkspaceModels };
     image?: { models?: ManagedWorkspaceModels };
+    video?: { models?: ManagedWorkspaceModels };
   };
 }
 
 export interface ManagedMobileBootstrap extends ManagedWorkspaceBootstrap {
   session: ManagedSession;
+  /** Set only by a server that returned a purpose/group-pinned replacement. */
+  session_binding?: string;
   sessions?: {
     chat?: ManagedSession;
     image?: ManagedSession;
+    video?: ManagedSession;
+  };
+}
+
+function normalizeManagedWorkspaceModel(
+  model: ManagedWorkspaceModel,
+): ManagedWorkspaceModel {
+  const id = managedWorkspaceModelID(model);
+  if (!id) return model;
+  const legacyName = String(model.name || "").trim();
+  const displayName = String(
+    model.display_name || (legacyName && legacyName !== id ? legacyName : ""),
+  ).trim();
+  return {
+    ...model,
+    id,
+    name: id,
+    ...(displayName ? { display_name: displayName } : {}),
+  };
+}
+
+function normalizeManagedWorkspaceModels(
+  models?: ManagedWorkspaceModels,
+): ManagedWorkspaceModels | undefined {
+  if (!models) return undefined;
+  const groups = (models.groups || []).map((group) => ({
+    ...group,
+    models: (group.models || []).map(normalizeManagedWorkspaceModel),
+  }));
+  const defaultModel = String(models.default_model || "").trim();
+  const canonicalDefault = groups
+    .flatMap((group) => group.models || [])
+    .find((model) => managedWorkspaceModelMatches(model, defaultModel));
+  return {
+    ...models,
+    ...(canonicalDefault
+      ? { default_model: managedWorkspaceModelID(canonicalDefault) }
+      : {}),
+    groups,
+  };
+}
+
+/**
+ * Normalize older managed payloads at the trust boundary. A provider ID stays
+ * in `id`/`name`; a human label becomes `display_name` before any selector,
+ * preference, or API request sees it.
+ */
+export function normalizeManagedMobileBootstrap(
+  bootstrap: ManagedMobileBootstrap,
+): ManagedMobileBootstrap {
+  const models = normalizeManagedWorkspaceModels(bootstrap.models);
+  const workspaces = bootstrap.workspaces
+    ? {
+        ...bootstrap.workspaces,
+        chat: bootstrap.workspaces.chat
+          ? {
+              ...bootstrap.workspaces.chat,
+              models: normalizeManagedWorkspaceModels(
+                bootstrap.workspaces.chat.models,
+              ),
+            }
+          : undefined,
+        image: bootstrap.workspaces.image
+          ? {
+              ...bootstrap.workspaces.image,
+              models: normalizeManagedWorkspaceModels(
+                bootstrap.workspaces.image.models,
+              ),
+            }
+          : undefined,
+        video: bootstrap.workspaces.video
+          ? {
+              ...bootstrap.workspaces.video,
+              models: normalizeManagedWorkspaceModels(
+                bootstrap.workspaces.video.models,
+              ),
+            }
+          : undefined,
+      }
+    : undefined;
+  return {
+    ...bootstrap,
+    ...(models ? { models } : {}),
+    ...(workspaces ? { workspaces } : {}),
   };
 }
 
@@ -809,6 +1019,10 @@ export async function managedRequestText(
       const res = await fetch(url, {
         ...init,
         headers,
+        // The material/prompt sync callers use ETag themselves. Do not let a
+        // WebView cache answer an activation without asking the server for
+        // the current manifest; unchanged bytes still remain local in IDB.
+        cache: "no-store",
       });
       return {
         ok: res.ok,
@@ -913,6 +1127,60 @@ export async function managedJsonRequest<T>(
   return payload.data as T;
 }
 
+/** Download an authenticated binary from the managed backend. This is used
+ * for private mobile video results because a HTMLMediaElement cannot attach
+ * the Bearer header itself. Callers own the returned object URL lifecycle. */
+export async function managedDownloadBlob(
+  baseUrl: string,
+  path: string,
+  accessToken: string,
+  signal?: AbortSignal,
+) {
+  const target = /^https?:\/\//i.test(path)
+    ? path
+    : managedApiUrl(baseUrl, path);
+  const headers: Record<string, string> = {
+    // The same authenticated helper is used for video results and the
+    // account-scoped material library (images, audio, documents, and video).
+    // Do not advertise only video here or a content-negotiating object store
+    // may return the wrong representation for non-video materials.
+    Accept: "*/*",
+  };
+  // Never forward the managed account token to a provider-owned host. Mobile
+  // results are expected to use the authenticated relative content endpoint;
+  // an absolute URL is only safe when it is already a same-origin backend URL.
+  if (!/^https?:\/\//i.test(path)) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  } else {
+    try {
+      if (
+        new URL(target).origin ===
+        new URL(normalizeManagedBaseUrl(baseUrl)).origin
+      ) {
+        headers.Authorization = `Bearer ${accessToken}`;
+      }
+    } catch {
+      // Invalid external URLs will be rejected by fetch without credentials.
+    }
+  }
+  const response = await fetch(target, {
+    method: "GET",
+    headers,
+    signal,
+  });
+  if (!response.ok) {
+    throw new ManagedApiError(
+      `managed binary request failed: HTTP ${response.status}`,
+      response.status,
+      path,
+      undefined,
+      "unknown",
+      "http",
+    );
+  }
+  return response.blob();
+}
+
 export function loginManagedUser(
   baseUrl: string,
   email: string,
@@ -984,7 +1252,7 @@ export function getManagedMobileBootstrap(
     "/api/v1/nextchat/mobile/bootstrap",
     { method: "GET" },
     accessToken,
-  );
+  ).then(normalizeManagedMobileBootstrap);
 }
 
 export function switchManagedMobileGroup(
@@ -1002,13 +1270,13 @@ export function switchManagedMobileGroup(
       }),
     },
     accessToken,
-  );
+  ).then(normalizeManagedMobileBootstrap);
 }
 
 export function switchManagedMobileSessionGroup(
   baseUrl: string,
   accessToken: string,
-  purpose: "chat" | "image",
+  purpose: "chat" | "image" | "video",
   groupID: number,
 ) {
   return managedJsonRequest<ManagedMobileBootstrap>(
@@ -1019,16 +1287,16 @@ export function switchManagedMobileSessionGroup(
       body: JSON.stringify({ group_id: groupID }),
     },
     accessToken,
-  );
+  ).then(normalizeManagedMobileBootstrap);
 }
 
 export function switchManagedMobileSessionGroupV1(
   baseUrl: string,
   accessToken: string,
-  purpose: "chat" | "image",
+  purpose: "chat" | "image" | "video",
   groupID: number,
 ) {
-  return managedJsonRequest<unknown>(
+  return managedJsonRequest<ManagedMobileBootstrap>(
     baseUrl,
     `/api/v1/mobile/sessions/${purpose}/switch-group`,
     {
@@ -1036,7 +1304,7 @@ export function switchManagedMobileSessionGroupV1(
       body: JSON.stringify({ group_id: groupID }),
     },
     accessToken,
-  );
+  ).then(normalizeManagedMobileBootstrap);
 }
 
 export async function switchManagedImageGroupCompatible(
@@ -1045,26 +1313,24 @@ export async function switchManagedImageGroupCompatible(
   groupID: number,
 ) {
   try {
-    await switchManagedMobileSessionGroupV1(
+    return await switchManagedMobileSessionGroupV1(
       baseUrl,
       accessToken,
       "image",
       groupID,
     );
-    return null;
   } catch (error) {
     if (!(error instanceof ManagedApiError) || error.status !== 404) {
       throw error;
     }
   }
   try {
-    await switchManagedMobileSessionGroup(
+    return await switchManagedMobileSessionGroup(
       baseUrl,
       accessToken,
       "image",
       groupID,
     );
-    return null;
   } catch (error) {
     if (!(error instanceof ManagedApiError) || error.status !== 404) {
       throw error;
@@ -1079,32 +1345,76 @@ export async function switchManagedChatGroupCompatible(
   groupID: number,
 ) {
   try {
-    await switchManagedMobileSessionGroupV1(
+    return await switchManagedMobileSessionGroupV1(
       baseUrl,
       accessToken,
       "chat",
       groupID,
     );
-    return null;
   } catch (error) {
     if (!(error instanceof ManagedApiError) || error.status !== 404) {
       throw error;
     }
   }
   try {
-    await switchManagedMobileSessionGroup(
+    return await switchManagedMobileSessionGroup(
       baseUrl,
       accessToken,
       "chat",
       groupID,
     );
-    return null;
   } catch (error) {
     if (!(error instanceof ManagedApiError) || error.status !== 404) {
       throw error;
     }
     return switchManagedMobileGroup(baseUrl, accessToken, groupID);
   }
+}
+
+export async function switchManagedVideoGroupCompatible(
+  baseUrl: string,
+  accessToken: string,
+  groupID: number,
+) {
+  try {
+    return await switchManagedMobileSessionGroupV1(
+      baseUrl,
+      accessToken,
+      "video",
+      groupID,
+    );
+  } catch (error) {
+    if (!(error instanceof ManagedApiError) || error.status !== 404)
+      throw error;
+  }
+  return switchManagedMobileSessionGroup(
+    baseUrl,
+    accessToken,
+    "video",
+    groupID,
+  );
+}
+
+/**
+ * A response is eligible for immediate application only when the server has
+ * proved that the target purpose now uses a replacement key pinned to the
+ * requested group. Older command responses are deliberately re-bootstrapped
+ * rather than allowed to overwrite the other media sessions.
+ */
+export function isGroupPinnedManagedSessionSwitch(
+  bootstrap: ManagedMobileBootstrap | null | undefined,
+  purpose: "chat" | "image" | "video",
+  groupID: number,
+) {
+  const session = bootstrap?.sessions?.[purpose];
+  return Boolean(
+    bootstrap?.session_binding === "group-pinned-v1" &&
+      session?.binding === "group-pinned-v1" &&
+      session?.purpose === purpose &&
+      session?.group_id === groupID &&
+      session.api_key &&
+      session.api_key_id > 0,
+  );
 }
 
 export function flattenManagedModels(
@@ -1115,7 +1425,7 @@ export function flattenManagedModels(
   groups.forEach((group, groupIndex) => {
     (group.models ?? []).forEach((model, modelIndex) => {
       models.push({
-        name: model.name || model.id,
+        name: managedWorkspaceModelID(model),
         displayName: model.display_name || model.name || model.id,
         available: true,
         sorted: model.sort_order ?? groupIndex * 100 + modelIndex,
@@ -1142,5 +1452,5 @@ export function pickManagedDefaultModel(
   );
   const firstModel =
     currentGroup?.models?.[0] ?? workspaceModels?.groups?.[0]?.models?.[0];
-  return firstModel?.name || firstModel?.id || "gpt-4o-mini";
+  return managedWorkspaceModelID(firstModel) || "gpt-4o-mini";
 }

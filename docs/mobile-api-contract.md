@@ -310,7 +310,11 @@ Response data:
 
 ### `GET /api/v1/mobile/tasks`
 
-Query: `kind`, `operation`, `status`, `skill_id`, `asset_id`, `cursor`, `limit`, `order`.
+Query: `kind`, `status`, `query`, `date_from`, `date_to`, `cursor`, `limit`, `order`.
+
+`cursor` is opaque and stable on `(created_at,id)`. During the compatibility
+window the APP also sends `page/page_size`, but new clients must continue from
+`next_cursor` and use `has_more`.
 
 ### `GET /api/v1/mobile/tasks/{id}`
 
@@ -347,6 +351,17 @@ Used by APP as a transitional status projection when backend orchestration is no
 ### `DELETE /api/v1/mobile/tasks/{id}`
 
 Soft-delete one task from the user's history. Do not delete billing/audit records.
+
+### `POST /api/v1/mobile/tasks/bulk-delete`
+
+Requires matching `client_request_id`, `X-Client-Request-ID`, and
+`Idempotency-Key`. Accepts at most 100 task IDs. Only terminal tasks are soft
+deleted. Each result is `deleted`, `not_found`, `not_terminal`, or `failed`.
+
+### `POST /api/v1/mobile/tasks/bulk-cancel`
+
+Uses the same request and idempotency contract. Each result is `cancelled`,
+`not_found`, `not_cancellable`, or `failed`.
 
 ## Image History
 

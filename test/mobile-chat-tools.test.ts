@@ -10,28 +10,55 @@ import {
 describe("mobile model-driven web search tools", () => {
   test("accumulates streamed answer text and fragmented tool arguments", () => {
     const deltas: string[] = [];
-    const accumulator = createMobileCompletionStreamAccumulator((delta) => deltas.push(delta));
+    const accumulator = createMobileCompletionStreamAccumulator((delta) =>
+      deltas.push(delta),
+    );
     accumulator.ingest({ choices: [{ delta: { content: "答案" } }] });
-    accumulator.ingest({ choices: [{ delta: { tool_calls: [
-      { index: 0, id: "call-stream", function: { name: "web_search", arguments: '{"query":"tod' } },
-    ] } }] });
-    accumulator.ingest({ choices: [{ delta: { tool_calls: [
-      { index: 0, function: { arguments: 'ay"}' } },
-    ] } }] });
+    accumulator.ingest({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call-stream",
+                function: { name: "web_search", arguments: '{"query":"tod' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    accumulator.ingest({
+      choices: [
+        {
+          delta: {
+            tool_calls: [{ index: 0, function: { arguments: 'ay"}' } }],
+          },
+        },
+      ],
+    });
 
     expect(deltas).toEqual(["答案"]);
     expect(accumulator.payload()).toEqual({
-      choices: [{
-        message: {
-          role: "assistant",
-          content: "答案",
-          tool_calls: [{
-            id: "call-stream",
-            type: "function",
-            function: { name: "web_search", arguments: '{"query":"today"}' },
-          }],
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "答案",
+            tool_calls: [
+              {
+                id: "call-stream",
+                type: "function",
+                function: {
+                  name: "web_search",
+                  arguments: '{"query":"today"}',
+                },
+              },
+            ],
+          },
         },
-      }],
+      ],
     });
   });
 
@@ -64,7 +91,11 @@ describe("mobile model-driven web search tools", () => {
             ],
           };
         }
-        return { choices: [{ message: { role: "assistant", content: "已查到结果。" } }] };
+        return {
+          choices: [
+            { message: { role: "assistant", content: "已查到结果。" } },
+          ],
+        };
       },
       search: async (query, toolCallId) => {
         searches.push(`${toolCallId}:${query}`);
@@ -73,7 +104,13 @@ describe("mobile model-driven web search tools", () => {
           provider: "exa",
           request_id: "search-1",
           tool_call_id: toolCallId,
-          results: [{ title: "Release", url: "https://example.com/release", snippet: "New release" }],
+          results: [
+            {
+              title: "Release",
+              url: "https://example.com/release",
+              snippet: "New release",
+            },
+          ],
         };
       },
     });
@@ -87,6 +124,12 @@ describe("mobile model-driven web search tools", () => {
     ]);
     expect(formatMobileWebSearchSources(result.sources, "zh-CN")).toContain(
       "exa · search-1",
+    );
+    expect(formatMobileWebSearchSources(result.sources, "ja-JP")).toContain(
+      "ウェブの出典",
+    );
+    expect(formatMobileWebSearchSources(result.sources, "ko-KR")).toContain(
+      "웹 출처",
     );
   });
 
@@ -125,7 +168,10 @@ describe("mobile model-driven web search tools", () => {
                     {
                       id: "call-fail",
                       type: "function",
-                      function: { name: "web_search", arguments: '{"query":"status"}' },
+                      function: {
+                        name: "web_search",
+                        arguments: '{"query":"status"}',
+                      },
                     },
                   ],
                 },
@@ -133,7 +179,13 @@ describe("mobile model-driven web search tools", () => {
             ],
           };
         }
-        return { choices: [{ message: { role: "assistant", content: "Search is unavailable." } }] };
+        return {
+          choices: [
+            {
+              message: { role: "assistant", content: "Search is unavailable." },
+            },
+          ],
+        };
       },
       search: async () => {
         throw new Error("HTTP 502 upstream busy request req-42");
@@ -141,7 +193,45 @@ describe("mobile model-driven web search tools", () => {
     });
 
     expect(requestBodies).toHaveLength(2);
-    expect(JSON.stringify(requestBodies[1])).toContain("HTTP 502 upstream busy request req-42");
+    expect(JSON.stringify(requestBodies[1])).toContain(
+      "HTTP 502 upstream busy request req-42",
+    );
     expect(result.content).toBe("Search is unavailable.");
+  });
+
+  test("does not expose the internal tool-call limit in user-facing errors", async () => {
+    await expect(
+      runMobileWebSearchToolLoop({
+        messages: [{ role: "user", content: "search" }],
+        locale: "zh-CN",
+        maxRounds: 1,
+        requestCompletion: async () => ({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    id: "call-limit",
+                    type: "function",
+                    function: {
+                      name: "web_search",
+                      arguments: '{"query":"status"}',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        search: async () => ({
+          query: "status",
+          provider: "exa",
+          request_id: "search-limit",
+          tool_call_id: "call-limit",
+          results: [],
+        }),
+      }),
+    ).rejects.toThrow("联网搜索暂时不可用，请稍后重试。");
   });
 });

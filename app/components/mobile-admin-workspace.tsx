@@ -56,7 +56,10 @@ import {
   formatManagedMobileError,
   localizeManagedMobileError,
 } from "../client/managed-mobile-i18n";
-import type { ManagedMobileText } from "../client/managed-mobile-i18n";
+import type {
+  ManagedMobileLocale,
+  ManagedMobileText,
+} from "../client/managed-mobile-i18n";
 import { openExternalUrl } from "../client/android-native";
 import { isMobileAdminComplianceAvailable } from "../client/mobile-capabilities";
 
@@ -146,45 +149,93 @@ const VIEWS: AdminView[] = [
   "audit",
 ];
 
-const STATUS_LABELS: Record<string, [string, string]> = {
-  active: ["启用", "Active"],
-  enabled: ["启用", "Enabled"],
-  disabled: ["停用", "Disabled"],
-  pending: ["待处理", "Pending"],
-  paid: ["已支付", "Paid"],
-  completed: ["已完成", "Completed"],
-  failed: ["失败", "Failed"],
-  cancelled: ["已取消", "Cancelled"],
-  refunded: ["已退款", "Refunded"],
-  processing: ["处理中", "Processing"],
-  running: ["运行中", "Running"],
-  queued: ["排队中", "Queued"],
-  succeeded: ["成功", "Succeeded"],
-  rejected: ["已拒绝", "Rejected"],
+type AdminLocalizedLabel = Record<"cn" | "en", string> &
+  Partial<Record<"jp" | "ko", string>>;
+
+const STATUS_LABELS: Record<string, AdminLocalizedLabel> = {
+  active: { cn: "启用", en: "Active", jp: "有効", ko: "활성" },
+  enabled: { cn: "启用", en: "Enabled", jp: "有効", ko: "활성화" },
+  disabled: { cn: "停用", en: "Disabled", jp: "無効", ko: "비활성" },
+  pending: { cn: "待处理", en: "Pending", jp: "保留", ko: "대기" },
+  paid: { cn: "已支付", en: "Paid", jp: "支払い済み", ko: "결제 완료" },
+  completed: { cn: "已完成", en: "Completed", jp: "完了", ko: "완료" },
+  failed: { cn: "失败", en: "Failed", jp: "失敗", ko: "실패" },
+  cancelled: {
+    cn: "已取消",
+    en: "Cancelled",
+    jp: "キャンセル済み",
+    ko: "취소됨",
+  },
+  refunded: { cn: "已退款", en: "Refunded", jp: "返金済み", ko: "환불됨" },
+  processing: { cn: "处理中", en: "Processing", jp: "処理中", ko: "처리 중" },
+  running: { cn: "运行中", en: "Running", jp: "実行中", ko: "실행 중" },
+  queued: { cn: "排队中", en: "Queued", jp: "待機中", ko: "대기열" },
+  succeeded: { cn: "成功", en: "Succeeded", jp: "成功", ko: "성공" },
+  rejected: { cn: "已拒绝", en: "Rejected", jp: "拒否済み", ko: "거부됨" },
 };
 
-const FIELD_LABELS: Record<string, [string, string]> = {
-  id: ["编号", "ID"],
-  user_id: ["用户编号", "User ID"],
-  email: ["邮箱", "Email"],
-  username: ["用户名", "Username"],
-  role: ["角色", "Role"],
-  status: ["状态", "Status"],
-  balance: ["余额", "Balance"],
-  amount: ["金额", "Amount"],
-  pay_amount: ["实付金额", "Paid amount"],
-  total_amount: ["总金额", "Total amount"],
-  created_at: ["创建时间", "Created"],
-  updated_at: ["更新时间", "Updated"],
-  paid_at: ["支付时间", "Paid at"],
-  model: ["模型", "Model"],
-  model_name: ["模型名称", "Model name"],
-  group_id: ["分组编号", "Group ID"],
-  request_id: ["请求编号", "Request ID"],
-  action: ["操作", "Action"],
-  method: ["方法", "Method"],
-  path: ["路径", "Path"],
-  success: ["是否成功", "Success"],
+const FIELD_LABELS: Record<string, AdminLocalizedLabel> = {
+  id: { cn: "编号", en: "ID", jp: "ID", ko: "ID" },
+  user_id: {
+    cn: "用户编号",
+    en: "User ID",
+    jp: "ユーザー ID",
+    ko: "사용자 ID",
+  },
+  email: { cn: "邮箱", en: "Email", jp: "メール", ko: "이메일" },
+  username: {
+    cn: "用户名",
+    en: "Username",
+    jp: "ユーザー名",
+    ko: "사용자 이름",
+  },
+  role: { cn: "角色", en: "Role", jp: "ロール", ko: "역할" },
+  status: { cn: "状态", en: "Status", jp: "状態", ko: "상태" },
+  balance: { cn: "余额", en: "Balance", jp: "残高", ko: "잔액" },
+  amount: { cn: "金额", en: "Amount", jp: "金額", ko: "금액" },
+  pay_amount: {
+    cn: "实付金额",
+    en: "Paid amount",
+    jp: "支払額",
+    ko: "결제 금액",
+  },
+  total_amount: {
+    cn: "总金额",
+    en: "Total amount",
+    jp: "合計金額",
+    ko: "총액",
+  },
+  created_at: { cn: "创建时间", en: "Created", jp: "作成日時", ko: "생성됨" },
+  updated_at: {
+    cn: "更新时间",
+    en: "Updated",
+    jp: "更新日時",
+    ko: "업데이트됨",
+  },
+  paid_at: { cn: "支付时间", en: "Paid at", jp: "支払日時", ko: "결제 시각" },
+  model: { cn: "模型", en: "Model", jp: "モデル", ko: "모델" },
+  model_name: {
+    cn: "模型名称",
+    en: "Model name",
+    jp: "モデル名",
+    ko: "모델 이름",
+  },
+  group_id: {
+    cn: "分组编号",
+    en: "Group ID",
+    jp: "グループ ID",
+    ko: "그룹 ID",
+  },
+  request_id: {
+    cn: "请求编号",
+    en: "Request ID",
+    jp: "リクエスト ID",
+    ko: "요청 ID",
+  },
+  action: { cn: "操作", en: "Action", jp: "操作", ko: "작업" },
+  method: { cn: "方法", en: "Method", jp: "メソッド", ko: "방식" },
+  path: { cn: "路径", en: "Path", jp: "パス", ko: "경로" },
+  success: { cn: "是否成功", en: "Success", jp: "成功", ko: "성공" },
 };
 
 function record(value: unknown): AdminRecord {
@@ -335,6 +386,19 @@ function numberValue(value: AdminRecord, keys: string[]) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function mobileAdminLocale(text: ManagedMobileText): ManagedMobileLocale {
+  const locale = text.dateLocale.toLowerCase();
+  if (locale.startsWith("zh")) return "cn";
+  if (locale.startsWith("ja")) return "jp";
+  if (locale.startsWith("ko")) return "ko";
+  return "en";
+}
+
+function adminLabel(label: AdminLocalizedLabel, text: ManagedMobileText) {
+  const locale = mobileAdminLocale(text);
+  return label[locale] || label.en || label.cn;
+}
+
 function formatValue(value: unknown, text: ManagedMobileText) {
   if (value === null || value === undefined || value === "") return "-";
   if (typeof value === "boolean") return value ? "✓" : "-";
@@ -342,7 +406,7 @@ function formatValue(value: unknown, text: ManagedMobileText) {
   if (typeof value === "string") {
     const normalized = value.trim();
     const status = STATUS_LABELS[normalized.toLowerCase()];
-    if (status) return text.dateLocale.startsWith("zh") ? status[0] : status[1];
+    if (status) return adminLabel(status, text);
     if (/^\d{4}-\d\d-\d\d[T ]/.test(normalized)) {
       const date = new Date(normalized);
       if (!Number.isNaN(date.getTime())) {
@@ -361,7 +425,7 @@ function formatValue(value: unknown, text: ManagedMobileText) {
 
 function fieldLabel(key: string, text: ManagedMobileText) {
   const label = FIELD_LABELS[key.toLowerCase()];
-  if (label) return text.dateLocale.startsWith("zh") ? label[0] : label[1];
+  if (label) return adminLabel(label, text);
   return key.replace(/_/g, " ");
 }
 
@@ -1112,9 +1176,8 @@ export function MobileAdminWorkspace(props: {
     }
   }
 
-  const complianceLanguage = props.text.dateLocale.startsWith("zh")
-    ? "zh"
-    : "en";
+  const complianceLanguage =
+    mobileAdminLocale(props.text) === "cn" ? "zh" : "en";
   const expectedCompliancePhrase =
     complianceLanguage === "zh"
       ? compliance?.ack_phrase_zh || ""

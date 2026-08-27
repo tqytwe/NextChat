@@ -16,6 +16,10 @@ const sourceScript = path.resolve(
   process.cwd(),
   "scripts/prepare-android-web-assets.mjs",
 );
+const snapshotScript = path.resolve(
+  process.cwd(),
+  "scripts/snapshot-android-web-assets.mjs",
+);
 const temporaryRoots: string[] = [];
 
 function createFixture() {
@@ -26,6 +30,7 @@ function createFixture() {
   mkdirSync(scriptsDir, { recursive: true });
   mkdirSync(downloadsDir, { recursive: true });
   cpSync(sourceScript, path.join(scriptsDir, "prepare-android-web-assets.mjs"));
+  cpSync(snapshotScript, path.join(scriptsDir, "snapshot-android-web-assets.mjs"));
   writeFileSync(
     path.join(downloadsDir, "android-version.json"),
     '{"version":"2.0.74","versionCode":274,"sha256":"stale"}\n',
@@ -67,5 +72,35 @@ describe("Android embedded release metadata", () => {
     expect(() =>
       readFileSync(path.join(fixture.downloadsDir, "old.apk")),
     ).toThrow();
+  });
+
+  test("keeps direct and Play exports in independent snapshots", () => {
+    const fixture = createFixture();
+    mkdirSync(path.join(fixture.root, "out/assets"), { recursive: true });
+    writeFileSync(path.join(fixture.root, "out/assets/channel.txt"), "direct");
+    execFileSync(
+      process.execPath,
+      ["scripts/snapshot-android-web-assets.mjs", "direct"],
+      { cwd: fixture.root, encoding: "utf-8" },
+    );
+    writeFileSync(path.join(fixture.root, "out/assets/channel.txt"), "play");
+    execFileSync(
+      process.execPath,
+      ["scripts/snapshot-android-web-assets.mjs", "play"],
+      { cwd: fixture.root, encoding: "utf-8" },
+    );
+
+    expect(
+      readFileSync(
+        path.join(fixture.root, "dist/android/web/direct/assets/channel.txt"),
+        "utf8",
+      ),
+    ).toBe("direct");
+    expect(
+      readFileSync(
+        path.join(fixture.root, "dist/android/web/play/assets/channel.txt"),
+        "utf8",
+      ),
+    ).toBe("play");
   });
 });

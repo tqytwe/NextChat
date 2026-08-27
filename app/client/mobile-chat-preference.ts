@@ -97,11 +97,16 @@ export function resolveMobileChatPreference<Model>(input: {
   candidateModels?: string[];
   isChatModel: (model: Model) => boolean;
   modelValue: (model: Model) => string;
+  /** Allows a current contract to migrate an old display-name preference. */
+  modelMatches?: (model: Model, candidate: string) => boolean;
 }): ResolvedMobileChatPreference {
   const preference = normalizeMobileChatPreference(input.preference);
   const candidateModels = Array.from(
     new Set((input.candidateModels || []).map(cleanModel).filter(Boolean)),
   );
+  const modelMatches = (model: Model, candidate: string) =>
+    input.modelMatches?.(model, candidate) ||
+    input.modelValue(model).trim() === candidate;
   const requestedGroupId = validGroupId(input.preferredGroupId);
   const savedGroupId = preference.groupId;
   const groups = (input.groups || [])
@@ -152,9 +157,7 @@ export function resolveMobileChatPreference<Model>(input: {
   if (!target) {
     for (const candidate of migrationCandidates) {
       const matchingGroups = groups.filter((item) =>
-        item.models.some(
-          (model) => input.modelValue(model).trim() === candidate,
-        ),
+        item.models.some((model) => modelMatches(model, candidate)),
       );
       if (matchingGroups.length === 1) {
         target = matchingGroups[0];
@@ -178,15 +181,15 @@ export function resolveMobileChatPreference<Model>(input: {
       ].filter(Boolean),
     ),
   );
-  const model = candidates.find((candidate) =>
-    resolvedTarget.models.some(
-      (item) => input.modelValue(item).trim() === candidate,
-    ),
-  );
-  if (model) {
+  const matchingModel = candidates
+    .map((candidate) =>
+      resolvedTarget.models.find((item) => modelMatches(item, candidate)),
+    )
+    .find((model): model is Model => Boolean(model));
+  if (matchingModel) {
     return {
       groupId: resolvedTarget.group.id,
-      model,
+      model: input.modelValue(matchingModel).trim(),
       reason: targetSource === "migrated" ? "migrated" : "saved",
     };
   }

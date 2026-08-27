@@ -79,6 +79,15 @@ while (( SECONDS < deadline )); do
   "$ADB" shell uiautomator dump "/sdcard/$PACKAGE_NAME-ready.xml" >/dev/null 2>&1 || true
   "$ADB" pull "/sdcard/$PACKAGE_NAME-ready.xml" "$ARTIFACT_DIR/ready.xml" >/dev/null 2>&1 || true
   if [[ -s "$ARTIFACT_DIR/ready.xml" ]] &&
+    rg -qi 'Application error|client-side exception|Internal Server Error' "$ARTIFACT_DIR/ready.xml"; then
+    echo "WebView application error detected. See $ARTIFACT_DIR/ready.xml" >&2
+    exit 1
+  fi
+  # A native splash screen can expose a TextView before the WebView has
+  # rendered the application. Require both the WebView and actual accessible
+  # web content so release screenshots never use a splash frame as evidence.
+  if [[ -s "$ARTIFACT_DIR/ready.xml" ]] &&
+    rg -q 'class="android\.webkit\.WebView"' "$ARTIFACT_DIR/ready.xml" &&
     rg -q 'text="[^"]+"[^>]*class="android\.widget\.(TextView|Button)"' "$ARTIFACT_DIR/ready.xml"; then
     ui_ready=1
     break
@@ -92,9 +101,18 @@ fi
 
 capture_state() {
   local label="$1"
-  "$ADB" exec-out screencap -p >"$ARTIFACT_DIR/$label.png"
   "$ADB" shell uiautomator dump "/sdcard/$PACKAGE_NAME-$label.xml" >/dev/null
   "$ADB" pull "/sdcard/$PACKAGE_NAME-$label.xml" "$ARTIFACT_DIR/$label.xml" >/dev/null
+
+  if rg -qi 'Application error|client-side exception|Internal Server Error' \
+      "$ARTIFACT_DIR/$label.xml"; then
+    echo "WebView application error detected in $label. See $ARTIFACT_DIR/$label.xml" >&2
+    exit 1
+  fi
+
+  # Capture after the UI hierarchy so the screenshot represents the same
+  # rendered state that passed the WebView error checks above.
+  "$ADB" exec-out screencap -p >"$ARTIFACT_DIR/$label.png"
 
   local screenshot_bytes
   screenshot_bytes="$(wc -c <"$ARTIFACT_DIR/$label.png")"

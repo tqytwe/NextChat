@@ -1,7 +1,5 @@
 import { StoreKey } from "../constant";
-import {
-  normalizeContentWorkbenchShot,
-} from "../client/content-workbench";
+import { normalizeContentWorkbenchShot } from "../client/content-workbench";
 import type {
   ContentWorkbenchBrandControls,
   ContentWorkbenchShotPlan,
@@ -101,6 +99,8 @@ export interface ManagedMobileContentKit {
   tone: string;
   brandControls?: ContentWorkbenchBrandControls;
   model: string;
+  /** The exact image-purpose group that authorized this local project. */
+  imageGroupId?: number;
   referenceImages: string[];
   shotPlan?: ContentWorkbenchShotPlan[];
   assets: ManagedMobileContentKitAsset[];
@@ -168,9 +168,10 @@ function migrateContentKit(kit: any): ManagedMobileContentKit {
     ? kit.shotPlan.map((shot: any) => normalizeContentWorkbenchShot(shot))
     : undefined;
   const shotByID = new Map<string, ContentWorkbenchShotPlan>(
-    (shotPlan || []).map(
-      (shot): [string, ContentWorkbenchShotPlan] => [shot.id, shot],
-    ),
+    (shotPlan || []).map((shot): [string, ContentWorkbenchShotPlan] => [
+      shot.id,
+      shot,
+    ]),
   );
   const assets = (kit.assets || []).map((asset: any, index: number) => {
     const shotId = asset.shotId || asset.kind || `shot-${index + 1}`;
@@ -232,6 +233,14 @@ function migrateContentKit(kit: any): ManagedMobileContentKit {
     parameters: String(kit.parameters || ""),
     presetId: kit.presetId || "legacy",
     activeRunId: kit.activeRunId || fallbackRunId,
+    // Older projects predate group-pinned image sessions. Keep the missing
+    // value missing so generation can fail closed instead of borrowing the
+    // user's current chat or unrelated image group.
+    imageGroupId:
+      Number.isSafeInteger(Number(kit.imageGroupId)) &&
+      Number(kit.imageGroupId) > 0
+        ? Number(kit.imageGroupId)
+        : undefined,
     shotPlan,
     assets,
     runs,
@@ -553,7 +562,7 @@ export const useManagedMobileAppStore = createPersistStore<
   },
   {
     name: StoreKey.ManagedMobileApp,
-    version: 7,
+    version: 8,
     migrate: (persistedState: any, _persistedVersion: number) => ({
       ...DEFAULT_MOBILE_STATE,
       ...(persistedState || {}),

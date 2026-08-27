@@ -5,6 +5,8 @@ export const PLAY_WELFARE_ENDPOINTS = {
   teamSeasons: "/api/v1/play/teams/seasons?limit=3",
   arenaMonthlyOverview:
     "/api/v1/play/arena/overview?period=monthly&include_history=1",
+  arenaDailyRewardSummary: "/api/v1/play/arena/daily/reward-summary",
+  arenaDailyCurrent: "/api/v1/play/arena/daily/current",
   checkinStatus: "/api/v1/play/checkin/status",
   blindboxStatus: "/api/v1/play/blindbox/status",
   quizToday: "/api/v1/play/quiz/today",
@@ -224,6 +226,65 @@ export interface PlayWelfareArenaOverview {
   }>;
 }
 
+// Daily arena ("Token 农场" daily board). Field names mirror the backend DTOs
+// (playArenaDailyRewardSummaryDTO / playArenaCurrentDTO) verbatim; display_name
+// is server-side masked (e.g. "15***@qq.com"), so rows carry no raw identity.
+export interface PlayWelfareArenaDailyPeriod {
+  id?: number;
+  name?: string;
+  start_at?: string;
+  end_at?: string;
+  status?: string;
+  period_type?: string;
+  settled_at?: string;
+}
+
+export interface PlayWelfareArenaDailyRewardSummary {
+  enabled: boolean;
+  // Most recently settled day: winners already paid (or pending payout).
+  recent?: {
+    period?: PlayWelfareArenaDailyPeriod;
+    settled_at?: string;
+    paid_today: boolean;
+    winners_count: number;
+    total_amount: number;
+    winners: Array<{
+      rank: number;
+      display_name: string;
+      anonymous?: boolean;
+      avatar_url?: string;
+      token_sum: number;
+      amount: number;
+    }>;
+  };
+  // Today's live board with per-row estimated reward.
+  current?: {
+    period?: PlayWelfareArenaDailyPeriod;
+    rows: Array<{
+      rank: number;
+      display_name: string;
+      anonymous?: boolean;
+      avatar_url?: string;
+      token_sum: number;
+      estimated_reward: number;
+    }>;
+  };
+}
+
+// Authenticated viewer's own daily standing (mirrors monthly overview.current).
+export interface PlayWelfareArenaDailyCurrent {
+  enabled: boolean;
+  period?: PlayWelfareArenaDailyPeriod;
+  token_sum?: number;
+  display_token_sum?: number;
+  rank?: number;
+  tokens_to_prev_rank?: number;
+  estimated_reward?: number;
+  recharge_boost_active?: boolean;
+  arena_score_multiplier?: number;
+  campaign_active?: boolean;
+}
+
 export interface PlayWelfareRewardCoupon {
   user_coupon_id?: number;
   name?: string;
@@ -345,6 +406,8 @@ export interface PlayWelfareData {
   teamLeaderboard?: PlayWelfareTeamLeaderboard;
   teamCaptainApplications?: PlayWelfareTeamApplication[];
   arenaMonthlyOverview?: PlayWelfareArenaOverview;
+  arenaDailyRewardSummary?: PlayWelfareArenaDailyRewardSummary;
+  arenaDailyCurrent?: PlayWelfareArenaDailyCurrent;
   checkinStatus?: PlayWelfareCheckinStatus;
   blindboxStatus?: PlayWelfareBlindboxStatus;
   quizToday?: PlayWelfareQuizToday;
@@ -368,6 +431,8 @@ export async function loadPlayWelfareData(
     teamPublicLeaderboard,
     teamSeasons,
     arenaMonthlyOverview,
+    arenaDailyRewardSummary,
+    arenaDailyCurrent,
     checkinStatus,
     blindboxStatus,
     quizToday,
@@ -383,6 +448,12 @@ export async function loadPlayWelfareData(
     request<PlayWelfareTeamSeason[]>(PLAY_WELFARE_ENDPOINTS.teamSeasons),
     request<PlayWelfareArenaOverview>(
       PLAY_WELFARE_ENDPOINTS.arenaMonthlyOverview,
+    ),
+    request<PlayWelfareArenaDailyRewardSummary>(
+      PLAY_WELFARE_ENDPOINTS.arenaDailyRewardSummary,
+    ),
+    request<PlayWelfareArenaDailyCurrent>(
+      PLAY_WELFARE_ENDPOINTS.arenaDailyCurrent,
     ),
     request<PlayWelfareCheckinStatus>(PLAY_WELFARE_ENDPOINTS.checkinStatus),
     request<PlayWelfareBlindboxStatus>(PLAY_WELFARE_ENDPOINTS.blindboxStatus),
@@ -408,6 +479,12 @@ export async function loadPlayWelfareData(
   if (arenaMonthlyOverview.status === "fulfilled") {
     data.arenaMonthlyOverview = arenaMonthlyOverview.value;
   } else unavailable.push("arenaMonthlyOverview");
+  if (arenaDailyRewardSummary.status === "fulfilled") {
+    data.arenaDailyRewardSummary = arenaDailyRewardSummary.value;
+  } else unavailable.push("arenaDailyRewardSummary");
+  if (arenaDailyCurrent.status === "fulfilled") {
+    data.arenaDailyCurrent = arenaDailyCurrent.value;
+  } else unavailable.push("arenaDailyCurrent");
   if (checkinStatus.status === "fulfilled") {
     data.checkinStatus = checkinStatus.value;
   } else unavailable.push("checkinStatus");

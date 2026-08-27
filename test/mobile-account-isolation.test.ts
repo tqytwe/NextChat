@@ -187,6 +187,7 @@ describe("managed mobile account isolation", () => {
       platform: "store",
       tone: "clear",
       model: "image-model",
+      imageGroupId: 73,
       referenceImages: [],
       presetId: "ecommerce",
       shotPlan: [shot],
@@ -228,6 +229,7 @@ describe("managed mobile account isolation", () => {
     expect(project).toMatchObject({
       scene: "ecommerce",
       parameters: "5000mAh battery",
+      imageGroupId: 73,
     });
     expect(project.shotPlan?.[0]).toMatchObject({
       purpose: expect.any(String),
@@ -242,6 +244,28 @@ describe("managed mobile account isolation", () => {
       scene: "ecommerce",
       kind: shot.kind,
     });
+  });
+
+  test("does not infer a group for a legacy content-kit project", () => {
+    const store = useManagedMobileAppStore.getState();
+    store.activateAccount(606);
+    const projectId = store.createContentKit({
+      productName: "Legacy image project",
+      sellingPoints: "private",
+      audience: "buyers",
+      platform: "store",
+      tone: "clear",
+      model: "legacy-image-model",
+      referenceImages: [],
+      assets: [],
+      copyStatus: "idle",
+    });
+
+    expect(
+      useManagedMobileAppStore
+        .getState()
+        .contentKits.find((project) => project.id === projectId)?.imageGroupId,
+    ).toBeUndefined();
   });
 
   test("does not silently discard older local projects", () => {

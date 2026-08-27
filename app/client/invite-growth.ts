@@ -1,4 +1,3 @@
-import QRCode from "qrcode";
 import { managedJsonRequest } from "./managed-nextchat";
 
 export const INVITE_REFERRAL_STORAGE_KEY = "jisudeng-invite-referral-v1";
@@ -362,10 +361,44 @@ export interface InvitePosterPayload extends InvitePosterInput {
   appLabel: string;
 }
 
+function invitePosterCopy(locale?: string) {
+  const value = String(locale || "").toLowerCase();
+  if (value.startsWith("zh")) {
+    return {
+      download: "扫码下载 APP",
+      join: "扫码参加网页活动",
+      appFooter: "扫码下载 APP，开启创作",
+      combinedFooter: "网页参与或下载 APP，选择适合你的方式",
+    };
+  }
+  if (value.startsWith("ja") || value.startsWith("jp")) {
+    return {
+      download: "スキャンして APP をダウンロード",
+      join: "スキャンしてウェブで参加",
+      appFooter: "スキャンして APP をダウンロードし、創作を始めましょう",
+      combinedFooter: "ウェブで参加するか APP をダウンロードしてください",
+    };
+  }
+  if (value.startsWith("ko")) {
+    return {
+      download: "스캔하여 APP 다운로드",
+      join: "스캔하여 웹에서 참여",
+      appFooter: "스캔하여 APP을 다운로드하고 창작을 시작하세요",
+      combinedFooter: "웹에서 참여하거나 APP을 다운로드하세요",
+    };
+  }
+  return {
+    download: "Download the APP",
+    join: "Join on the web",
+    appFooter: "Scan to download the APP and start creating",
+    combinedFooter: "Join on the web or download the APP",
+  };
+}
+
 export function buildInvitePosterPayload(
   input: InvitePosterInput,
 ): InvitePosterPayload {
-  const isChinese = /^zh(?:-|$)/i.test(input.locale || "");
+  const copy = invitePosterCopy(input.locale);
   const appOnly = input.mode === "app";
   return {
     ...input,
@@ -374,14 +407,8 @@ export function buildInvitePosterPayload(
     shareText: `${input.headline}\n${input.body}\n${
       appOnly ? input.appUrl : input.registerUrl
     }`,
-    registerLabel: appOnly
-      ? isChinese
-        ? "扫码下载 APP"
-        : "Download the APP"
-      : isChinese
-      ? "扫码参加网页活动"
-      : "Join on the web",
-    appLabel: isChinese ? "扫码下载 APP" : "Download the APP",
+    registerLabel: appOnly ? copy.download : copy.join,
+    appLabel: copy.download,
   };
 }
 
@@ -392,6 +419,7 @@ export async function createInvitePosterDataUrl(
   if (typeof document === "undefined") {
     throw new Error("invite poster requires a browser");
   }
+  const { default: QRCode } = await import("qrcode");
   const payload = buildInvitePosterPayload(input);
   const [registerQr, appQr] = await Promise.all([
     QRCode.toDataURL(payload.registerQrValue, { width: 360, margin: 2 }),
@@ -442,7 +470,13 @@ export async function createInvitePosterDataUrl(
     context.fillRect(50, panelY, qrSize + 28, panelHeight);
     context.fillRect(width - qrSize - 78, panelY, qrSize + 28, panelHeight);
     context.drawImage(registerImage, 64, panelY + 14, qrSize, qrSize);
-    context.drawImage(appImage, width - qrSize - 64, panelY + 14, qrSize, qrSize);
+    context.drawImage(
+      appImage,
+      width - qrSize - 64,
+      panelY + 14,
+      qrSize,
+      qrSize,
+    );
     context.fillStyle = "#111318";
     drawCenteredPosterLabel(
       context,
@@ -461,13 +495,8 @@ export async function createInvitePosterDataUrl(
   }
   context.fillStyle = palette.body;
   context.font = "26px sans-serif";
-  const footer = /^zh(?:-|$)/i.test(payload.locale || "")
-    ? appOnly
-      ? "扫码下载 APP，开启创作"
-      : "网页参与或下载 APP，选择适合你的方式"
-    : appOnly
-    ? "Scan to download the APP and start creating"
-    : "Join on the web or download the APP";
+  const copy = invitePosterCopy(payload.locale);
+  const footer = appOnly ? copy.appFooter : copy.combinedFooter;
   drawPosterText(context, footer, 64, canvas.height - 92, width - 128, 34, 2);
   return canvas.toDataURL("image/png");
 }

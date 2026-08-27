@@ -8,7 +8,7 @@ import { formatManagedMobileError } from "./managed-mobile-i18n";
 
 export const MOBILE_PLATFORM_API_PREFIX = "/api/v1/mobile";
 
-export type MobileLocale = "zh-CN" | "en-US" | string;
+export type MobileLocale = "zh-CN" | "en-US" | "ja-JP" | "ko-KR" | string;
 export type MobileId = number | string;
 export type MobileSortOrder = "asc" | "desc";
 
@@ -20,6 +20,8 @@ export interface MobileRequestOptions {
 export interface MobilePageQuery {
   cursor?: string;
   limit?: number;
+  page?: number;
+  page_size?: number;
   query?: string;
   locale?: MobileLocale;
   sort?: string;
@@ -29,9 +31,36 @@ export interface MobilePageQuery {
 export interface MobilePage<T> {
   items: T[];
   total?: number;
+  page?: number;
+  page_size?: number;
+  pages?: number;
   cursor?: string;
   next_cursor?: string;
   has_more?: boolean;
+}
+
+export interface MobileProject {
+  id: string;
+  name: string;
+  description: string;
+  task_ids: string[];
+  asset_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MobileProjectWriteRequest {
+  name?: string;
+  description?: string;
+  task_ids?: string[];
+  asset_ids?: string[];
+  client_request_id: string;
+}
+
+export interface MobileProjectPage extends MobilePage<MobileProject> {
+  page: number;
+  page_size: number;
+  pages: number;
 }
 
 export interface MobileDeleteResult {
@@ -86,7 +115,13 @@ export interface MobileAsset extends MobileDisplayFields {
   duration_ms?: number;
   preview_url?: string;
   thumbnail_url?: string;
-  source?: "upload" | "share" | "image_result" | "chat_export" | "voice";
+  source?:
+    | "upload"
+    | "share"
+    | "image_result"
+    | "video_result"
+    | "chat_export"
+    | "voice";
   folder_id?: string;
   created_at: string;
   updated_at?: string;
@@ -109,7 +144,7 @@ export interface MobileAssetDeleteResult {
   message?: string;
 }
 
-export type MobileSessionPurpose = "chat" | "image";
+export type MobileSessionPurpose = "chat" | "image" | "video";
 
 export interface MobileManagedSession {
   purpose: MobileSessionPurpose;
@@ -124,6 +159,7 @@ export interface MobileManagedSession {
 export interface MobileSessionBundle {
   chat: MobileManagedSession;
   image: MobileManagedSession;
+  video?: MobileManagedSession;
 }
 
 export interface MobileSwitchSessionGroupRequest {
@@ -149,6 +185,7 @@ export interface MobileAccountSummary {
   current_group?: Record<string, unknown>;
   chat_group?: Record<string, unknown>;
   image_group?: Record<string, unknown>;
+  video_group?: Record<string, unknown>;
   subscription?: Record<string, unknown>;
   quotas?: MobileQuotaSummary[];
   sessions?: Partial<MobileSessionBundle>;
@@ -330,7 +367,7 @@ export interface MobileSkillUseRequest {
   locale?: MobileLocale;
 }
 
-export type MobileTaskKind = "chat" | "image" | "file";
+export type MobileTaskKind = "chat" | "image" | "video" | "file";
 
 export type MobileTaskStatus =
   | "queued"
@@ -362,6 +399,91 @@ export interface MobileTaskCreateRequest {
   locale?: MobileLocale;
 }
 
+export interface MobileVideoCapabilities {
+  operations?: string[];
+  text_to_video?: boolean;
+  image_to_video?: boolean;
+  video_reference?: boolean;
+  audio_reference?: boolean;
+  /** Legacy aliases retained for pre-contract servers only. */
+  resolutions?: string[];
+  ratios?: string[];
+  durations?: number[];
+  supported_resolutions?: string[];
+  supported_ratios?: string[];
+  supported_durations?: number[];
+  generate_audio?: boolean;
+  watermark?: boolean;
+  max_reference_assets?: number;
+  max_reference_images?: number;
+  max_reference_videos?: number;
+  max_reference_audios?: number;
+}
+
+export interface MobileVideoSuppressedModel {
+  model: string;
+  /** Server-owned code. Consumers localize it; they must not discard it. */
+  code: string;
+}
+
+export type MobileVideoBootstrapModel =
+  | string
+  | {
+      id?: string;
+      model?: string;
+      name?: string;
+      display_name?: string;
+      platform?: string;
+      modalities?: Array<"chat" | "image" | "video" | "audio">;
+      adapter?: string;
+      capability_version?: string;
+      video_capabilities?: MobileVideoCapabilities;
+      capabilities?: MobileVideoCapabilities;
+    };
+
+export interface MobileVideoGroup {
+  id: number;
+  name: string;
+  platform?: string;
+  video_available: boolean;
+  video_unavailable_code?: string;
+  models: MobileVideoBootstrapModel[];
+  capabilities?: MobileVideoCapabilities;
+  video_capabilities?: MobileVideoCapabilities;
+  suppressed?: MobileVideoSuppressedModel[];
+}
+
+export interface MobileVideoBootstrap {
+  protocol_version: number;
+  capabilities_version: string;
+  groups: MobileVideoGroup[];
+}
+
+export interface MobileVideoJobRequest {
+  /** Dedicated routes reject chat/image requests instead of inferring purpose. */
+  purpose: "video";
+  group_id: number;
+  model: string;
+  prompt: string;
+  resolution: string;
+  ratio?: string;
+  duration_seconds: number;
+  generate_audio?: boolean;
+  watermark?: boolean;
+  reference_asset_ids?: string[];
+  client_request_id: string;
+}
+
+export interface MobileVideoEstimate {
+  group_id: number;
+  model: string;
+  resolution: string;
+  duration_seconds: number;
+  unit_price_usd: number;
+  estimated_cost_usd: number;
+  currency: string;
+}
+
 export interface MobileTask extends MobileDisplayFields {
   id: string;
   kind: MobileTaskKind;
@@ -386,6 +508,21 @@ export interface MobileTask extends MobileDisplayFields {
   cancellable?: boolean;
   retryable?: boolean;
   metadata?: Record<string, unknown>;
+  artifacts?: Array<{
+    id?: string;
+    kind?: string;
+    name?: string;
+    url?: string;
+    byte_size?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  error?: {
+    code?: string;
+    message?: string;
+    retryable?: boolean;
+    details?: Record<string, unknown>;
+  };
+  finished_at?: string;
 }
 
 export interface MobileTaskListQuery extends MobilePageQuery {
@@ -394,6 +531,8 @@ export interface MobileTaskListQuery extends MobilePageQuery {
   status?: MobileTaskStatus;
   skill_id?: string;
   asset_id?: string;
+  date_from?: string;
+  date_to?: string;
 }
 
 export interface MobileTaskActionRequest {
@@ -417,6 +556,60 @@ export interface MobileTaskStatusRequest {
 export interface MobileTaskRetryRequest {
   client_request_id?: string;
   overrides?: Partial<MobileTaskCreateRequest>;
+}
+
+export type MobileTaskBulkDeleteStatus =
+  | "deleted"
+  | "not_found"
+  | "not_terminal"
+  | "failed";
+
+export interface MobileTaskBulkDeleteRequest {
+  ids: string[];
+  client_request_id: string;
+}
+
+export interface MobileTaskBulkDeleteResult {
+  client_request_id: string;
+  results: Array<{
+    id: string;
+    status: MobileTaskBulkDeleteStatus;
+  }>;
+  deleted: number;
+  failed: number;
+}
+
+export type MobileTaskBulkCancelStatus =
+  | "cancelled"
+  | "not_found"
+  | "not_cancellable"
+  | "failed";
+
+export interface MobileTaskBulkCancelResult {
+  client_request_id: string;
+  results: Array<{
+    id: string;
+    status: MobileTaskBulkCancelStatus;
+  }>;
+  cancelled: number;
+  failed: number;
+}
+
+export function mergeMobileTaskPages(
+  current: MobileTask[],
+  incoming: MobileTask[],
+  mode: "replace" | "refresh" | "append",
+) {
+  if (mode === "replace") return incoming;
+  const seen = new Set<string>();
+  const merged =
+    mode === "refresh" ? [...incoming, ...current] : [...current, ...incoming];
+  return merged.filter((task) => {
+    const id = String(task.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 export interface MobileImageHistoryItem extends MobileDisplayFields {
@@ -546,6 +739,39 @@ export interface MobilePaymentOrder {
 
 export interface MobilePaymentSyncRequest {
   client_request_id?: string;
+}
+
+export interface MobilePlayBillingPurchaseRequest {
+  product_id: string;
+  product_type?: "inapp" | "subs" | string;
+  purchase_token: string;
+  order_id?: string;
+  package_name?: string;
+  purchase_time?: number;
+  purchase_state?: number;
+  acknowledged?: boolean;
+  quantity?: number;
+  original_json?: string;
+  signature?: string;
+  plan_id?: number | string;
+  amount?: number;
+  order_type?: "balance" | "subscription" | string;
+  locale?: MobileLocale;
+  client_request_id: string;
+}
+
+export interface MobilePlayBillingPurchaseResult {
+  accepted?: boolean;
+  verified?: boolean;
+  credited?: boolean;
+  consumed?: boolean;
+  acknowledged?: boolean;
+  consume?: boolean;
+  acknowledge?: boolean;
+  order_id?: string | number;
+  balance?: number;
+  amount?: number;
+  message?: string;
 }
 
 export type MobileSupportTicketStatus =
@@ -1057,11 +1283,258 @@ export function deleteMobileTask(
   taskId: MobileId,
   options?: MobileRequestOptions,
 ) {
+  const headers = new Headers(options?.headers);
+  const requestId =
+    headers.get("X-Client-Request-ID") ||
+    headers.get("Idempotency-Key") ||
+    `mobile-task-delete-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+  headers.set("X-Client-Request-ID", requestId);
+  headers.set("Idempotency-Key", requestId);
+  headers.set("X-Request-ID", requestId);
   return mobilePlatformJsonRequest<MobileDeleteResult>(
     baseUrl,
     accessToken,
     `/tasks/${encodePathId(taskId)}`,
-    jsonInit("DELETE", undefined, options),
+    jsonInit("DELETE", undefined, { ...options, headers }),
+  );
+}
+
+export function getMobileVideoBootstrap(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileVideoBootstrap>(
+    baseUrl,
+    accessToken,
+    "/video/bootstrap",
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function estimateMobileVideo(
+  baseUrl: string,
+  accessToken: string,
+  body: Pick<
+    MobileVideoJobRequest,
+    | "group_id"
+    | "purpose"
+    | "model"
+    | "prompt"
+    | "resolution"
+    | "ratio"
+    | "duration_seconds"
+    | "generate_audio"
+    | "watermark"
+    | "reference_asset_ids"
+  >,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileVideoEstimate>(
+    baseUrl,
+    accessToken,
+    "/video/estimate",
+    jsonInit("POST", body, options),
+  );
+}
+
+export function createMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileVideoJobRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<{ task: MobileTask; execution?: string }>(
+    baseUrl,
+    accessToken,
+    "/video/jobs",
+    jsonInit("POST", body, options),
+  );
+}
+
+export function listMobileVideoJobs(
+  baseUrl: string,
+  accessToken: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePage<MobileTask>>(
+    baseUrl,
+    accessToken,
+    "/video/jobs",
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function getMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileTask>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}`,
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function cancelMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileTask>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}/cancel`,
+    jsonInit("POST", {}, options),
+  );
+}
+
+export function retryMobileVideoJob(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  clientRequestId: string,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileTask>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}/retry`,
+    jsonInit("POST", { client_request_id: clientRequestId }, options),
+  );
+}
+
+/**
+ * Releases a temporary video relay object after the client has made a durable
+ * copy. The asset upload itself remains the normal /mobile/assets flow.
+ */
+export function acknowledgeMobileVideoContent(
+  baseUrl: string,
+  accessToken: string,
+  taskId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<{ released: boolean }>(
+    baseUrl,
+    accessToken,
+    `/video/jobs/${encodePathId(taskId)}/content/ack`,
+    jsonInit("POST", {}, options),
+  );
+}
+
+export function bulkDeleteMobileTasks(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileTaskBulkDeleteRequest,
+  options?: MobileRequestOptions,
+) {
+  const headers = new Headers(options?.headers);
+  headers.set("X-Client-Request-ID", body.client_request_id);
+  headers.set("Idempotency-Key", body.client_request_id);
+  headers.set("X-Request-ID", body.client_request_id);
+  return mobilePlatformJsonRequest<MobileTaskBulkDeleteResult>(
+    baseUrl,
+    accessToken,
+    "/tasks/bulk-delete",
+    jsonInit("POST", body, { ...options, headers }),
+  );
+}
+
+export function bulkCancelMobileTasks(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileTaskBulkDeleteRequest,
+  options?: MobileRequestOptions,
+) {
+  const headers = new Headers(options?.headers);
+  headers.set("X-Client-Request-ID", body.client_request_id);
+  headers.set("Idempotency-Key", body.client_request_id);
+  headers.set("X-Request-ID", body.client_request_id);
+  return mobilePlatformJsonRequest<MobileTaskBulkCancelResult>(
+    baseUrl,
+    accessToken,
+    "/tasks/bulk-cancel",
+    jsonInit("POST", body, { ...options, headers }),
+  );
+}
+
+export function createMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  body: MobileProjectWriteRequest & { name: string },
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProject>(
+    baseUrl,
+    accessToken,
+    "/projects",
+    jsonInit("POST", body, options),
+  );
+}
+
+export function listMobileProjects(
+  baseUrl: string,
+  accessToken: string,
+  query?: MobilePageQuery,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProjectPage>(
+    baseUrl,
+    accessToken,
+    appendQuery("/projects", query),
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function getMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  projectId: MobileId,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProject>(
+    baseUrl,
+    accessToken,
+    `/projects/${encodePathId(projectId)}`,
+    jsonInit("GET", undefined, options),
+  );
+}
+
+export function updateMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  projectId: MobileId,
+  body: MobileProjectWriteRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobileProject>(
+    baseUrl,
+    accessToken,
+    `/projects/${encodePathId(projectId)}`,
+    jsonInit("PUT", body, options),
+  );
+}
+
+export function deleteMobileProject(
+  baseUrl: string,
+  accessToken: string,
+  projectId: MobileId,
+  clientRequestId: string,
+  options?: MobileRequestOptions,
+) {
+  const headers = new Headers(options?.headers);
+  headers.set("X-Client-Request-ID", clientRequestId);
+  return mobilePlatformJsonRequest<MobileDeleteResult>(
+    baseUrl,
+    accessToken,
+    `/projects/${encodePathId(projectId)}`,
+    jsonInit("DELETE", undefined, { ...options, headers }),
   );
 }
 
@@ -1175,6 +1648,20 @@ export function syncMobilePayment(
     baseUrl,
     accessToken,
     `/payments/${encodePathId(orderId)}/sync`,
+    jsonInit("POST", body, options),
+  );
+}
+
+export function submitMobilePlayBillingPurchase(
+  baseUrl: string,
+  accessToken: string,
+  body: MobilePlayBillingPurchaseRequest,
+  options?: MobileRequestOptions,
+) {
+  return mobilePlatformJsonRequest<MobilePlayBillingPurchaseResult>(
+    baseUrl,
+    accessToken,
+    "/play-billing/purchases",
     jsonInit("POST", body, options),
   );
 }
@@ -1359,6 +1846,41 @@ export function createMobilePlatformClient(
       ) => updateMobileTaskStatus(baseUrl, accessToken, taskId, body, options),
       delete: (taskId: MobileId, options?: MobileRequestOptions) =>
         deleteMobileTask(baseUrl, accessToken, taskId, options),
+      bulkDelete: (
+        body: MobileTaskBulkDeleteRequest,
+        options?: MobileRequestOptions,
+      ) => bulkDeleteMobileTasks(baseUrl, accessToken, body, options),
+      bulkCancel: (
+        body: MobileTaskBulkDeleteRequest,
+        options?: MobileRequestOptions,
+      ) => bulkCancelMobileTasks(baseUrl, accessToken, body, options),
+    },
+    projects: {
+      create: (
+        body: MobileProjectWriteRequest & { name: string },
+        options?: MobileRequestOptions,
+      ) => createMobileProject(baseUrl, accessToken, body, options),
+      list: (query?: MobilePageQuery, options?: MobileRequestOptions) =>
+        listMobileProjects(baseUrl, accessToken, query, options),
+      detail: (projectId: MobileId, options?: MobileRequestOptions) =>
+        getMobileProject(baseUrl, accessToken, projectId, options),
+      update: (
+        projectId: MobileId,
+        body: MobileProjectWriteRequest,
+        options?: MobileRequestOptions,
+      ) => updateMobileProject(baseUrl, accessToken, projectId, body, options),
+      delete: (
+        projectId: MobileId,
+        clientRequestId: string,
+        options?: MobileRequestOptions,
+      ) =>
+        deleteMobileProject(
+          baseUrl,
+          accessToken,
+          projectId,
+          clientRequestId,
+          options,
+        ),
     },
     imageHistory: {
       list: (
@@ -1398,6 +1920,12 @@ export function createMobilePlatformClient(
         body?: MobilePaymentSyncRequest,
         options?: MobileRequestOptions,
       ) => syncMobilePayment(baseUrl, accessToken, orderId, body, options),
+    },
+    playBilling: {
+      submitPurchase: (
+        body: MobilePlayBillingPurchaseRequest,
+        options?: MobileRequestOptions,
+      ) => submitMobilePlayBillingPurchase(baseUrl, accessToken, body, options),
     },
     support: {
       tickets: {

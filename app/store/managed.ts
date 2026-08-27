@@ -7,11 +7,13 @@ import {
   ManagedWorkspaceBootstrap,
   flattenManagedModels,
   getManagedMobileBootstrap,
+  isGroupPinnedManagedSessionSwitch,
   isManagedAuthError,
   isManagedTotpLogin,
   loginManagedUser,
   loginManagedUser2FA,
   logoutManagedUser,
+  managedWorkspaceModelMatches,
   managedGatewayBaseUrl,
   normalizeManagedBaseUrl,
   pickManagedDefaultModel,
@@ -19,6 +21,7 @@ import {
   shouldRefreshManagedToken,
   switchManagedImageGroupCompatible,
   switchManagedChatGroupCompatible,
+  switchManagedVideoGroupCompatible,
 } from "../client/managed-nextchat";
 import {
   getMobileSessionStatus,
@@ -37,6 +40,7 @@ import {
   loadManagedSessionSecrets,
   saveManagedSessionSecrets,
 } from "../client/android-native";
+import { selectManagedVideoSession } from "../client/mobile-video";
 
 const DEFAULT_MANAGED_STATE = {
   backendBaseUrl: DEFAULT_MANAGED_BACKEND_BASE_URL,
@@ -49,6 +53,7 @@ const DEFAULT_MANAGED_STATE = {
   user: null as ManagedAuthUser | null,
   session: null as ManagedSession | null,
   imageSession: null as ManagedSession | null,
+  videoSession: null as ManagedSession | null,
   workspace: null as ManagedWorkspaceBootstrap | null,
   mobileProtocol: null as MobileProtocol | null,
   lastSyncAt: 0,
@@ -104,6 +109,7 @@ export const useManagedNextChatStore = createPersistStore<
     refreshMobileSessionStatus: () => Promise<void>;
     switchGroup: (groupID: number) => Promise<void>;
     switchImageGroup: (groupID: number) => Promise<void>;
+    switchVideoGroup: (groupID: number) => Promise<void>;
     applyAuth: (auth: ManagedAuthResponse) => void;
     applyBootstrap: (bootstrap: ManagedMobileBootstrap) => void;
     logout: () => Promise<void>;
@@ -129,14 +135,32 @@ export const useManagedNextChatStore = createPersistStore<
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    async function applyManagedGroupSwitch(
+      bootstrap: ManagedMobileBootstrap,
+      purpose: "chat" | "image" | "video",
+      groupID: number,
+    ) {
+      if (isGroupPinnedManagedSessionSwitch(bootstrap, purpose, groupID)) {
+        // The current server returned all scopes plus a verified replacement
+        // for exactly one purpose. Applying this response preserves that new
+        // pinned key; issuing a generic bootstrap here could replace it with
+        // a different default-group session.
+        get().applyBootstrap(bootstrap);
+        return;
+      }
+      // Compatibility servers return a command acknowledgement or an older
+      // mutable session shape. Only a fresh complete bootstrap is safe there.
+      await get().bootstrap({ silent: true });
+    }
+
     function workspaceHasModel(
       workspaceModels: ManagedWorkspaceBootstrap["models"] | undefined,
       modelName: string | undefined,
     ) {
       if (!modelName) return false;
       return (workspaceModels?.groups ?? []).some((group) =>
-        (group.models ?? []).some(
-          (model) => (model.name || model.id) === modelName,
+        (group.models ?? []).some((model) =>
+          managedWorkspaceModelMatches(model, modelName),
         ),
       );
     }
@@ -174,6 +198,7 @@ export const useManagedNextChatStore = createPersistStore<
             user: get().user,
             session: get().session,
             imageSession: get().imageSession,
+            videoSession: get().videoSession,
           }).catch(() => undefined);
           return true;
         }
@@ -192,6 +217,8 @@ export const useManagedNextChatStore = createPersistStore<
             session: (secrets.session as ManagedSession | null) || null,
             imageSession:
               (secrets.imageSession as ManagedSession | null) || null,
+            videoSession:
+              (secrets.videoSession as ManagedSession | null) || null,
           });
           return true;
         } catch {
@@ -404,18 +431,14 @@ export const useManagedNextChatStore = createPersistStore<
               groupID,
             );
           };
-          let bootstrap: ManagedMobileBootstrap | null;
+          let bootstrap: ManagedMobileBootstrap;
           try {
             bootstrap = await requestSwitch();
           } catch (error) {
             if (!isManagedAuthError(error) || !get().refreshToken) throw error;
             bootstrap = await requestSwitch(true);
           }
-          if (bootstrap) {
-            get().applyBootstrap(bootstrap);
-          } else {
-            await get().bootstrap({ silent: true });
-          }
+          await applyManagedGroupSwitch(bootstrap, "chat", groupID);
         } catch (error) {
           set({
             loading: false,
@@ -438,18 +461,44 @@ export const useManagedNextChatStore = createPersistStore<
               groupID,
             );
           };
-          let legacyBootstrap: ManagedMobileBootstrap | null;
+          let bootstrap: ManagedMobileBootstrap;
           try {
-            legacyBootstrap = await requestSwitch();
+            bootstrap = await requestSwitch();
           } catch (error) {
             if (!isManagedAuthError(error) || !get().refreshToken) throw error;
-            legacyBootstrap = await requestSwitch(true);
+            bootstrap = await requestSwitch(true);
           }
-          if (legacyBootstrap) {
-            get().applyBootstrap(legacyBootstrap);
-          } else {
-            await get().bootstrap({ silent: true });
+          await applyManagedGroupSwitch(bootstrap, "image", groupID);
+        } catch (error) {
+          set({
+            loading: false,
+            lastError: errorMessage(error, text.errors.switchGroupFailed),
+          });
+          throw error;
+        }
+      },
+
+      async switchVideoGroup(groupID: number) {
+        const text = getManagedMobileText();
+        if (!get().accessToken) throw new Error(text.errors.loginRequired);
+        set({ loading: true, lastError: "" });
+        try {
+          const requestSwitch = async (forceRefresh = false) => {
+            const accessToken = await get().ensureFreshAuthToken(forceRefresh);
+            return switchManagedVideoGroupCompatible(
+              get().backendBaseUrl,
+              accessToken,
+              groupID,
+            );
+          };
+          let bootstrap: ManagedMobileBootstrap;
+          try {
+            bootstrap = await requestSwitch();
+          } catch (error) {
+            if (!isManagedAuthError(error) || !get().refreshToken) throw error;
+            bootstrap = await requestSwitch(true);
           }
+          await applyManagedGroupSwitch(bootstrap, "video", groupID);
         } catch (error) {
           set({
             loading: false,
@@ -494,7 +543,10 @@ export const useManagedNextChatStore = createPersistStore<
           ...workspace
         } = bootstrap;
         const chatSession = sessions?.chat || session;
-        const imageSession = sessions?.image || chatSession;
+        // Image/video sessions are separate credentials with separate group
+        // authorization. Never silently reuse the chat key for a media call.
+        const imageSession = sessions?.image || null;
+        const videoSession = selectManagedVideoSession(sessions);
         const chatModels = workspaces?.chat?.models || workspace.models;
         const normalizedWorkspace = {
           ...workspace,
@@ -543,6 +595,7 @@ export const useManagedNextChatStore = createPersistStore<
         set({
           session: chatSession,
           imageSession,
+          videoSession,
           workspace: normalizedWorkspace,
           user: workspace.user || get().user,
           lastSyncAt: Date.now(),
@@ -558,6 +611,7 @@ export const useManagedNextChatStore = createPersistStore<
           user: workspace.user || get().user,
           session: chatSession,
           imageSession,
+          videoSession,
         }).catch(() => undefined);
       },
 

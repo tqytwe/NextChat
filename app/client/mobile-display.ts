@@ -7,27 +7,62 @@ export type LocalizedMobileDisplay = {
   title?: string;
   title_zh?: string;
   title_en?: string;
+  title_ja?: string;
+  title_jp?: string;
+  title_ko?: string;
   description?: string;
   description_zh?: string;
   description_en?: string;
+  description_ja?: string;
+  description_jp?: string;
+  description_ko?: string;
   name?: string;
   name_zh?: string;
   name_en?: string;
+  name_ja?: string;
+  name_jp?: string;
+  name_ko?: string;
   display_name?: string;
   display_name_zh?: string;
   display_name_en?: string;
+  display_name_ja?: string;
+  display_name_jp?: string;
+  display_name_ko?: string;
   product_name?: string;
   product_name_zh?: string;
   product_name_en?: string;
+  product_name_ja?: string;
+  product_name_jp?: string;
+  product_name_ko?: string;
   template_name?: string;
   template_name_zh?: string;
   template_name_en?: string;
+  template_name_ja?: string;
+  template_name_jp?: string;
+  template_name_ko?: string;
   localized?: {
+    ja?: string;
+    jp?: string;
+    ko?: string;
     zh?: string;
     en?: string;
     default?: string;
-    title?: { zh?: string; en?: string; default?: string };
-    description?: { zh?: string; en?: string; default?: string };
+    title?: {
+      ja?: string;
+      jp?: string;
+      ko?: string;
+      zh?: string;
+      en?: string;
+      default?: string;
+    };
+    description?: {
+      ja?: string;
+      jp?: string;
+      ko?: string;
+      zh?: string;
+      en?: string;
+      default?: string;
+    };
   };
 };
 
@@ -42,12 +77,35 @@ function nonEmpty(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
-function localizedCandidate(value: unknown, suffix: "zh" | "en") {
+function localeCandidates(locale: ManagedMobileLocale) {
+  if (locale === "cn") return ["zh", "cn", "en"] as const;
+  if (locale === "jp") return ["ja", "jp", "en", "zh", "cn"] as const;
+  if (locale === "ko") return ["ko", "en", "zh", "cn"] as const;
+  return ["en", "zh", "cn"] as const;
+}
+
+function localizedCandidate(value: unknown, suffixes: readonly string[]) {
   if (typeof value === "string") return value;
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
   const record = value as Record<string, unknown>;
-  const localeValue = record[suffix] ?? record[suffix === "zh" ? "cn" : "en"];
-  return nonEmpty(localeValue);
+  for (const suffix of suffixes) {
+    const localeValue = record[suffix];
+    const resolved = nonEmpty(localeValue);
+    if (resolved) return resolved;
+  }
+  return "";
+}
+
+function localizedField(
+  record: Record<string, unknown> | null | undefined,
+  field: string,
+  suffixes: readonly string[],
+) {
+  for (const suffix of suffixes) {
+    const resolved = nonEmpty(record?.[`${field}_${suffix}`]);
+    if (resolved) return resolved;
+  }
+  return "";
 }
 
 /** Only use for API-owned display fields, never model IDs, filenames, or user input. */
@@ -56,7 +114,7 @@ export function localizedMobileDisplay(
   options: DisplayOptions = {},
 ) {
   const locale = options.locale || getManagedMobileLocale();
-  const suffix = locale === "cn" ? "zh" : "en";
+  const suffixes = localeCandidates(locale);
   const kind = options.kind || "title";
   const typedValue = value as LocalizedMobileDisplay | null | undefined;
   const record = value as Record<string, unknown> | null | undefined;
@@ -64,20 +122,20 @@ export function localizedMobileDisplay(
   const nested = localized?.[kind];
   const defaultFields = options.defaultFields || [];
   const resolved = [
-    record?.[`${kind}_${suffix}`],
-    nested?.[suffix],
-    localized?.[suffix],
+    localizedField(record, kind, suffixes),
+    localizedCandidate(nested, suffixes),
+    localizedCandidate(localized, suffixes),
     // Some dynamic fields (for example plan duration labels) are returned as
     // a direct { zh, en } object instead of under `localized`.
-    localizedCandidate(value, suffix),
+    localizedCandidate(value, suffixes),
     nested?.default,
     localized?.default,
     record?.[kind],
     // API resources do not consistently call their visible field `title`.
     // Prefer each declared field's locale variant before showing its default.
-    ...defaultFields.map((field) => record?.[`${field}_${suffix}`]),
+    ...defaultFields.map((field) => localizedField(record, field, suffixes)),
     ...defaultFields.map((field) =>
-      localizedCandidate(record?.[field], suffix),
+      localizedCandidate(record?.[field], suffixes),
     ),
     ...defaultFields.map((field) => record?.[field]),
     options.fallback,

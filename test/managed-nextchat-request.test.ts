@@ -20,14 +20,19 @@ jest.unstable_mockModule("@capacitor/core", () => ({
 const { Capacitor, CapacitorHttp } = await import("@capacitor/core");
 const {
   isManagedAuthError,
+  isGroupPinnedManagedSessionSwitch,
+  flattenManagedModels,
   loginManagedUser,
   managedRetryAfterMilliseconds,
   managedRequestText,
+  normalizeManagedMobileBootstrap,
+  pickManagedDefaultModel,
   managedJsonRequest,
   shouldRefreshManagedSession,
   shouldRefreshManagedToken,
   switchManagedChatGroupCompatible,
   switchManagedImageGroupCompatible,
+  switchManagedVideoGroupCompatible,
 } = await import("../app/client/managed-nextchat");
 
 describe("managed NextChat API requests", () => {
@@ -49,6 +54,40 @@ describe("managed NextChat API requests", () => {
     delete window.JisudengNativeBridge;
   });
 
+  test("canonicalizes model IDs while retaining server display labels", () => {
+    const bootstrap = normalizeManagedMobileBootstrap({
+      session: { user_id: 1, api_key: "managed", api_key_id: 1 },
+      user: { id: 1, balance: 0 },
+      managed_api_key: { id: 1, name: "managed" },
+      models: {
+        default_model: "Friendly video name",
+        groups: [
+          {
+            id: 3,
+            name: "video视频",
+            models: [
+              {
+                id: "provider-exact-id",
+                name: "Friendly video name",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(bootstrap.models?.groups?.[0]?.models?.[0]).toEqual({
+      id: "provider-exact-id",
+      name: "provider-exact-id",
+      display_name: "Friendly video name",
+    });
+    expect(bootstrap.models?.default_model).toBe("provider-exact-id");
+    expect(flattenManagedModels(bootstrap.models)[0]?.name).toBe(
+      "provider-exact-id",
+    );
+    expect(pickManagedDefaultModel(bootstrap.models)).toBe("provider-exact-id");
+  });
+
   test("uses browser fetch outside Android", async () => {
     jest.mocked(window.fetch).mockResolvedValue({
       ok: true,
@@ -68,6 +107,7 @@ describe("managed NextChat API requests", () => {
       "https://api.jisudeng.com/api/v1/nextchat/mobile/bootstrap",
       expect.objectContaining({
         headers: expect.any(Headers),
+        cache: "no-store",
       }),
     );
     expect(CapacitorHttp.request).not.toHaveBeenCalled();
@@ -101,7 +141,7 @@ describe("managed NextChat API requests", () => {
     );
   });
 
-  test("falls back to the legacy group route when image sessions are not deployed", async () => {
+  test("returns a legacy image group-switch acknowledgement for safe re-bootstrap", async () => {
     jest
       .mocked(window.fetch)
       .mockResolvedValueOnce({
@@ -132,7 +172,7 @@ describe("managed NextChat API requests", () => {
         "access-token",
         7,
       ),
-    ).resolves.toMatchObject({ session: { api_key: "legacy" } });
+    ).resolves.toEqual({ session: { api_key: "legacy" } });
 
     expect(window.fetch).toHaveBeenNthCalledWith(
       1,
@@ -164,7 +204,7 @@ describe("managed NextChat API requests", () => {
         "access-token",
         8,
       ),
-    ).resolves.toBeNull();
+    ).resolves.toEqual({});
 
     expect(window.fetch).toHaveBeenCalledWith(
       "https://api.jisudeng.com/api/v1/mobile/sessions/chat/switch-group",
@@ -175,7 +215,67 @@ describe("managed NextChat API requests", () => {
     );
   });
 
-  test("falls back to old chat session then shared group route", async () => {
+  test("uses only the dedicated video session group route", async () => {
+    jest.mocked(window.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ code: 0, data: {} })),
+    } as Response);
+
+    await expect(
+      switchManagedVideoGroupCompatible(
+        "https://api.jisudeng.com",
+        "access-token",
+        12,
+      ),
+    ).resolves.toEqual({});
+
+    expect(window.fetch).toHaveBeenCalledTimes(1);
+    expect(window.fetch).toHaveBeenCalledWith(
+      "https://api.jisudeng.com/api/v1/mobile/sessions/video/switch-group",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ group_id: 12 }),
+      }),
+    );
+  });
+
+  test("does not fall back to a shared chat route when video routes are absent", async () => {
+    jest
+      .mocked(window.fetch)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve("404 page not found"),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve("404 page not found"),
+      } as Response);
+
+    await expect(
+      switchManagedVideoGroupCompatible(
+        "https://api.jisudeng.com",
+        "access-token",
+        12,
+      ),
+    ).rejects.toThrow("HTTP 404");
+
+    expect(window.fetch).toHaveBeenCalledTimes(2);
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://api.jisudeng.com/api/v1/mobile/sessions/video/switch-group",
+      expect.anything(),
+    );
+    expect(window.fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://api.jisudeng.com/api/v1/nextchat/mobile/sessions/video/group",
+      expect.anything(),
+    );
+  });
+
+  test("returns a legacy chat group-switch acknowledgement for safe re-bootstrap", async () => {
     jest
       .mocked(window.fetch)
       .mockResolvedValueOnce({
@@ -206,7 +306,7 @@ describe("managed NextChat API requests", () => {
         "access-token",
         9,
       ),
-    ).resolves.toMatchObject({ session: { api_key: "legacy-chat" } });
+    ).resolves.toEqual({ session: { api_key: "legacy-chat" } });
 
     expect(window.fetch).toHaveBeenNthCalledWith(
       1,
@@ -223,6 +323,41 @@ describe("managed NextChat API requests", () => {
       "https://api.jisudeng.com/api/v1/nextchat/mobile/group",
       expect.anything(),
     );
+  });
+
+  test("accepts only an exact purpose and group-pinned replacement session", () => {
+    const replacement = {
+      session_binding: "group-pinned-v1",
+      session: { user_id: 1, api_key: "chat", api_key_id: 1, purpose: "chat" },
+      sessions: {
+        chat: { user_id: 1, api_key: "chat", api_key_id: 1, purpose: "chat" },
+        video: {
+          user_id: 1,
+          api_key: "video-pinned",
+          api_key_id: 9,
+          purpose: "video",
+          group_id: 12,
+          binding: "group-pinned-v1",
+        },
+      },
+    };
+
+    expect(
+      isGroupPinnedManagedSessionSwitch(replacement as any, "video", 12),
+    ).toBe(true);
+    expect(
+      isGroupPinnedManagedSessionSwitch(replacement as any, "video", 13),
+    ).toBe(false);
+    expect(
+      isGroupPinnedManagedSessionSwitch(replacement as any, "image", 12),
+    ).toBe(false);
+    expect(
+      isGroupPinnedManagedSessionSwitch(
+        { ...replacement, session_binding: "legacy" } as any,
+        "video",
+        12,
+      ),
+    ).toBe(false);
   });
 
   test("uses native HTTP on Android for managed login", async () => {
@@ -570,7 +705,9 @@ describe("managed NextChat API requests", () => {
 
   test("does not replay Live call creation even when it carries an idempotency key", async () => {
     jest.mocked(Capacitor.getPlatform).mockReturnValue("android");
-    jest.mocked(CapacitorHttp.request).mockRejectedValueOnce(new Error("timeout"));
+    jest
+      .mocked(CapacitorHttp.request)
+      .mockRejectedValueOnce(new Error("timeout"));
 
     await expect(
       managedRequestText(

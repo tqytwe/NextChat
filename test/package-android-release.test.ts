@@ -90,6 +90,7 @@ function createFixture(options: FixtureOptions = {}) {
       version: "2.0.65",
       versionCode: 265,
       apkUrl: "/downloads/jisudengchat-android.apk?v=2.0.65-265",
+      sourceState: "working-tree-stale",
     },
   );
   const embeddedVersion = options.embeddedVersion ?? "2.0.66";
@@ -195,6 +196,7 @@ describe("Android release package version gate", () => {
     expect(
       JSON.parse(readFileSync(fixture.manifestPath, "utf-8")),
     ).toMatchObject({
+      channel: "direct",
       version: "2.0.66",
       latestVersion: "2.0.66",
       versionCode: 266,
@@ -206,6 +208,9 @@ describe("Android release package version gate", () => {
     expect(readFileSync(fixture.publishedApk, "utf-8")).toBe(
       "new release APK bytes",
     );
+    expect(
+      JSON.parse(readFileSync(fixture.manifestPath, "utf-8")).sourceState,
+    ).toBeUndefined();
   });
 
   test("allows staged and unstaged release artifacts without masking source changes", () => {
