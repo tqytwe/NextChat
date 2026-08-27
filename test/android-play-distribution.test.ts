@@ -10,33 +10,34 @@ describe("Android Play/direct distribution split", () => {
   test("build scripts keep direct APK packaging separate from Play AAB bundling", () => {
     const pkg = JSON.parse(read("package.json"));
 
-    expect(pkg.scripts["android:build"]).toContain("assembleDirectRelease");
-    expect(pkg.scripts["android:build"]).toContain("android:export:direct");
-    expect(pkg.scripts["android:export:direct"]).toContain(
+    expect(pkg.scripts["android:build"]).toContain("android:build:internal");
+    expect(pkg.scripts["android:build:internal"]).toContain("assembleDirectRelease");
+    expect(pkg.scripts["android:build:internal"]).toContain("android:export:direct:internal");
+    expect(pkg.scripts["android:export:direct:internal"]).toContain(
       "NEXT_PUBLIC_ANDROID_DISTRIBUTION=direct",
     );
-    expect(pkg.scripts["android:export:direct"]).toContain(
+    expect(pkg.scripts["android:export:direct:internal"]).toContain(
       "NEXT_PUBLIC_ANDROID_DIRECT_REDEEM_SHOP_URL=https://pay.ldxp.cn/shop/4B4R3T44",
     );
-    expect(pkg.scripts["android:bundle:play"]).toContain("bundlePlayRelease");
-    expect(pkg.scripts["android:bundle:play"]).toContain("android:export:play");
-    expect(pkg.scripts["android:export:play"]).toContain(
+    expect(pkg.scripts["android:bundle:play:internal"]).toContain("bundlePlayRelease");
+    expect(pkg.scripts["android:bundle:play:internal"]).toContain("android:export:play:internal");
+    expect(pkg.scripts["android:export:play:internal"]).toContain(
       "NEXT_PUBLIC_ANDROID_DISTRIBUTION=play",
     );
-    expect(pkg.scripts["android:build"]).toContain("npx cap sync android");
-    expect(pkg.scripts["android:export:play"]).toContain(
+    expect(pkg.scripts["android:build:internal"]).toContain("npx cap sync android");
+    expect(pkg.scripts["android:export:play:internal"]).toContain(
       "scripts/check-android-play-assets.mjs",
     );
-    expect(pkg.scripts["android:package:play"]).toContain(
+    expect(pkg.scripts["android:package:play:internal"]).toContain(
       "scripts/package-android-play-release.mjs",
     );
-    expect(pkg.scripts["android:release:play"]).toContain(
-      "android:bundle:play",
+    expect(pkg.scripts["android:release:play:internal"]).toContain(
+      "android:bundle:play:internal",
     );
-    expect(pkg.scripts["android:release:play"]).toContain(
-      "android:package:play",
+    expect(pkg.scripts["android:release:play:internal"]).toContain(
+      "android:package:play:internal",
     );
-    expect(pkg.scripts["android:build"]).not.toContain("assembleRelease");
+    expect(pkg.scripts["android:build:internal"]).not.toContain("assembleRelease");
   });
 
   test("Gradle declares Play and direct flavors with the same application id", () => {
