@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>即速灯 APP 国内版原型</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17212b;
+        --muted: #6c7884;
+        --line: #dfe5e9;
+        --bg: #f5f7f8;
+        --surface: #fff;
+        --blue: #1769e0;
+        --green: #18794e;
+        --orange: #b45309;
+        --red: #bf3131;
+        --radius: 8px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #e6ebee;
+        color: var(--ink);
+        font:
+          14px/1.45 Inter,
+          "PingFang SC",
+          "Noto Sans CJK SC",
+          sans-serif;
+      }
+      .device {
+        width: 412px;
+        min-height: 915px;
+        margin: 0 auto;
+        background: var(--bg);
+        position: relative;
+        overflow: hidden;
+        padding: 24px 16px 88px;
+      }
+      .top {
+        height: 36px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .top .state {
+        display: flex;
+        gap: 6px;
+        color: var(--muted);
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1 {
+        font-size: 24px;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+      h2 {
+        font-size: 17px;
+      }
+      h3 {
+        font-size: 14px;
+      }
+      small,
+      .muted {
+        color: var(--muted);
+      }
+      .head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 14px 0 18px;
+      }
+      .head p {
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .icon {
+        width: 36px;
+        height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        color: var(--ink);
+        background: var(--surface);
+        font-weight: 700;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .between {
+        justify-content: space-between;
+      }
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+      .gap16 {
+        gap: 16px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 14px;
+      }
+      .card.flat {
+        border: 0;
+      }
+      .section {
+        display: grid;
+        gap: 10px;
+        margin-top: 22px;
+      }
+      .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .section-title button {
+        border: 0;
+        background: none;
+        color: var(--blue);
+        font: inherit;
+      }
+      .button {
+        min-height: 42px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--blue);
+        color: #fff;
+        font: 600 14px inherit;
+      }
+      .button.secondary {
+        background: var(--surface);
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+      .button.ghost {
+        padding: 0;
+        min-height: auto;
+        background: none;
+        color: var(--blue);
+      }
+      .pill {
+        display: inline-flex;
+        padding: 3px 7px;
+        border-radius: 4px;
+        background: #edf2f5;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .pill.green {
+        background: #e8f5ec;
+        color: var(--green);
+      }
+      .pill.orange {
+        background: #fff1dc;
+        color: var(--orange);
+      }
+      .pill.red {
+        background: #fdecec;
+        color: var(--red);
+      }
+      .tabs {
+        display: flex;
+        gap: 18px;
+        border-bottom: 1px solid var(--line);
+      }
+      .tabs span {
+        padding: 0 0 10px;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .tabs .active {
+        color: var(--ink);
+        border-bottom: 2px solid var(--blue);
+      }
+      .quick {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+      }
+      .quick .tile {
+        min-height: 78px;
+        padding: 9px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 8px;
+        display: grid;
+        align-content: space-between;
+      }
+      .tile b {
+        font-size: 17px;
+        color: var(--blue);
+      }
+      .tile span {
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .task {
+        display: grid;
+        grid-template-columns: 38px 1fr auto;
+        align-items: center;
+        gap: 10px;
+      }
+      .thumb {
+        width: 38px;
+        height: 38px;
+        border-radius: 6px;
+        background: #d8e5eb;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .task strong,
+      .task small {
+        display: block;
+      }
+      .progress {
+        height: 4px;
+        background: #e6ebee;
+        border-radius: 3px;
+        overflow: hidden;
+        margin-top: 7px;
+      }
+      .progress i {
+        display: block;
+        height: 100%;
+        width: 62%;
+        background: var(--blue);
+      }
+      .composer {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 142px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .composer textarea {
+        width: 100%;
+        resize: none;
+        border: 0;
+        outline: 0;
+        font: inherit;
+        color: var(--ink);
+      }
+      .tools {
+        display: flex;
+        gap: 7px;
+        align-items: center;
+      }
+      .tools button {
+        width: 30px;
+        height: 30px;
+        border: 0;
+        color: var(--muted);
+        background: #f0f3f5;
+        border-radius: 6px;
+      }
+      .tools .send {
+        margin-left: auto;
+        color: #fff;
+        background: var(--blue);
+      }
+      .bottom {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 72px;
+        background: rgba(255, 255, 255, 0.98);
+        border-top: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        padding: 8px 6px 5px;
+      }
+      .bottom div {
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 2px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .bottom b {
+        font-size: 16px;
+        font-weight: 500;
+      }
+      .bottom .active {
+        color: var(--blue);
+        font-weight: 700;
+      }
+      .select {
+        min-height: 52px;
+        display: grid;
+        gap: 2px;
+        padding: 9px 11px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      .select small {
+        font-size: 11px;
+      }
+      .select strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .count {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      .count button {
+        width: 34px;
+        height: 34px;
+        border: 0;
+        background: #eff3f5;
+        border-radius: 6px;
+        font-size: 18px;
+      }
+      .count b {
+        min-width: 34px;
+        text-align: center;
+      }
+      .asset-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+      .asset {
+        min-height: 136px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .asset .art {
+        height: 94px;
+        background: #d6e0e5;
+      }
+      .asset:nth-child(2) .art {
+        background: #e7d9d2;
+      }
+      .asset:nth-child(3) .art {
+        background: #d9e8db;
+      }
+      .asset:nth-child(4) .art {
+        background: #e8e0c7;
+      }
+      .asset p {
+        padding: 8px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .stage {
+        display: grid;
+        grid-template-columns: 30px 1fr auto;
+        gap: 10px;
+        align-items: start;
+      }
+      .stage .num {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: #e8f0fd;
+        color: var(--blue);
+        font-weight: 800;
+      }
+      .stage.done .num {
+        background: #e8f5ec;
+        color: var(--green);
+      }
+      .stage .line {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 3px;
+      }
+      .profile {
+        text-align: center;
+        padding: 14px 0 4px;
+      }
+      .avatar {
+        width: 62px;
+        height: 62px;
+        border-radius: 50%;
+        margin: 0 auto 8px;
+        background: #dce7ef;
+        display: grid;
+        place-items: center;
+        color: #47677c;
+        font-size: 23px;
+      }
+      .menu {
+        display: grid;
+        gap: 0;
+      }
+      .menu .item {
+        min-height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 3px;
+        border-bottom: 1px solid var(--line);
+      }
+      .menu .item b {
+        width: 25px;
+        color: var(--blue);
+      }
+      .menu .item span {
+        flex: 1;
+        font-weight: 650;
+      }
+      .menu .item i {
+        color: var(--muted);
+        font-style: normal;
+      }
+      .auth {
+        padding-top: 104px;
+      }
+      .brand {
+        display: grid;
+        gap: 8px;
+        text-align: center;
+        margin-bottom: 42px;
+      }
+      .brand .mark {
+        margin: auto;
+        width: 48px;
+        height: 48px;
+        display: grid;
+        place-items: center;
+        border-radius: 10px;
+        background: var(--blue);
+        color: #fff;
+        font-size: 25px;
+      }
+      .field {
+        display: grid;
+        gap: 6px;
+      }
+      .field input {
+        height: 46px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0 12px;
+        font: inherit;
+      }
+      .oauth {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .oauth button {
+        min-height: 42px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font: 600 13px inherit;
+      }
+      .center {
+        text-align: center;
+      }
+      .notice {
+        padding: 10px;
+        background: #fff6e8;
+        color: #8a5b16;
+        border-radius: 8px;
+        font-size: 12px;
+      }
+      .sheet {
+        position: absolute;
+        z-index: 3;
+        inset: 160px 0 0;
+        padding: 18px 16px;
+        background: #fff;
+        border-top: 1px solid var(--line);
+      }
+      .sheet::before {
+        content: "";
+        width: 36px;
+        height: 4px;
+        border-radius: 3px;
+        background: #dce2e6;
+        display: block;
+        margin: 0 auto 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script>
+      const nav = (active) =>
+        `<nav class="bottom">${[
+          ["home", "首页", "⌂"],
+          ["chat", "对话", "◌"],
+          ["create", "创作", "✦"],
+          ["assets", "资产", "▦"],
+          ["me", "我的", "◉"],
+        ]
+          .map(
+            ([id, label, icon]) =>
+              `<div class="${
+                active === id ? "active" : ""
+              }"><b>${icon}</b><span>${label}</span></div>`,
+          )
+          .join("")}</nav>`;
+      const shell = (content, active = "home") =>
+        `<section class="device"><div class="top"><span>9:41</span><span class="state">● ▰ ◔</span></div>${content}${nav(
+          active,
+        )}</section>`;
+      const header = (eyebrow, title, action = "＋") =>
+        `<header class="head"><div><p>${eyebrow}</p><h1>${title}</h1></div><button class="icon">${action}</button></header>`;
+      const screens = {
+        login: shell(
+          `<div class="auth"><div class="brand"><div class="mark">✦</div><h1>即速灯</h1><p class="muted">把想法变成可以继续创作的作品</p></div><div class="stack gap16"><label class="field"><span>邮箱</span><input placeholder="name@example.com" /></label><label class="field"><span>密码</span><input placeholder="输入密码" type="password" /></label><button class="button">登录</button><div class="row between"><button class="button ghost">创建账号</button><button class="button ghost">忘记密码</button></div><div class="center muted">或使用已有账号继续</div><div class="oauth"><button>G  Google</button><button>◈  GitHub</button></div></div></div>`,
+          "",
+        ),
+        home: shell(
+          `${header(
+            "早上好，阿灯",
+            "继续创作",
+          )}<section class="card"><div class="row between"><div><span class="pill green">进行中</span><h2 style="margin-top:8px">品牌短片 · EP-001</h2><p class="muted">第 6 镜正在生成</p></div><button class="button secondary">继续</button></div><div class="progress"><i></i></div></section><section class="section"><div class="section-title"><h2>快速开始</h2></div><div class="quick"><div class="tile"><b>✦</b><span>开始对话</span></div><div class="tile"><b>▧</b><span>生成图片</span></div><div class="tile"><b>▶</b><span>制作视频</span></div><div class="tile"><b>▦</b><span>导入素材</span></div></div></section><section class="section"><div class="section-title"><h2>进行中的任务</h2><button>查看全部</button></div><div class="card task"><div class="thumb">图</div><div><strong>城市夜景概念图</strong><small>SenseNova U1.5 · 2 张</small><div class="progress"><i></i></div></div><span class="pill orange">62%</span></div><div class="card task"><div class="thumb">视</div><div><strong>EP-001 / SHOT-006</strong><small>Grok Heavy · 1080p</small></div><span class="pill">排队中</span></div></section>`,
+          "home",
+        ),
+        chat: shell(
+          `${header(
+            "对话",
+            "新对话",
+            "⋯",
+          )}<section class="card"><span class="pill">研究</span><h2 style="margin-top:9px">把下面的品牌描述整理成视频脚本</h2><p class="muted" style="margin-top:7px">已引用 3 个项目素材</p></section><section class="section"><div class="card flat"><p>我会先提炼人物、场景和产品卖点，再给出分集结构与镜头建议。</p></div><div class="card"><h3>建议保存到短剧工程</h3><p class="muted" style="margin:5px 0 10px">品牌短片 · EP-001 · 剧本草稿</p><button class="button secondary">选择工程</button></div></section><div style="position:absolute;bottom:86px;left:16px;right:16px" class="composer"><textarea placeholder="输入消息，或添加图片、文件、语音…"></textarea><div class="tools"><button>＋</button><button>◎</button><button>⌕</button><button class="send">↑</button></div></div>`,
+          "chat",
+        ),
+        image: shell(
+          `${header(
+            "图像工作室",
+            "创作",
+            "↻",
+          )}<div class="tabs"><span class="active">图像工作室</span><span>视频工作台</span></div><section class="section"><button class="select"><small>提示词</small><strong>从 Canvas 提示词目录选择，或直接输入</strong></button><div class="composer" style="min-height:114px"><textarea>夜晚的城市街头，雨后倒影，电影感，人物保持参考图身份一致</textarea><div class="tools"><button>＋</button><button>▧</button><button class="send">✦</button></div></div><div class="grid2"><button class="select"><small>分组</small><strong>创作</strong></button><button class="select"><small>模型</small><strong>SenseNova U1.5</strong></button><button class="select"><small>尺寸</small><strong>1536 × 1024</strong></button><button class="select"><small>风格</small><strong>自动</strong></button></div><div class="card"><div class="row between"><b>输出张数</b><span class="muted">按模型能力与余额校验</span></div><div class="row" style="margin-top:10px"><div class="count"><button>−</button><b>2</b><button>＋</button></div><span class="pill">1</span><span class="pill green">2</span><span class="pill">3</span><span class="pill">4</span></div></div><button class="button">查看确认单 · 预计 $0.12</button></section>`,
+          "create",
+        ),
+        prompts: shell(
+          `${header(
+            "图像提示词",
+            "Canvas 目录",
+            "×",
+          )}<label class="select"><small>搜索</small><strong>人像、产品、海报、场景…</strong></label><section class="section"><div class="tabs"><span class="active">全部</span><span>精选</span><span>人像</span><span>电商</span></div><div class="card task"><div class="thumb">封</div><div><strong>雨夜电影人物肖像</strong><small>人像 · 摄影 · 需要参考图</small></div><button class="button secondary">使用</button></div><div class="card task"><div class="thumb">封</div><div><strong>产品广告主视觉</strong><small>产品 · 海报 · 1024 × 1536</small></div><button class="button secondary">使用</button></div><div class="card task"><div class="thumb">封</div><div><strong>角色设定三视图</strong><small>角色 · 一致性 · 3 张</small></div><button class="button secondary">使用</button></div></section><div class="sheet"><div class="row between"><h2>雨夜电影人物肖像</h2><button class="icon">×</button></div><p class="muted" style="margin-top:8px">完整提示词、标签、参考图要求与推荐参数会在这里展示。</p><div class="row" style="margin-top:18px"><button class="button secondary">复制</button><button class="button" style="flex:1">应用到图像工作室</button></div></div>`,
+          "create",
+        ),
+        video: shell(
+          `${header(
+            "视频工作台",
+            "创作",
+            "↻",
+          )}<div class="tabs"><span>图像工作室</span><span class="active">视频工作台</span></div><section class="section"><div class="notice">当前模型、分辨率和时长均从你的授权分组动态读取。</div><div class="grid2"><button class="select"><small>分组</small><strong>Grok Heavy</strong></button><button class="select"><small>模型</small><strong>Grok Video Pro</strong></button><button class="select"><small>分辨率</small><strong>1080p</strong></button><button class="select"><small>时长</small><strong>8 秒</strong></button></div><div class="composer"><textarea>镜头从城市天际线缓慢推进，雨滴滑过镜头，人物转身看向霓虹灯。</textarea><div class="tools"><button>＋</button><button>▧</button><button class="send">✦</button></div></div><div class="card"><h3>参考素材</h3><p class="muted" style="margin:5px 0 10px">可添加角色、关键帧、视频或音频素材</p><button class="button secondary">添加素材</button></div><button class="button">查看确认单 · 预计 $0.68</button></section>`,
+          "create",
+        ),
+        assets: shell(
+          `${header(
+            "资产",
+            "创作资产",
+            "⌕",
+          )}<div class="tabs"><span class="active">全部</span><span>图片批次</span><span>视频片段</span><span>本机素材</span></div><section class="section"><div class="card row between"><div><h2>短剧工程</h2><p class="muted">剧本、分镜、生成结果与成片集中归档</p></div><button class="button secondary">查看</button></div><div class="asset-grid"><div class="asset"><div class="art"></div><p>城市夜景 · 4 张</p></div><div class="asset"><div class="art"></div><p>角色设定 · 3 张</p></div><div class="asset"><div class="art"></div><p>镜头 006 · 8 秒</p></div><div class="asset"><div class="art"></div><p>本机导入 · 2 项</p></div></div></section>`,
+          "assets",
+        ),
+        project: shell(
+          `${header(
+            "短剧工程",
+            "品牌短片",
+            "⋯",
+          )}<section class="card"><div class="row between"><div><span class="pill green">制作中</span><h2 style="margin-top:8px">横屏 · 16:9 · 中文</h2></div><button class="button secondary">预览成片</button></div></section><section class="section"><div class="stage done"><div class="num">✓</div><div><h3>剧本与分集</h3><p class="line">EP-001 已确认，12 个场景</p></div><button class="button ghost">编辑</button></div><div class="stage done"><div class="num">✓</div><div><h3>视觉设定</h3><p class="line">角色 2 · 场景 4 · 道具 3</p></div><button class="button ghost">查看</button></div><div class="stage"><div class="num">3</div><div><h3>分镜与关键帧</h3><p class="line">12 / 18 个镜头已冻结</p></div><button class="button ghost">继续</button></div><div class="stage"><div class="num">4</div><div><h3>视频与音频生产</h3><p class="line">生成前需要逐项确认</p></div><button class="button ghost">打开</button></div><div class="stage"><div class="num">5</div><div><h3>成片</h3><p class="line">片段完成后可生成 MP4</p></div><button class="button ghost">暂不可用</button></div></section>`,
+          "assets",
+        ),
+        account: shell(
+          `${header(
+            "我的",
+            "账户",
+            "⚙",
+          )}<div class="profile"><div class="avatar">阿</div><h2>阿灯</h2><p class="muted">tqytwe@163.com</p></div><section class="section"><div class="card row between"><div><small>可用余额</small><h1>$ 26.80</h1></div><button class="button secondary">兑换码</button></div><div class="menu card"><div class="item"><b>◉</b><span>个人资料与安全</span><i>›</i></div><div class="item"><b>▤</b><span>订单与账单</span><i>›</i></div><div class="item"><b>◌</b><span>通知中心</span><i>›</i></div><div class="item"><b>?</b><span>反馈与进度</span><i>›</i></div><div class="item"><b>⚙</b><span>系统设置</span><i>›</i></div></div></section>`,
+          "me",
+        ),
+        settings: shell(
+          `${header(
+            "系统设置",
+            "设置",
+            "‹",
+          )}<section class="menu card"><div class="item"><b>◐</b><span>外观</span><i>跟随系统 ›</i></div><div class="item"><b>文</b><span>语言</span><i>简体中文 ›</i></div><div class="item"><b>▣</b><span>网页打开方式</span><i>优先 APP 内 ›</i></div><div class="item"><b>◫</b><span>权限管理</span><i>›</i></div><div class="item"><b>▤</b><span>反馈与日志</span><i>›</i></div><div class="item"><b>ⓘ</b><span>关于与更新</span><i>3.0.24 ›</i></div></section><section class="section"><div class="card"><h3>账户注销申请</h3><p class="muted" style="margin:5px 0 10px">提交申请后将由平台核验资产、余额与安全状态。</p><button class="button secondary">提交申请</button></div></section>`,
+          "me",
+        ),
+      };
+      const screen =
+        new URLSearchParams(location.search).get("screen") || "home";
+      document.querySelector("#app").innerHTML =
+        screens[screen] || screens.home;
+    </script>
+  </body>
+</html>

@@ -2733,11 +2733,11 @@ function localPromptCatalogItemToImageTemplate(
     author: "Jisudeng",
     source: "Jisudeng creation space",
     categories: item.categories,
+    coverUrl: coverUrl || item.cover_url,
     domain: item.purpose,
     style: item.style,
     subject: item.subject,
     featured: item.featured,
-    coverUrl: coverUrl || undefined,
     params: {},
   };
 }
@@ -7941,8 +7941,6 @@ function ImagePromptLibrarySheet(props: {
     }
     async function loadLibrary() {
       const accountId = String(props.accountId || "").trim();
-      const accessToken = String(props.accessToken || "").trim();
-      const backendBaseUrl = String(props.backendBaseUrl || "").trim();
       try {
         if (!accountId) return;
         const cached = await readLocalPromptCatalog(
@@ -7952,13 +7950,12 @@ function ImagePromptLibrarySheet(props: {
           "canvas",
         );
         if (cached) await applyCatalog(cached);
-        if (!accessToken || !backendBaseUrl) return;
         const synced = await syncLocalPromptCatalog(
           accountId,
           locale,
           "image",
-          backendBaseUrl,
-          accessToken,
+          "",
+          "",
           undefined,
           "canvas",
         );
@@ -7975,13 +7972,7 @@ function ImagePromptLibrarySheet(props: {
       alive = false;
       releaseCoverObjectURLs();
     };
-  }, [
-    props.accessToken,
-    props.accountId,
-    props.backendBaseUrl,
-    props.open,
-    props.text,
-  ]);
+  }, [props.accountId, props.open, props.text]);
 
   function markRecent(id: string) {
     setRecentIds((ids) => {
@@ -14856,87 +14847,21 @@ function AndroidVideoStudio() {
       );
       videoPromptObjectURLsRef.current = [];
     };
-    const applyCatalog = async (catalog: LocalPromptCatalog) => {
-      const entries = await Promise.all(
-        catalog.items.map(async (item) => ({
-          item,
-          coverUrl: await createLocalPromptCoverObjectURL(
-            catalog.accountId,
-            catalog.locale,
-            "video",
-            item.id,
-            catalog.source,
-          ),
-        })),
-      );
-      if (disposed) {
-        entries.forEach(({ coverUrl }) => {
-          if (coverUrl) URL.revokeObjectURL(coverUrl);
-        });
-        return;
-      }
-      releasePromptObjectURLs();
-      videoPromptObjectURLsRef.current = entries
-        .map(({ coverUrl }) => coverUrl)
-        .filter(Boolean);
-      setVideoPrompts(
-        entries.map(({ item, coverUrl }) => ({
-          ...localPromptCatalogItemToVideoPrompt(item, coverUrl),
-          id: item.id,
-        })),
-      );
-      setVideoPromptCategories([
-        { id: "all", label: copy.selectPrompt },
-        ...catalog.categories.map((category) => ({
-          id: category.id,
-          label: category.label,
-        })),
-      ]);
-    };
     const loadPromptCatalog = async () => {
       releasePromptObjectURLs();
       setVideoPrompts([]);
       setVideoPromptCategories([]);
       setVideoPromptCategory("all");
-      if (!activeAccountId) return;
-      // Video creation reuses the same published Creation Space prompt
-      // directory as the image studio. The Canvas mirror owns the prompt
-      // bodies and covers, so it must be synced in the canvas namespace.
-      const cached = await readLocalPromptCatalog(
-        activeAccountId,
-        locale,
-        "video",
-        "canvas",
-      );
-      if (cached) await applyCatalog(cached);
-      if (!managed.accessToken || !managed.backendBaseUrl || disposed) return;
-      try {
-        const synced = await syncLocalPromptCatalog(
-          activeAccountId,
-          locale,
-          "video",
-          managed.backendBaseUrl,
-          managed.accessToken,
-          undefined,
-          "canvas",
-        );
-        await applyCatalog(synced.catalog);
-      } catch {
-        // The cached catalog remains usable while the server is unavailable.
-      }
+      // Canvas publishes an image-prompt directory only. Do not mislabel its
+      // 1,500+ image templates as video prompts merely because both studios
+      // have a prompt picker.
     };
     void loadPromptCatalog();
     return () => {
       disposed = true;
       releasePromptObjectURLs();
     };
-  }, [
-    activeAccountId,
-    managed.accessToken,
-    managed.backendBaseUrl,
-    text,
-    copy.selectPrompt,
-  ]);
+  }, [text]);
 
   const visibleVideoPrompts = useMemo(() => {
     const query = videoPromptQuery.trim().toLowerCase();
@@ -16092,12 +16017,18 @@ function AndroidImageStudio() {
     imageModelSupportsReferences(selectedImageModelInfo)
       ? managedImageReferenceLimit(selectedImageModelInfo)
       : 0;
+  const imageOutputLimit = Math.max(
+    1,
+    Number(
+      selectedImageModelInfo?.image_capabilities?.max_outputs_per_job || 4,
+    ),
+  );
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState(String(imagePrefs.size || "1024x1024"));
   const [quality, setQuality] = useState(String(imagePrefs.quality || "auto"));
   const [style, setStyle] = useState(String(imagePrefs.style || "auto"));
   const [count, setCount] = useState(
-    Math.max(1, Math.min(4, Number(imagePrefs.count || 1))),
+    Math.max(1, Number(imagePrefs.count || 1)),
   );
   const [references, setReferences] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -16224,6 +16155,10 @@ function AndroidImageStudio() {
       setQuality(qualityOptions[0]?.id || "auto");
     }
   }, [quality, qualityOptions]);
+
+  useEffect(() => {
+    if (count > imageOutputLimit) setCount(imageOutputLimit);
+  }, [count, imageOutputLimit]);
 
   useEffect(() => {
     return () => {
@@ -16402,7 +16337,7 @@ function AndroidImageStudio() {
     const taskStyle = overrides?.style || style;
     const taskCount = Math.max(
       1,
-      Math.min(4, Number(overrides?.n || count || 1)),
+      Math.min(imageOutputLimit, Number(overrides?.n || count || 1)),
     );
     // Snapshot inputs once. A batch must not change from edit to generation if
     // the composer state is refreshed while one of its individual requests runs.
@@ -16992,7 +16927,9 @@ function AndroidImageStudio() {
     if (item?.params?.quality) setQuality(item.params.quality);
     if (item?.params?.style) setStyle(item.params.style);
     if (item?.params?.n) {
-      setCount(Math.max(1, Math.min(4, Number(item.params.n || 1))));
+      setCount(
+        Math.max(1, Math.min(imageOutputLimit, Number(item.params.n || 1))),
+      );
     }
     setImageActionTarget(null);
     setError("");
@@ -17073,7 +17010,9 @@ function AndroidImageStudio() {
     if (template.params.size) setSize(template.params.size);
     if (template.params.quality) setQuality(template.params.quality);
     if (template.params.style) setStyle(template.params.style);
-    if (template.params.count) setCount(template.params.count);
+    if (template.params.count) {
+      setCount(Math.max(1, Math.min(imageOutputLimit, template.params.count)));
+    }
     setPromptSheetOpen(false);
     setError(
       template.needReferenceImages && references.length === 0
@@ -17289,15 +17228,50 @@ function AndroidImageStudio() {
         <div className={styles["stepper-row"]}>
           <span>{text.image.count}</span>
           <div>
-            {[1, 2, 3, 4].map((item) => (
-              <button
-                key={item}
-                className={clsx({ [styles["active"]]: count === item })}
-                onClick={() => setCount(item)}
-              >
-                {item}
-              </button>
-            ))}
+            {[1, 2, 3, 4]
+              .filter((item) => item <= imageOutputLimit)
+              .map((item) => (
+                <button
+                  key={item}
+                  className={clsx({ [styles["active"]]: count === item })}
+                  onClick={() => setCount(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            <button
+              type="button"
+              aria-label={`${text.image.count} -`}
+              disabled={count <= 1}
+              onClick={() => setCount((value) => Math.max(1, value - 1))}
+            >
+              -
+            </button>
+            <input
+              aria-label={text.image.count}
+              inputMode="numeric"
+              min={1}
+              max={imageOutputLimit}
+              type="number"
+              value={count}
+              onChange={(event) => {
+                const next = Number(event.currentTarget.value);
+                if (!Number.isFinite(next)) return;
+                setCount(
+                  Math.max(1, Math.min(imageOutputLimit, Math.floor(next))),
+                );
+              }}
+            />
+            <button
+              type="button"
+              aria-label={`${text.image.count} +`}
+              disabled={count >= imageOutputLimit}
+              onClick={() =>
+                setCount((value) => Math.min(imageOutputLimit, value + 1))
+              }
+            >
+              +
+            </button>
           </div>
         </div>
 
@@ -26519,12 +26493,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     // distribution isolated until its separate asset/policy contract is
     // explicitly enabled; it must not silently start downloading domestic
     // library data after an account login.
-    if (
-      !accountID ||
-      !managed.accessToken ||
-      !backendBaseUrl ||
-      isPlayDistribution(installedRelease)
-    ) {
+    if (!accountID || isPlayDistribution(installedRelease)) {
       return;
     }
     const sync = () => {
@@ -26576,24 +26545,14 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
         : "en";
     const sync = () => {
       if (document.visibilityState !== "visible") return;
-      const token = useManagedNextChatStore.getState().accessToken;
-      if (!token) return;
-      void Promise.all(
-        (["image", "video"] as const).map((kind) =>
-          syncLocalPromptCatalog(
-            accountID,
-            locale,
-            kind,
-            backendBaseUrl,
-            token,
-            undefined,
-            // Both creation modes share the published Creation Space prompt
-            // mirror. Keep this warm-up source identical to the video page so
-            // a first login downloads the actual video inspiration cards and
-            // every later resume can use the same manifest/ETag delta.
-            "canvas",
-          ),
-        ),
+      void syncLocalPromptCatalog(
+        accountID,
+        locale,
+        "image",
+        "",
+        "",
+        undefined,
+        "canvas",
       ).catch(() => undefined);
     };
     sync();
@@ -26603,14 +26562,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       window.removeEventListener("jisudeng-native-resume", sync);
       document.removeEventListener("visibilitychange", sync);
     };
-  }, [
-    backendBaseUrl,
-    installedRelease,
-    managed.accessToken,
-    managed.session?.user_id,
-    managed.user?.id,
-    text,
-  ]);
+  }, [installedRelease, managed.session?.user_id, managed.user?.id, text]);
 
   useEffect(() => {
     const userId = managed.user?.id || managed.session?.user_id;

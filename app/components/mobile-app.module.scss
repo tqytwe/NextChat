@@ -4839,6 +4839,18 @@
     font-weight: 900;
   }
 
+  input {
+    width: 44px;
+    height: 32px;
+    border: var(--border-in-light);
+    border-radius: 8px;
+    background: var(--surface-strong);
+    color: var(--black);
+    font: inherit;
+    font-weight: 800;
+    text-align: center;
+  }
+
   .active {
     background: var(--ios-blue);
     color: #fff;

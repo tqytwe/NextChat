@@ -7,6 +7,11 @@ export type LocalPromptCatalogKind = "image" | "video";
 // so an old image cache can never be mistaken for a video-capable template.
 export type LocalPromptCatalogSource = "platform" | "canvas";
 
+// Canvas owns the public image-prompt directory. This is deliberately an
+// unauthenticated origin: never proxy a managed access token through it.
+const CANVAS_PROMPT_CATALOG_ORIGIN = "https://canvas.jisudeng.com";
+const CANVAS_PROMPT_PAGE_SIZE = 500;
+
 export interface LocalPromptCatalogMedia {
   media_type?: string;
   url?: string;
@@ -203,7 +208,7 @@ function normalizeMedia(value: unknown): LocalPromptCatalogMedia[] {
     .map((entry): LocalPromptCatalogMedia | null => {
       const item = asRecord(entry);
       if (!item) return null;
-      const url = normalizedString(item.url);
+      const url = publicHTTPSURL(normalizedString(item.url));
       if (!url) return null;
       return {
         media_type: normalizedString(item.media_type),
@@ -217,6 +222,16 @@ function normalizeMedia(value: unknown): LocalPromptCatalogMedia[] {
       (left, right) =>
         Number(left.sort_order || 0) - Number(right.sort_order || 0),
     );
+}
+
+function publicHTTPSURL(value: string) {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
 }
 
 function firstCover(media: LocalPromptCatalogMedia[]) {
@@ -241,7 +256,8 @@ function promptFingerprint(item: RecordValue) {
   return [
     normalizedString(item.id),
     Number(item.version || 0),
-    normalizedString(item.updated_at),
+    normalizedString(item.updated_at) || normalizedString(item.updatedAt),
+    normalizedString(item.prompt_text) || normalizedString(item.prompt),
     mediaFingerprint,
   ].join(":");
 }
@@ -266,14 +282,16 @@ function normalizeCatalogItem(
   ].filter(Boolean);
   const category = categories[0] || purpose || style || subject || "featured";
   const media = normalizeMedia(source.media);
-  const topLevelCover =
-    normalizedString(source.cover_url) || normalizedString(source.coverUrl);
+  const topLevelCover = publicHTTPSURL(
+    normalizedString(source.cover_url) || normalizedString(source.coverUrl),
+  );
   if (!media.length && topLevelCover) {
     media.push({ media_type: "image", url: topLevelCover, sort_order: 0 });
   }
   const cover = firstCover(media);
   const version = Math.max(0, Number(source.version || 0));
-  const updatedAt = normalizedString(source.updated_at);
+  const updatedAt =
+    normalizedString(source.updated_at) || normalizedString(source.updatedAt);
   return {
     id,
     title: normalizedString(source.title) || id,
@@ -432,6 +450,13 @@ function requestHeaders(accessToken: string, locale: string) {
   return new Headers({
     Accept: "application/json",
     Authorization: `Bearer ${accessToken}`,
+    "Accept-Language": normalizedLocale(locale),
+  });
+}
+
+function canvasRequestHeaders(locale: string) {
+  return new Headers({
+    Accept: "application/json",
     "Accept-Language": normalizedLocale(locale),
   });
 }
@@ -728,6 +753,153 @@ async function fetchAllPromptItemsLegacy(
     .filter((item): item is RecordValue => Boolean(item));
 }
 
+type CanvasPromptDirectoryPage = {
+  items?: unknown[];
+  categories?: unknown[];
+  total?: unknown;
+};
+
+function canvasCatalogMarker(
+  items: RecordValue[],
+  total: number,
+  categories: unknown,
+) {
+  // The published directory does not yet expose ETag. Keep a compact marker
+  // for diagnostics and compare the normalized item fingerprints below for
+  // correctness; do not store all prompt bodies in a synthetic marker.
+  const latest = items.reduce((value, item) => {
+    const updated = normalizedString(item.updatedAt || item.updated_at);
+    return updated > value ? updated : value;
+  }, "");
+  return `${total}:${latest}:${normalizeCategories(categories).length}`;
+}
+
+async function syncCanvasImagePromptCatalog(
+  account: string,
+  locale: string,
+  options: SyncLocalPromptCatalogOptions,
+): Promise<LocalPromptCatalogSyncResult> {
+  const language = normalizedLocale(locale);
+  const previous = await readLocalPromptCatalog(
+    account,
+    language,
+    "image",
+    "canvas",
+  );
+  // The public Canvas directory currently has no ETag. A six-hour refresh
+  // keeps operator edits discoverable without downloading 1,500+ prompts on
+  // every foreground resume; the cached catalog remains available offline.
+  const refreshDue =
+    !previous || Date.now() - previous.syncedAt >= 6 * 60 * 60 * 1000;
+  if (!refreshDue && previous) {
+    return {
+      changed: false,
+      downloadedCovers: 0,
+      fromCache: true,
+      offline: false,
+      catalog: previous,
+    };
+  }
+
+  const requestText = options.requestText || managedRequestText;
+  try {
+    const requestPage = async (page: number) => {
+      const response = await requestText(
+        CANVAS_PROMPT_CATALOG_ORIGIN,
+        `/api/prompts?page=${page}&pageSize=${CANVAS_PROMPT_PAGE_SIZE}`,
+        { method: "GET", signal: options.signal },
+        canvasRequestHeaders(language),
+      );
+      if (!response.ok) {
+        throw new PromptCatalogRequestError(
+          response.status,
+          `Canvas prompt catalog request failed: HTTP ${response.status}`,
+        );
+      }
+      let envelope: PromptEnvelope<CanvasPromptDirectoryPage> | null = null;
+      try {
+        envelope = JSON.parse(
+          response.text,
+        ) as PromptEnvelope<CanvasPromptDirectoryPage>;
+      } catch {
+        // The existing cache is retained below when Canvas returns malformed JSON.
+      }
+      if (
+        !envelope ||
+        envelope.code !== 0 ||
+        !envelope.data ||
+        !Array.isArray(envelope.data.items)
+      ) {
+        throw new PromptCatalogRequestError(
+          response.status,
+          "Canvas prompt catalog response is invalid",
+        );
+      }
+      return envelope.data;
+    };
+
+    const first = await requestPage(1);
+    const total = Math.max(0, Number(first.total || 0));
+    const pages = Math.max(1, Math.ceil(total / CANVAS_PROMPT_PAGE_SIZE));
+    const pagesData = [first];
+    for (let page = 2; page <= pages; page += 1)
+      pagesData.push(await requestPage(page));
+    const categories = first.categories || [];
+    const aliases = categoryAliases(normalizeCategories(categories));
+    const items = pagesData
+      .flatMap((page) => page.items || [])
+      .map(asRecord)
+      .filter((item): item is RecordValue => Boolean(item))
+      .map((item) => normalizeCatalogItem(item, item, aliases))
+      .filter((item) => Boolean(item.id && item.prompt_text));
+    const catalog: LocalPromptCatalog = {
+      schema: 1,
+      accountId: account,
+      locale: language,
+      kind: "image",
+      source: "canvas",
+      marker: canvasCatalogMarker(
+        pagesData
+          .flatMap((page) => page.items || [])
+          .map(asRecord)
+          .filter((item): item is RecordValue => Boolean(item)),
+        total,
+        categories,
+      ),
+      syncedAt: Date.now(),
+      items,
+      categories: normalizeCategories(categories),
+    };
+    const previousByID = new Map(
+      (previous?.items || []).map((item) => [item.id, item.fingerprint]),
+    );
+    const changed =
+      !previous ||
+      previous.items.length !== catalog.items.length ||
+      catalog.items.some(
+        (item) => previousByID.get(item.id) !== item.fingerprint,
+      );
+    await set(catalogKey(account, language, "image", "canvas"), catalog);
+    return {
+      changed,
+      downloadedCovers: 0,
+      fromCache: false,
+      offline: false,
+      catalog,
+    };
+  } catch (error) {
+    if (previous)
+      return {
+        changed: false,
+        downloadedCovers: 0,
+        fromCache: true,
+        offline: true,
+        catalog: previous,
+      };
+    throw error;
+  }
+}
+
 async function mapWithConcurrency<T, R>(
   values: T[],
   concurrency: number,
@@ -993,7 +1165,16 @@ async function syncLocalPromptCatalogInternal(
   options: SyncLocalPromptCatalogOptions,
 ): Promise<LocalPromptCatalogSyncResult> {
   const account = normalizedAccountId(accountId);
-  if (!account || !accessToken) {
+  if (!account) {
+    throw new Error("A signed-in account is required.");
+  }
+  if (source === "canvas") {
+    if (kind !== "image") {
+      throw new Error("Canvas prompt catalog supports image prompts only.");
+    }
+    return syncCanvasImagePromptCatalog(account, locale, options);
+  }
+  if (!accessToken) {
     throw new Error("A signed-in account is required.");
   }
   const language = normalizedLocale(locale);
