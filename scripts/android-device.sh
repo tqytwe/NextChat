@@ -40,7 +40,7 @@ assert_only_expected_device() {
   if (( ${#devices[@]} == 0 )); then
     return 1
   fi
-  if (( ${#devices[@]} != 1 || "${devices[0]}" != "$ANDROID_SERIAL" )); then
+  if (( ${#devices[@]} != 1 )) || [[ "${devices[0]}" != "$ANDROID_SERIAL" ]]; then
     echo "Expected only $ANDROID_SERIAL for $ANDROID_TEST_PROFILE; found: ${devices[*]}" >&2
     exit 1
   fi
