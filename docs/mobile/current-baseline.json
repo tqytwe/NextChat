@@ -3,10 +3,10 @@
   "channel": "direct",
   "appRepository": "https://github.com/tqytwe/NextChat.git",
   "appBranch": "app/domestic",
-  "appCommit": "80272a59679af197e095fe10e9c641994b34427b",
+  "appCommit": "0d1fabcf309a825c86206b7e78a4ee20349c12d3",
   "backendRepository": "https://github.com/tqytwe/sub2api.git",
   "backendBranch": "app/domestic",
-  "backendCommit": "c17c6c77cb90d1e8d83dc27039773b594ee3f7b1",
+  "backendCommit": "9131ff5cf",
   "androidVersionName": "3.0.25",
   "androidVersionCode": 325,
   "artifactPath": "public/downloads/jisudengchat-android.apk",
@@ -14,11 +14,9 @@
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "knownLimitations": [
-    "This baseline contains source-only Studio contracts and an Asset/Drama-project UI. The backend migration and routes have not been deployed, so a 3.0.25 APK connected to production cannot create or sync Studio projects yet.",
-    "Studio production confirmations, price locks, one-time confirmation tokens, per-shot execution, and Canvas MP4 composition are intentionally not implemented. The five document editors do not generate media or charge an account.",
     "Reference-image selection now uses a compatible gpt-image-1 model and reaches the attached-reference state, but its image task did not reach Completed within 101 seconds; backend task/provider execution evidence is required before the image fixtures can be accepted.",
     "The shared Playwright cache is locked and checked by android:doctor, but the repository does not yet contain a pinned Playwright package or OAuth/WebView/download-page browser suite.",
     "The backend candidate is source-tested only and has not been deployed."
   ],
-  "updatedAt": "2026-08-27T18:20:00+08:00"
+  "updatedAt": "2026-08-27T14:05:00+08:00"
 }
