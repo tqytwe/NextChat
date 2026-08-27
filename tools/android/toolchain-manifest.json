@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "host": "dell-PowerEdge-R730",
+  "buildUser": "codex",
+  "sdkRoot": "/home/dell/Android/Sdk",
+  "avdRoot": "/home/codex/.android/avd",
+  "gradleUserHome": "/home/codex/.gradle",
+  "maestroBin": "/home/codex/.maestro/bin/maestro",
+  "playwrightBrowsersPath": "/home/codex/.cache/ms-playwright",
+  "playwrightChromiumRevision": "1234",
+  "resultsRoot": "test-results/android",
+  "minimumFreeBytes": 21474836480,
+  "javaMajor": 21,
+  "nodeVersion": "20.20.2",
+  "gradleVersion": "8.11.1",
+  "androidGradlePluginVersion": "8.7.2",
+  "emulatorVersion": "36.6.11.0",
+  "platformToolsVersion": "37.0.0",
+  "systemImage": "system-images;android-35;google_apis;x86_64",
+  "avds": {
+    "directRelease": {
+      "name": "Jisudeng_Direct_Release_API35",
+      "serial": "emulator-5554",
+      "port": 5554,
+      "device": "pixel_7",
+      "purpose": "signed Direct APK and overlay upgrade preservation only",
+      "allowDataReset": false
+    },
+    "directE2E": {
+      "name": "Jisudeng_Direct_E2E_API35",
+      "serial": "emulator-5556",
+      "port": 5556,
+      "device": "pixel_7",
+      "purpose": "debug Maestro regression only",
+      "allowDataReset": true
+    },
+    "play": {
+      "name": "Jisudeng_Play_API35",
+      "serial": "emulator-5558",
+      "port": 5558,
+      "device": "pixel_7",
+      "purpose": "future Play-only acceptance",
+      "allowDataReset": false
+    }
+  },
+  "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e"
+}

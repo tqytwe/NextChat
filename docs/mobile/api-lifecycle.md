@@ -1,0 +1,25 @@
+# APP 接口生命周期
+
+请求与响应字段的完整定义保留在 [`../mobile-api-contract.md`](../mobile-api-contract.md)。
+本表是新开发必须遵守的状态真相；任何新增移动端请求必须登记后才能合并。
+
+| 状态 | 接口 | 客户端所有者 | 说明 |
+| --- | --- | --- | --- |
+| canonical | `POST /api/v1/auth/mobile/login`、`/login/2fa`、`/refresh`、`/logout` | `managed-nextchat` | 身份与令牌 |
+| canonical | `GET /api/v1/mobile/account-summary`、`GET /api/v1/mobile/sessions` | `mobile-platform` | 账户和独立会话 |
+| canonical | `POST /api/v1/mobile/sessions/{purpose}/switch-group` | `managed-nextchat` | chat/image/video 分组切换 |
+| legacy | `POST /api/v1/nextchat/mobile/sessions/{purpose}/group` | compatibility helper | 只为旧端兼容；新功能禁止调用 |
+| canonical | `POST/GET /api/v1/mobile/tasks`、`GET /tasks/{id}`、`POST /cancel`、`POST /retry`、`POST /bulk-delete`、`POST /bulk-cancel` | `mobile-platform` | 异步任务与批量管理 |
+| canonical | `POST/GET/PATCH/DELETE /api/v1/mobile/projects` | `mobile-platform` | 云端项目容器 |
+| canonical | `POST/GET/DELETE /api/v1/mobile/assets`、`GET /image-history`、`DELETE/POST /image-history/{id}` | `mobile-platform` | 素材与生图历史 |
+| canonical | `GET /api/v1/mobile/skills`、`GET /skills/{slug}`、`POST/DELETE /skills/{slug}/install`、`POST /skills/{slug}/use` | `mobile-platform` | 技能中心 |
+| canonical | `GET /api/v1/mobile/video/bootstrap`、`POST /api/v1/mobile/video/estimate`、`POST /api/v1/mobile/video/jobs`、`GET /api/v1/mobile/video/jobs`、`GET /api/v1/mobile/video/jobs/{id}`、`POST /api/v1/mobile/video/jobs/{id}/cancel`、`POST /api/v1/mobile/video/jobs/{id}/retry`、`POST /api/v1/mobile/video/jobs/{id}/save-as-asset` | `mobile-video` | 必须带 `purpose=video` |
+| canonical | `POST /api/v1/redeem-codes/redeem`、`GET /api/v1/redeem-codes/history` | `mobile-platform` | Direct 兑换码 |
+| canonical | `POST /api/v1/mobile/payments/create`、`GET /payments/{order_id}`、`POST /sync` | `mobile-platform` | Direct 支付；Play 不显示外部数字权益购买引导 |
+| canonical | `POST /api/v1/mobile/play-billing/purchases` | `mobile-platform` | Play 专用，服务端验 token |
+| canonical | `POST/GET /api/v1/mobile/support/tickets`、`GET /tickets/{id}`、`POST /messages`、`POST /close` | `mobile-platform` | 反馈、注销申请和工单 |
+| canonical | `PUT/DELETE /api/v1/mobile/devices/{installation_id}` | `mobile-push` | FCM 注册和注销 |
+| canonical | `POST /api/v1/mobile/attribution/events`、`POST /api/v1/mobile/diagnostics`、`POST /api/v1/mobile/web-search` | dedicated clients | 归因、诊断、联网搜索 |
+
+`legacy` 接口只有在新端已不再调用、已支持最低版本自然淘汰并完成后端使用量审计后，
+才能标记 `removed`。错误处理必须依据稳定 machine-readable `error.code`，不能依据中文文案。

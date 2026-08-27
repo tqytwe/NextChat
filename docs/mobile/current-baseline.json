@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "channel": "direct",
+  "appRepository": "https://github.com/tqytwe/NextChat.git",
+  "appBranch": "app/domestic",
+  "appCommit": "47634cef7ed12c82a44655370d7a38bffbbbf6a4",
+  "backendRepository": "https://github.com/tqytwe/sub2api.git",
+  "backendBranch": "app/domestic",
+  "backendCommit": "9131ff5cf",
+  "androidVersionName": "3.0.25",
+  "androidVersionCode": 325,
+  "artifactPath": "public/downloads/jisudengchat-android.apk",
+  "artifactSha256": "pending-clean-build",
+  "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
+  "acceptanceStatus": "candidate",
+  "knownLimitations": [
+    "The Direct 3.0.25 artifact must be built from the clean app/domestic commit before this record can become accepted.",
+    "The backend candidate is source-tested only and has not been deployed."
+  ],
+  "updatedAt": "2026-08-27T00:00:00+08:00"
+}

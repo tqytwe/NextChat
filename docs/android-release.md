@@ -1,4 +1,9 @@
-# Android Release Artifact
+# Android Release Artifact (Compatibility Reference)
+
+> Current source of truth: [`docs/mobile/README.md`](mobile/README.md),
+> [`docs/mobile/release-runbook.md`](mobile/release-runbook.md), and
+> `android/release/direct.json`. The examples below are historical compatibility
+> detail only. Do not set Android versions manually or build from an archived worktree.
 
 The only Android APK handoff path is:
 
@@ -14,10 +19,10 @@ direct-channel Gradle intermediate. Older unflavored builds used
 only as a compatibility fallback. Neither path must ever be sent to testers or
 referenced by deployment instructions.
 
-Create a release with one command after setting the version environment values:
+Create the Direct release from `/home/codex/worktrees/jisudeng-app-domestic`:
 
 ```bash
-ANDROID_VERSION_NAME=2.0.77 ANDROID_VERSION_CODE=277 yarn android:release
+corepack yarn android:release
 ```
 
 The release packager verifies the APK package ID, version, signing certificate and
@@ -27,7 +32,7 @@ For Google Play, build the Play flavor as an AAB from the Dell Android build
 machine:
 
 ```bash
-ANDROID_VERSION_NAME=3.0.0 ANDROID_VERSION_CODE=300 yarn android:release:play
+corepack yarn android:release:play
 ```
 
 Release builds require Firebase Cloud Messaging configuration. Put the real

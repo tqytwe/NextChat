@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/dell/Android/Sdk}}"
-ADB="${ADB:-$SDK_ROOT/platform-tools/adb}"
-MAESTRO="${MAESTRO:-/home/codex/.maestro/bin/maestro}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/android-toolchain-env.sh"
+export JISUDENG_ANDROID_PROFILE="${JISUDENG_ANDROID_PROFILE:-direct-e2e}"
+source "$SCRIPT_DIR/android-device.sh"
+assert_expected_avd
+ADB="$SCRIPT_DIR/android-adb.sh"
+MAESTRO="$JISUDENG_MAESTRO_BIN"
 # Maestro uses native, debug-only transport fixtures for deterministic 401/502
 # recovery coverage. Release acceptance is covered separately by the signed-APK
 # smoke test; never run these fixtures against the public handoff artifact.

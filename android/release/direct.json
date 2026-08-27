@@ -1,0 +1,28 @@
+{
+  "channel": "direct",
+  "version": "3.0.25",
+  "versionCode": 325,
+  "releaseDate": "2026-08-27",
+  "notes": {
+    "zh": [
+      "视频创作按服务端能力展示模型与参数",
+      "图像、视频、任务和素材使用独立会话与稳定任务链路",
+      "国内版构建、升级验收和测试环境已固定到 Dell 专用工具链"
+    ],
+    "en": [
+      "Video creation now follows server-declared model capabilities",
+      "Image, video, tasks, and assets use isolated sessions and stable task flows",
+      "Direct builds and upgrade checks now use the fixed Dell toolchain"
+    ],
+    "ja": [
+      "動画作成はサーバーが公開するモデル機能に従って表示されます",
+      "画像、動画、タスク、素材は独立したセッションと安定したタスク処理を使用します",
+      "国内版のビルドとアップグレード確認は固定された Dell ツールチェーンを使用します"
+    ],
+    "ko": [
+      "동영상 만들기는 서버가 공개한 모델 기능에 따라 표시됩니다",
+      "이미지, 동영상, 작업 및 소재는 분리된 세션과 안정적인 작업 흐름을 사용합니다",
+      "국내판 빌드와 업그레이드 검증은 고정된 Dell 도구 체인을 사용합니다"
+    ]
+  }
+}

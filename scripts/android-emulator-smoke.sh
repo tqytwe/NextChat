@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/dell/Android/Sdk}}"
-ADB="${ADB:-$SDK_ROOT/platform-tools/adb}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/android-toolchain-env.sh"
+source "$SCRIPT_DIR/android-device.sh"
+assert_expected_avd
+ADB="$SCRIPT_DIR/android-adb.sh"
 APK_PATH="${ANDROID_APK_PATH:-public/downloads/jisudengchat-android.apk}"
 PACKAGE_NAME="${ANDROID_PACKAGE_NAME:-com.jisudeng.chat}"
 MAIN_ACTIVITY="${ANDROID_MAIN_ACTIVITY:-.MainActivity}"
 EXPECTED_VERSION="${ANDROID_EXPECTED_VERSION:-}"
 NETWORK_CYCLE="${ANDROID_SMOKE_NETWORK_CYCLE:-0}"
-ARTIFACT_DIR="${ANDROID_SMOKE_ARTIFACT_DIR:-test-results/android-emulator}"
+RELEASE_VERSION_CODE="$(node -e 'console.log(require("./public/downloads/android-version.json").versionCode)')"
+ARTIFACT_DIR="${ANDROID_SMOKE_ARTIFACT_DIR:-$JISUDENG_ANDROID_RESULTS_ROOT/$ANDROID_TEST_CHANNEL/$RELEASE_VERSION_CODE/smoke}"
 BOOT_TIMEOUT_SECONDS="${ANDROID_BOOT_TIMEOUT_SECONDS:-180}"
 NETWORK_WAS_DISABLED=0
 

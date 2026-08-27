@@ -1,4 +1,8 @@
-# 极速蹬 Android APP 收口需求台账
+# 极速蹬 Android APP 收口需求台账（历史证据）
+
+> This is an archived closeout record. The current engineering baseline is
+> [`docs/mobile/current-baseline.json`](mobile/current-baseline.json); do not use
+> historical 2.x workspace, version, or acceptance entries as current release truth.
 
 > 唯一发布事实来源。**禁止写"全部完成"**。每项以真实证据为准：代码位置 / 接口 / 单测 / 模拟器 smoke / 真机 / 真实账号（普通+管理员）/ 生产响应。
 > 状态取值：`未开始` / `审计中` / `代码就绪(仅单测)` / `模拟器已过` / `待真机` / `待真实账号` / `待凭据` / `超授权` / `已验收`。

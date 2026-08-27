@@ -1,4 +1,8 @@
-# JisudengChat Mobile API Contract
+# JisudengChat Mobile API Contract (Schema Reference)
+
+> API lifecycle, canonical/legacy status, client owners and retirement rules are
+> maintained in [`docs/mobile/api-lifecycle.md`](mobile/api-lifecycle.md). This
+> document retains request/response schema detail for compatibility review.
 
 This document freezes the APP/backend contract before the next production backend release. The goal is one coordinated backend update, one APP integration pass, and no repeated production restarts while users are active.
 
