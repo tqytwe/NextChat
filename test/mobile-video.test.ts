@@ -72,33 +72,34 @@ describe("mobile video capability and response contract", () => {
     expect(app).not.toContain("jisudeng-video-prompts:");
   });
 
-  test("keeps the Canvas image prompt catalog out of the video workbench", () => {
+  test("warms the Creation Space mirror for both image and video prompt cards", () => {
     const app = readFileSync(
       resolve(process.cwd(), "app/components/mobile-app.tsx"),
       "utf8",
     );
-    const studio = app.slice(
-      app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
-    );
-    expect(studio).toContain(
-      "Canvas publishes an image-prompt directory only. Do not mislabel its",
-    );
-    expect(studio).not.toContain('syncLocalPromptCatalog(');
+    expect(app).toContain('(["image", "video"] as const).map((kind) =>');
+    expect(app).toContain('            "canvas",\n          ),');
+    expect(app).not.toContain('kind === "image" ? "canvas" : "platform"');
   });
 
-  test("does not claim Canvas image prompts are video templates", () => {
+  test("shows the actual video prompt alongside its cached cover", () => {
     const app = readFileSync(
       resolve(process.cwd(), "app/components/mobile-app.tsx"),
       "utf8",
     );
-    const studio = app.slice(
-      app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
+    expect(app).toMatch(
+      /\{item\.coverUrl && \(\s*<img\s+src=\{item\.coverUrl\}/,
     );
-    expect(studio).toContain("setVideoPrompts([]);");
-    expect(studio).not.toContain('"video",\n          "canvas",');
-    expect(studio).not.toContain('"canvas",\n          undefined,');
+    expect(app).toContain(
+      "<small>{item.prompt_text || item.description}</small>",
+    );
+    expect(app).toContain('"video",\n        "canvas",');
+    expect(app).toContain(
+      'syncLocalPromptCatalog(\n          activeAccountId,\n          locale,\n          "video",',
+    );
+    expect(app).toContain('undefined,\n          "canvas",');
+    expect(app).toContain("id: item.id");
+    expect(app).not.toContain("id: Number(item.id)");
   });
 
   test("reconciles server video history from hydrated blobs, not stale index metadata", () => {
