@@ -3,21 +3,21 @@
   "channel": "direct",
   "appRepository": "https://github.com/tqytwe/NextChat.git",
   "appBranch": "app/domestic",
-  "appCommit": "492a4ba535e803bde3d96471ecd1b583d6ace24a",
+  "appCommit": "bfbd714752202e3f2e9d59d7b283afba1eae2382",
   "backendRepository": "https://github.com/tqytwe/sub2api.git",
   "backendBranch": "app/domestic",
   "backendCommit": "9131ff5cf",
-  "androidVersionName": "3.0.28",
-  "androidVersionCode": 328,
+  "androidVersionName": "3.0.29",
+  "androidVersionCode": 329,
   "artifactPath": "public/downloads/jisudengchat-android.apk",
-  "artifactSha256": "8ee3caa859c1b6c1b2df8f391422faa1ddf67610727ed56ceef6463e816edc86",
+  "artifactSha256": "517fbc01027bd8887696f3c975fbfadef70ab4da28baa595c722669d450d4592",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "knownLimitations": [
-    "3.0.28 has signed Release AVD upgrade-smoke evidence. Its Android WebView prompt-input repair needs an authenticated Direct E2E re-run before this candidate can be marked accepted.",
-    "The 3.0.27 reference-image fixture reached a locally attached gpt-image-1 reference but its prompt did not enter the controlled WebView state. 3.0.28 adds native input handling; do not treat reference-image generation as accepted until that exact fixture reaches a terminal result.",
+    "3.0.29 has signed Release AVD upgrade-smoke evidence and authenticated Direct E2E evidence for login, chat, network/session recovery, local chat attachment and content-kit output planning.",
+    "The Direct E2E reference-image fixture dynamically selects gpt-image-2 and attaches a local reference successfully, but this Maestro/Android WebView environment does not deliver either pasteText or inputText into the focused WebView textarea. The client correctly blocks the empty request. Reference-image generation therefore remains unaccepted until verified with a real input path or corrected test-driver transport.",
     "The shared Playwright cache is locked and checked by android:doctor, but the repository does not yet contain a pinned Playwright package or OAuth/WebView/download-page browser suite.",
     "The backend candidate is source-tested only and has not been deployed."
   ],
-  "updatedAt": "2026-08-27T17:44:00+08:00"
+  "updatedAt": "2026-08-27T18:52:00+08:00"
 }
