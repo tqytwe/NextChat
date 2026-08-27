@@ -16095,6 +16095,7 @@ function AndroidImageStudio() {
   const [groupSwitching, setGroupSwitching] = useState(false);
   const [imageActionTarget, setImageActionTarget] = useState<any>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const platformTaskRef = useRef<MobileTask | null>(null);
   const platformTaskRunIdRef = useRef("");
@@ -16227,6 +16228,14 @@ function AndroidImageStudio() {
       if (item) Object.assign(item, patch, { updated_at: Date.now() });
       state.currentId += 1;
     });
+  }
+
+  // Android WebView can update a focused textarea without delivering React's
+  // synthetic input event. Keep the native value through unrelated renders and
+  // mirror explicit template/history updates into both representations.
+  function setImagePrompt(next: string) {
+    setPrompt(next);
+    if (promptRef.current) promptRef.current.value = next;
   }
 
   function startProgress(id: string) {
@@ -16382,7 +16391,9 @@ function AndroidImageStudio() {
   }
 
   async function runImageTask(overrides?: Partial<any>) {
-    const promptText = (overrides?.prompt || prompt).trim();
+    const promptText = String(
+      overrides?.prompt ?? promptRef.current?.value ?? prompt,
+    ).trim();
     let model = overrides?.model || selectedModel || modelValue(fallbackModel);
     const taskGroupId = effectiveImageGroupId;
     const taskSize = overrides?.size || size;
@@ -16978,7 +16989,7 @@ function AndroidImageStudio() {
   }
 
   function reuseImageTaskPrompt(item: any) {
-    setPrompt(item?.params?.prompt || item?.prompt || "");
+    setImagePrompt(item?.params?.prompt || item?.prompt || "");
     if (item?.params?.size) setSize(item.params.size);
     if (item?.params?.quality) setQuality(item.params.quality);
     if (item?.params?.style) setStyle(item.params.style);
@@ -17062,7 +17073,7 @@ function AndroidImageStudio() {
   }
 
   function applyPromptTemplate(template: ImagePromptTemplate) {
-    setPrompt(localizedValue(template.prompt, text));
+    setImagePrompt(localizedValue(template.prompt, text));
     if (template.params.size) setSize(template.params.size);
     if (template.params.quality) setQuality(template.params.quality);
     if (template.params.style) setStyle(template.params.style);
@@ -17228,8 +17239,9 @@ function AndroidImageStudio() {
           </button>
         </div>
         <textarea
+          ref={promptRef}
           aria-label="image-prompt"
-          value={prompt}
+          defaultValue={prompt}
           onChange={(event) => setPrompt(event.currentTarget.value)}
           onInput={(event) => setPrompt(event.currentTarget.value)}
           placeholder={text.image.promptPlaceholder}
@@ -17429,7 +17441,6 @@ function AndroidImageStudio() {
           onClick={() => runImageTask()}
           disabled={
             Boolean(activeTask) ||
-            !prompt.trim() ||
             !selectManagedImageSession({
               image: managed.imageSession || undefined,
             }) ||

@@ -156,6 +156,9 @@ describe("mobile app backend alignment", () => {
       source.indexOf("function AndroidImageStudio()"),
     );
     expect(imageStudio).toContain('aria-label="image-prompt"');
+    expect(imageStudio).toContain("const promptRef = useRef<HTMLTextAreaElement | null>(null)");
+    expect(imageStudio).toContain("defaultValue={prompt}");
+    expect(imageStudio).toContain("overrides?.prompt ?? promptRef.current?.value ?? prompt");
     expect(imageStudio).toContain(
       "onInput={(event) => setPrompt(event.currentTarget.value)}",
     );
