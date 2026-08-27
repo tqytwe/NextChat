@@ -241,26 +241,72 @@ function normalizeServerModalities(
   );
 }
 
+/**
+ * Existing mobile-video bootstraps predate the typed `operations` field but
+ * already carry a server-authorized per-model capability record. Normalize
+ * that response here instead of making the app guess from a group name.
+ */
+function normalizeServerVideoCapabilities(
+  value?: MobileVideoServerCapabilities,
+): MobileVideoServerCapabilities | undefined {
+  if (!value) return undefined;
+  const capabilities = { ...value };
+  if (!Array.isArray(capabilities.operations)) {
+    const legacy = capabilities as MobileVideoServerCapabilities & {
+      text_to_video?: boolean;
+    };
+    if (
+      legacy.text_to_video === true ||
+      (capabilities.resolutions || capabilities.supported_resolutions || [])
+        .length > 0
+    ) {
+      capabilities.operations = ["generate"];
+    }
+  }
+  return capabilities;
+}
+
 function normalizeServerVideoModel(
   model: MobileVideoServerModel,
   group: MobileVideoServerGroup,
   capabilitiesVersion?: string,
 ): ManagedWorkspaceModel | undefined {
+  const modelID =
+    typeof model === "string"
+      ? model.trim()
+      : String(model.model || model.id || model.name || "").trim();
+  const legacyCapabilities = normalizeServerVideoCapabilities(
+    typeof model === "string"
+      ? group.model_capabilities?.[modelID] ||
+          group.video_capabilities ||
+          group.capabilities
+      : model.video_capabilities ||
+          model.capabilities ||
+          group.model_capabilities?.[modelID] ||
+          group.model_capabilities?.[String(model.name || "").trim()] ||
+          group.video_capabilities ||
+          group.capabilities,
+  );
+  const legacyAuthorized = Boolean(group.video_available && legacyCapabilities);
   if (typeof model === "string") {
-    const name = model.trim();
+    const name = modelID;
     if (!name) return undefined;
     return {
       id: name,
       name,
+      ...(legacyAuthorized ? { modalities: ["video"] } : {}),
       platform: group.platform,
-      video_capabilities:
-        group.model_capabilities?.[name] ||
-        group.video_capabilities ||
-        group.capabilities,
+      ...(legacyAuthorized
+        ? {
+            adapter: "mobile-video-bootstrap",
+            capability_version: capabilitiesVersion || "legacy-bootstrap",
+          }
+        : {}),
+      video_capabilities: legacyCapabilities,
     };
   }
 
-  const id = String(model.model || model.id || model.name || "").trim();
+  const id = modelID;
   if (!id) return undefined;
   const legacyName = String(model.name || "").trim();
   const displayName = String(
@@ -271,16 +317,18 @@ function normalizeServerVideoModel(
     name: id,
     ...(displayName ? { display_name: displayName } : {}),
     platform: model.platform || group.platform,
-    modalities: normalizeServerModalities(model.modalities),
-    adapter: model.adapter,
-    capability_version: model.capability_version || capabilitiesVersion,
-    video_capabilities:
-      model.video_capabilities ||
-      model.capabilities ||
-      group.model_capabilities?.[id] ||
-      group.model_capabilities?.[legacyName] ||
-      group.video_capabilities ||
-      group.capabilities,
+    modalities:
+      normalizeServerModalities(model.modalities) ||
+      (legacyAuthorized ? ["video"] : undefined),
+    adapter:
+      model.adapter ||
+      (legacyAuthorized ? "mobile-video-bootstrap" : undefined),
+    capability_version:
+      model.capability_version ||
+      (legacyAuthorized
+        ? capabilitiesVersion || "legacy-bootstrap"
+        : undefined),
+    video_capabilities: legacyCapabilities,
   };
 }
 
@@ -309,6 +357,20 @@ export function normalizeMobileVideoBootstrapGroups(
     const sourceModels = group.models?.length
       ? group.models
       : Object.keys(group.model_capabilities || {});
+    const authorizedModelIDs = new Set(
+      Object.keys(group.model_capabilities || {}).map((value) =>
+        value.trim().toLowerCase(),
+      ),
+    );
+    const models = authorizedModelIDs.size
+      ? sourceModels.filter((model) => {
+          // Typed models carry their own declaration and must not be hidden
+          // merely because an older sibling-only capability map is present.
+          if (typeof model !== "string") return true;
+          const id = typeof model === "string" ? model : "";
+          return authorizedModelIDs.has(id.trim().toLowerCase());
+        })
+      : sourceModels;
     return [
       {
         id,
@@ -320,7 +382,7 @@ export function normalizeMobileVideoBootstrapGroups(
         media_contract_version: mediaContractVersion || undefined,
         video_suppressed: normalizeServerVideoSuppressed(group.suppressed),
         video_capabilities: group.video_capabilities || group.capabilities,
-        models: sourceModels.flatMap((model) => {
+        models: models.flatMap((model) => {
           const normalized = normalizeServerVideoModel(
             model,
             group,
