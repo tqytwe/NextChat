@@ -2,7 +2,8 @@ appId: com.jisudeng.chat
 ---
 - tapOn: ".*(Gemini|GPT Image|gemini|gpt-image).*"
 - tapOn: "image-prompt"
-- inputText: "maestro local reference image"
+- setClipboard: "maestro local reference image"
+- pasteText
 - hideKeyboard
 - scroll
 - tapOn: "image-generate"

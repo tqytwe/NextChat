@@ -1,32 +1,32 @@
 {
   "channel": "direct",
-  "version": "3.0.27",
-  "versionCode": 327,
+  "version": "3.0.28",
+  "versionCode": 328,
   "releaseDate": "2026-08-27",
   "notes": {
     "zh": [
       "图片提示词目录可从创作空间在线更新，不上传账号凭据",
       "视频模型和 1080p 等参数按账号可用能力自动显示",
       "资产入口、系统设置和任务管理体验进一步统一",
-      "登录与找回密码流程更简洁，修复商汤无水印与语音错误提示"
+      "登录与找回密码流程更简洁，修复商汤无水印、语音和提示词输入问题"
     ],
     "en": [
       "Image prompts refresh from the Creation Space catalog without sending account credentials",
       "Video models and options such as 1080p follow the capabilities available to the account",
       "Assets, system settings, and task management are more consistent",
-      "Sign-in and password recovery are simpler; SenseNova watermarks and speech errors are fixed"
+      "Sign-in and password recovery are simpler; SenseNova, speech, and prompt-input issues are fixed"
     ],
     "ja": [
       "画像プロンプトはアカウント認証情報を送信せず、制作スペースのカタログから更新できます",
       "動画モデルと 1080p などの設定は、アカウントで利用可能な機能に応じて表示されます",
       "素材、システム設定、タスク管理の操作を統一しました",
-      "ログインとパスワード再設定を簡素化し、SenseNova の透かしと音声エラーを改善しました"
+      "ログインとパスワード再設定を簡素化し、SenseNova、音声、プロンプト入力を改善しました"
     ],
     "ko": [
       "이미지 프롬프트는 계정 자격 증명을 보내지 않고 제작 공간 카탈로그에서 갱신됩니다",
       "동영상 모델과 1080p 등의 설정은 계정에서 사용할 수 있는 기능에 따라 표시됩니다",
       "소재, 시스템 설정 및 작업 관리 경험을 더 일관되게 정리했습니다",
-      "로그인과 비밀번호 재설정을 단순화하고 SenseNova 워터마크와 음성 오류 안내를 개선했습니다"
+      "로그인과 비밀번호 재설정을 단순화하고 SenseNova, 음성 및 프롬프트 입력 문제를 개선했습니다"
     ]
   }
 }

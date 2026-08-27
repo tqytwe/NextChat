@@ -1,12 +1,12 @@
 appId: com.jisudeng.chat
 ---
 - extendedWaitUntil:
-    visible: "login-email|dashboard-default-group|首页|Home|ホーム|홈|对话|Chat|チャット|대화|创作|Create|制作|제작|项目|Projects|プロジェクト|프로젝트|我的|Me|マイページ|내 정보"
+    visible: "login-email|dashboard-default-group|首页|Home|ホーム|홈|对话|Chat|チャット|대화|创作|Create|制作|제작|资产|Assets|素材|소재|我的|Me|マイページ|내 정보"
     timeout: 180000
 - runFlow:
     when:
       visible: "login-email"
     file: login.yaml
 - extendedWaitUntil:
-    visible: "dashboard-default-group|首页|Home|ホーム|홈|对话|Chat|チャット|대화|创作|Create|制作|제작|项目|Projects|プロジェクト|프로젝트|我的|Me|マイページ|내 정보"
+    visible: "dashboard-default-group|首页|Home|ホーム|홈|对话|Chat|チャット|대화|创作|Create|制作|제작|资产|Assets|素材|소재|我的|Me|マイページ|내 정보"
     timeout: 60000

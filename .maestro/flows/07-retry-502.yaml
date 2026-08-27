@@ -6,7 +6,8 @@ tags:
 - runFlow: ../subflows/ensure-login.yaml
 - tapOn: "创作|Create|制作|제작"
 - tapOn: "image-prompt"
-- inputText: "maestro first 502 then success"
+- setClipboard: "maestro first 502 then success"
+- pasteText
 - hideKeyboard
 - scroll
 - tapOn: "image-generate"

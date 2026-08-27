@@ -1,12 +1,10 @@
 appId: com.jisudeng.chat
 ---
-- tapOn:
-    point: "50%,68%"
+- tapOn: "login-email|Email|邮箱"
 - eraseText: 80
 - inputText: ${E2E_EMAIL}
 - hideKeyboard
-- tapOn:
-    point: "50%,79%"
+- tapOn: "login-password|Password|密码"
 - eraseText: 80
 - setClipboard: ${E2E_PASSWORD}
 - pasteText

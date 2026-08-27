@@ -15741,6 +15741,7 @@ function AndroidVideoStudio() {
           aria-label="video-prompt"
           value={prompt}
           onChange={(event) => setPrompt(event.currentTarget.value)}
+          onInput={(event) => setPrompt(event.currentTarget.value)}
           placeholder={copy.placeholder}
           disabled={noCapability}
         />
@@ -17230,6 +17231,7 @@ function AndroidImageStudio() {
           aria-label="image-prompt"
           value={prompt}
           onChange={(event) => setPrompt(event.currentTarget.value)}
+          onInput={(event) => setPrompt(event.currentTarget.value)}
           placeholder={text.image.promptPlaceholder}
         />
         <div className={styles["form-grid"]}>

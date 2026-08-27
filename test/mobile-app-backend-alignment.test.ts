@@ -146,6 +146,25 @@ describe("mobile app backend alignment", () => {
     );
   });
 
+  test("accepts native WebView input events for image and video prompts", () => {
+    const imageStudio = source.slice(
+      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidGallery()"),
+    );
+    const videoStudio = source.slice(
+      source.indexOf("function AndroidVideoStudio()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    expect(imageStudio).toContain('aria-label="image-prompt"');
+    expect(imageStudio).toContain(
+      "onInput={(event) => setPrompt(event.currentTarget.value)}",
+    );
+    expect(videoStudio).toContain('aria-label="video-prompt"');
+    expect(videoStudio).toContain(
+      "onInput={(event) => setPrompt(event.currentTarget.value)}",
+    );
+  });
+
   test("pins ContentKit image work to its saved image-purpose group", () => {
     const contentKit = source.slice(
       source.indexOf("function AndroidContentKit()"),
