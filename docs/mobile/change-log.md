@@ -10,8 +10,9 @@
   `com.jisudeng.chat`、版本 `3.0.25 (325)` 和证书指纹已独立验签。
 - 验收：`Jisudeng_Direct_Release_API35` 以 `install -r` 完成 smoke；Direct E2E
   已通过登录、冷启动分组、首条消息、长按复制、断网恢复、附件、内容创作与凭据恢复。
-- 未完成：API 35 系统图片选择器的旧 resource ID 不再存在，参考图、图片重试和图库
-  夹具需在新选择器上更新后重跑。因此本版本保持 `candidate`，不标记为 `accepted`。
+- 未完成：API 35 参考图夹具已改为先选支持能力的 `gpt-image-1`，并已验证引用图片
+  附加成功；但对应图片任务在 101 秒内未进入 Completed，需补充后端任务/提供商执行证据，
+  再重跑图片重试和图库夹具。因此本版本保持 `candidate`，不标记为 `accepted`。
 - 浏览器：共享 Chromium revision 与禁止下载策略已经由 doctor 固定；OAuth 回调、WebView
   外链和下载页的 Playwright 测试套件尚未接入，不能写成已验收。
 

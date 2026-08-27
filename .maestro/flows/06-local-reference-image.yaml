@@ -5,6 +5,8 @@ tags:
 ---
 - runFlow: ../subflows/ensure-login.yaml
 - tapOn: "创作|Create|制作|제작"
+- tapOn: "Model .*"
+- tapOn: "choice-option-gpt-image-1-unselected"
 - tapOn: "image-add-reference"
 - tapOn:
     id: "com.google.android.providers.media.module:id/icon_thumbnail"

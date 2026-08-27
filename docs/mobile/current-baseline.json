@@ -14,7 +14,7 @@
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "knownLimitations": [
-    "Direct Release smoke and chat/account Maestro flows are recorded, but the API 35 system photo-picker selector must be updated before the reference-image fixture can be accepted.",
+    "Reference-image selection now uses a compatible gpt-image-1 model and reaches the attached-reference state, but its image task did not reach Completed within 101 seconds; backend task/provider execution evidence is required before the image fixtures can be accepted.",
     "The shared Playwright cache is locked and checked by android:doctor, but the repository does not yet contain a pinned Playwright package or OAuth/WebView/download-page browser suite.",
     "The backend candidate is source-tested only and has not been deployed."
   ],
