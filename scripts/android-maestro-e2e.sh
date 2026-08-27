@@ -11,10 +11,12 @@ MAESTRO="$JISUDENG_MAESTRO_BIN"
 # Maestro uses native, debug-only transport fixtures for deterministic 401/502
 # recovery coverage. Release acceptance is covered separately by the signed-APK
 # smoke test; never run these fixtures against the public handoff artifact.
-APK_PATH="${ANDROID_E2E_APK_PATH:-android/app/build/outputs/apk/debug/app-debug.apk}"
+APK_PATH="${ANDROID_E2E_APK_PATH:-android/app/build/outputs/apk/direct/debug/app-direct-debug.apk}"
 PACKAGE_NAME="${ANDROID_PACKAGE_NAME:-com.jisudeng.chat}"
 MAIN_ACTIVITY="${ANDROID_MAIN_ACTIVITY:-.MainActivity}"
 REFERENCE_IMAGE="${ANDROID_E2E_REFERENCE_IMAGE:-public/android-chrome-192x192.png}"
+RELEASE_VERSION_CODE="$(node -e 'console.log(require("./public/downloads/android-version.json").versionCode)')"
+ARTIFACT_DIR="${ANDROID_E2E_ARTIFACT_DIR:-$JISUDENG_ANDROID_RESULTS_ROOT/$ANDROID_TEST_CHANNEL/$RELEASE_VERSION_CODE/maestro}"
 
 : "${E2E_EMAIL:?Set E2E_EMAIL without committing it to the repository.}"
 : "${E2E_PASSWORD:?Set E2E_PASSWORD without committing it to the repository.}"
@@ -42,13 +44,15 @@ if [[ "${ANDROID_E2E_BUILD:-1}" == "1" ]]; then
   export NEXT_PUBLIC_ANDROID_VERSION="${NEXT_PUBLIC_ANDROID_VERSION:-$ANDROID_VERSION_NAME}"
   export NEXT_PUBLIC_ANDROID_VERSION_CODE="${NEXT_PUBLIC_ANDROID_VERSION_CODE:-$ANDROID_VERSION_CODE}"
   corepack yarn android:sync
-  (cd android && ./gradlew assembleDebug)
+  (cd android && ./gradlew --offline assembleDirectDebug)
 fi
 
 if [[ ! -f "$APK_PATH" ]]; then
   echo "E2E debug APK not found: $APK_PATH" >&2
   exit 1
 fi
+
+mkdir -p "$ARTIFACT_DIR"
 
 # Debug fixtures cannot replace the production-signed package in place. This
 # script is an isolated test-device workflow and clears app state below anyway,
@@ -65,11 +69,21 @@ fi
 "$ADB" shell pm grant "$PACKAGE_NAME" android.permission.POST_NOTIFICATIONS || true
 
 run_flow() {
+  local flow_path="$1"
+  local flow_name
+  flow_name="$(basename "$flow_path" .yaml)"
+  local flow_dir="$ARTIFACT_DIR/$flow_name"
+  mkdir -p "$flow_dir"
   local status
   if "$MAESTRO" test \
+      --device "$ANDROID_SERIAL" \
+      --format JUNIT \
+      --output "$flow_dir/report.xml" \
+      --test-output-dir "$flow_dir/results" \
+      --debug-output "$flow_dir/debug" \
       -e E2E_EMAIL="$E2E_EMAIL" \
       -e E2E_PASSWORD="$E2E_PASSWORD" \
-      "$1"; then
+      "$flow_path"; then
     status=0
   else
     status=$?
@@ -77,16 +91,15 @@ run_flow() {
 
   # Maestro records -e values in its debug JSON/log files. Scrub only the
   # exact test values after each flow so credentials never remain on disk.
-  local debug_root="${MAESTRO_DEBUG_ROOT:-/home/codex/.maestro/tests}"
-  if [[ -d "$debug_root" ]] && command -v perl >/dev/null 2>&1; then
+  if command -v perl >/dev/null 2>&1; then
     while IFS= read -r -d '' debug_file; do
       E2E_EMAIL="$E2E_EMAIL" E2E_PASSWORD="$E2E_PASSWORD" perl -pi -e '
-        my $email = $ENV{E2E_EMAIL} // "";
-        my $password = $ENV{E2E_PASSWORD} // "";
-        s/\Q$email\E/[redacted-email]/g if length $email;
-        s/\Q$password\E/[redacted-password]/g if length $password;
-      ' "$debug_file"
-    done < <(find "$debug_root" -type f -print0)
+          my $email = $ENV{E2E_EMAIL} // "";
+          my $password = $ENV{E2E_PASSWORD} // "";
+          s/\Q$email\E/[redacted-email]/g if length $email;
+          s/\Q$password\E/[redacted-password]/g if length $password;
+        ' "$debug_file"
+    done < <(find "$flow_dir" -type f -print0)
   fi
   return "$status"
 }
