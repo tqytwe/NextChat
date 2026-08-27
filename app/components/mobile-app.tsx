@@ -3265,6 +3265,24 @@ function imageModelsForGroup(
   );
 }
 
+/**
+ * Content projects retain their original group. Unlike the interactive picker,
+ * they must never fall back to a current/default group when that group is gone.
+ */
+function imageModelsForExactGroup(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+  groupID?: number,
+) {
+  const exactGroupID = Number(groupID);
+  if (!Number.isSafeInteger(exactGroupID) || exactGroupID <= 0) return [];
+  const group = workspace?.models?.groups?.find(
+    (item) => Number(item.id) === exactGroupID,
+  );
+  return (group?.models || []).filter((model) =>
+    isExecutableManagedImageModel(model, "create", workspace?.models),
+  );
+}
+
 function imageModelSupportsStyle(model: string) {
   return /dall-e-3/i.test(model);
 }
@@ -12201,7 +12219,24 @@ function AndroidContentKit() {
     project: ManagedMobileContentKit,
     asset: ManagedMobileContentKitAsset,
   ) {
-    const projectModel = imageModels.find((item) =>
+    const projectImageGroupId = Number(project.imageGroupId);
+    if (
+      !Number.isSafeInteger(projectImageGroupId) ||
+      projectImageGroupId <= 0
+    ) {
+      // A legacy project has no trustworthy group binding. Do not infer one
+      // from the current chat/image UI state because that could spend a
+      // different group's balance with the saved model name.
+      const message = text.errors.imageModelUnavailable(project.model);
+      patchAsset(project.id, asset.id, { status: "failed", error: message });
+      setError(message);
+      return;
+    }
+    const projectImageModels = imageModelsForExactGroup(
+      workspace,
+      projectImageGroupId,
+    );
+    const projectModel = projectImageModels.find((item) =>
       modelMatches(item, project.model),
     );
     const exactModel = modelValue(projectModel);
@@ -12224,7 +12259,7 @@ function AndroidContentKit() {
     }
     if (
       project.referenceImages.length &&
-      !imageModelSupportsReferences(project.model, imageModels)
+      !imageModelSupportsReferences(project.model, projectImageModels)
     ) {
       patchAsset(project.id, asset.id, {
         status: "failed",
@@ -12233,11 +12268,35 @@ function AndroidContentKit() {
       setError(text.platform.contentKit.referenceUnsupported);
       return;
     }
-    if (!managed.imageSession) {
+    let activeManaged = useManagedNextChatStore.getState();
+    let imageSession = selectManagedImageSessionForGroup(
+      { image: activeManaged.imageSession || undefined },
+      projectImageGroupId,
+    );
+    if (!imageSession) {
+      try {
+        await managed.switchImageGroup(projectImageGroupId);
+      } catch (err) {
+        const message = localizedMobileErrorMessage(
+          err,
+          text.errors.switchGroupFailed,
+        );
+        patchAsset(project.id, asset.id, { status: "failed", error: message });
+        setError(message);
+        return;
+      }
+      activeManaged = useManagedNextChatStore.getState();
+      imageSession = selectManagedImageSessionForGroup(
+        { image: activeManaged.imageSession || undefined },
+        projectImageGroupId,
+      );
+    }
+    if (!imageSession) {
       patchAsset(project.id, asset.id, {
         status: "failed",
-        error: text.errors.loginRequired,
+        error: text.errors.switchGroupFailed,
       });
+      setError(text.errors.switchGroupFailed);
       return;
     }
     // Persist before the first request. A restart or timeout must replay the
@@ -12264,7 +12323,7 @@ function AndroidContentKit() {
         title: asset.label,
         title_zh: asset.label,
         model: exactModel,
-        group_id: imageGroup?.id,
+        group_id: projectImageGroupId,
         parameters: {
           size: asset.size,
           content_kit: project.id,
@@ -12322,10 +12381,10 @@ function AndroidContentKit() {
         body = JSON.stringify(payload);
       }
       const response = await managedGatewayRequestText(
-        managed.backendBaseUrl,
+        activeManaged.backendBaseUrl,
         `/v1${endpoint}`,
         { method: "POST", headers, body },
-        managed.imageSession.api_key || "",
+        imageSession.api_key,
         text,
       );
       const json = response.text ? JSON.parse(response.text) : null;
@@ -12703,6 +12762,13 @@ function AndroidContentKit() {
       return setError(text.platform.contentKit.requiredProduct);
     if (!model || !imageModels.length)
       return setError(text.platform.contentKit.noImageModel);
+    const projectImageGroupId = Number(imageGroup?.id);
+    if (
+      !Number.isSafeInteger(projectImageGroupId) ||
+      projectImageGroupId <= 0
+    ) {
+      return setError(text.platform.contentKit.noImageModel);
+    }
     const requestedOperation = references.length ? "edit" : "create";
     const invalidShot = selectedPlanShots.find((shot) => {
       const validation = validateManagedImageRequest({
@@ -12797,6 +12863,7 @@ function AndroidContentKit() {
         videoIntent,
       },
       model,
+      imageGroupId: projectImageGroupId,
       referenceImages: references,
       presetId: selectedPreset.id,
       shotPlan: contentWorkbenchClonePlan(selectedPlanShots),

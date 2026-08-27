@@ -130,6 +130,31 @@ describe("mobile app backend alignment", () => {
     );
   });
 
+  test("pins ContentKit image work to its saved image-purpose group", () => {
+    const contentKit = source.slice(
+      source.indexOf("function AndroidContentKit()"),
+      source.indexOf("function AndroidImageStudio()"),
+    );
+    const generateAsset = contentKit.slice(
+      contentKit.indexOf("async function generateAsset("),
+      contentKit.indexOf("async function generateCopy("),
+    );
+
+    expect(contentKit).toContain("imageGroupId: projectImageGroupId");
+    expect(generateAsset).toContain("project.imageGroupId");
+    expect(generateAsset).toContain("imageModelsForExactGroup(");
+    expect(generateAsset).toContain(
+      "await managed.switchImageGroup(projectImageGroupId)",
+    );
+    expect(generateAsset).toContain("selectManagedImageSessionForGroup(");
+    expect(generateAsset).toContain("group_id: projectImageGroupId");
+    expect(generateAsset).toContain("imageSession.api_key");
+    expect(generateAsset).toContain("imageModelUnavailable(project.model)");
+    expect(generateAsset).not.toContain("group_id: imageGroup?.id");
+    expect(generateAsset).not.toContain("managed.imageSession.api_key");
+    expect(generateAsset).not.toContain("managed.session?.api_key");
+  });
+
   test("keeps selected reference images local and requires an explicit edit-capable model choice", () => {
     const imageStudio = source.slice(
       source.indexOf("function AndroidImageStudio()"),
