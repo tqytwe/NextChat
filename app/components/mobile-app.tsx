@@ -13414,9 +13414,9 @@ function AndroidContentKit() {
                   <button
                     type="button"
                     onClick={() =>
-                      navigator.clipboard
-                        ?.writeText(selectedProject.copy || "")
-                        .catch(() => setError(text.errors.copyFailed))
+                      copyTextToClipboard(selectedProject.copy || "").catch(
+                        () => setError(text.errors.copyFailed),
+                      )
                     }
                   >
                     <CopyIcon />
@@ -17046,9 +17046,7 @@ function AndroidImageStudio() {
 
   async function copyPromptTemplate(template: ImagePromptTemplate) {
     try {
-      await navigator.clipboard?.writeText(
-        localizedValue(template.prompt, text),
-      );
+      await copyTextToClipboard(localizedValue(template.prompt, text));
       setError(text.chat.copied);
     } catch {
       setError(text.errors.copyFailed);
@@ -20715,7 +20713,7 @@ function AndroidAccountSettings() {
   async function copyInviteGrowthLink() {
     if (!inviteRegisterUrl) return;
     try {
-      await navigator.clipboard.writeText(inviteRegisterUrl);
+      await copyTextToClipboard(inviteRegisterUrl);
       setInviteMessage(text.account.inviteGrowthCopy);
     } catch {
       setInviteMessage(text.account.inviteGrowthUnavailable);
@@ -21644,7 +21642,7 @@ function AndroidAccountSettings() {
     const payload = feedbackDiagnostics(deviceInfo);
     try {
       await shareText(payload, "JisudengChat");
-      await navigator.clipboard?.writeText(payload);
+      await copyTextToClipboard(payload);
       alert(text.account.feedbackCopied);
     } catch {
       alert(text.errors.copyFailed);
@@ -22366,7 +22364,7 @@ function AndroidAccountSettings() {
   function copyPayUrl() {
     const url = primaryPaymentUrl(createdOrder);
     if (!url) return;
-    navigator.clipboard?.writeText(url).catch(() => {});
+    void copyTextToClipboard(url).catch(() => {});
     shareText(url, "JisudengChat").catch(() => {});
   }
 
@@ -22719,8 +22717,7 @@ function AndroidAccountSettings() {
           <div className={styles["inline-actions"]}>
             <button
               onClick={() => {
-                navigator.clipboard
-                  ?.writeText(directRedeemShopUrl)
+                copyTextToClipboard(directRedeemShopUrl)
                   .then(() => setRedeemMessage(text.account.shopLinkCopied))
                   .catch(() => setRedeemError(text.account.copyShopLink));
               }}
@@ -24283,7 +24280,7 @@ function AndroidAccountSettings() {
                           openExternalUrl(value).catch(() => shareText(line));
                           return;
                         }
-                        navigator.clipboard?.writeText(line).catch(() => {});
+                        copyTextToClipboard(line).catch(() => {});
                         shareText(line).catch(() => {});
                       }}
                     >
