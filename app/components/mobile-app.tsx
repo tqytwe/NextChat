@@ -3287,6 +3287,15 @@ function imageModelSupportsStyle(model: string) {
   return /dall-e-3/i.test(model);
 }
 
+/** SenseNova requires a root boolean field; prompt wording cannot disable it. */
+function mustDisableSenseNovaWatermark(model: string) {
+  return ["sensenova-u1-fast", "sensenova-u1.5-lite"].includes(
+    String(model || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
 function imageModelSupportsReferences(
   model: ManagedWorkspaceModel | string,
   knownModels: ManagedWorkspaceModel[] = [],
@@ -12359,6 +12368,9 @@ function AndroidContentKit() {
         size: asset.size,
         n: 1,
         response_format: "b64_json",
+        ...(mustDisableSenseNovaWatermark(exactModel)
+          ? { watermark: false }
+          : {}),
       };
       const endpoint = project.referenceImages.length
         ? "/images/edits"
@@ -16529,6 +16541,9 @@ function AndroidImageStudio() {
     if (taskQuality !== "auto") basePayload.quality = taskQuality;
     if (taskStyle !== "auto" && imageModelSupportsStyle(model)) {
       basePayload.style = taskStyle;
+    }
+    if (mustDisableSenseNovaWatermark(model)) {
+      basePayload.watermark = false;
     }
     if (taskReferences.length) basePayload.input_fidelity = "high";
 
