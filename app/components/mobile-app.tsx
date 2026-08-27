@@ -102,6 +102,8 @@ import {
   isExecutableManagedImageModel,
   isManagedImageSizeSupported,
   managedImageReferenceLimit,
+  selectManagedImageSession,
+  selectManagedImageSessionForGroup,
   validateManagedImageRequest,
   validateManagedVideoRequest,
 } from "../client/mobile-media-contract";
@@ -3147,6 +3149,18 @@ function currentVideoGroupID(
     workspace?.managed_api_keys?.video?.group_id ??
     workspace?.workspaces?.video?.models?.selected_group_id ??
     workspace?.workspaces?.video?.models?.groups?.find(
+      (group) => group.is_current,
+    )?.id
+  );
+}
+
+function currentImageGroupID(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+) {
+  return (
+    workspace?.managed_api_keys?.image?.group_id ??
+    workspace?.workspaces?.image?.models?.selected_group_id ??
+    workspace?.workspaces?.image?.models?.groups?.find(
       (group) => group.is_current,
     )?.id
   );
@@ -16338,7 +16352,11 @@ function AndroidImageStudio() {
       setError(text.errors.emptyPrompt);
       return;
     }
-    if (!managed.imageSession) {
+    if (
+      !selectManagedImageSession({
+        image: managed.imageSession || undefined,
+      })
+    ) {
       setError(text.errors.loginRequired);
       return;
     }
@@ -16491,7 +16509,6 @@ function AndroidImageStudio() {
         ? "/images/edits"
         : "/images/generations";
     const taskBackendBaseUrl = managed.backendBaseUrl;
-    const initialImageApiKey = managed.imageSession?.api_key || "";
     const basePayload: Record<string, any> = {
       model,
       prompt: promptText,
@@ -16504,10 +16521,7 @@ function AndroidImageStudio() {
     }
     if (taskReferences.length) basePayload.input_fidelity = "high";
 
-    function buildImageRequest(
-      requestIndex: number,
-      imageApiKey = initialImageApiKey,
-    ) {
+    function buildImageRequest(requestIndex: number, imageApiKey: string) {
       const payload: Record<string, any> = { ...basePayload, n: 1 };
       const headers: Record<string, string> = {
         Accept: "application/json",
@@ -16541,10 +16555,14 @@ function AndroidImageStudio() {
       let lastError: unknown = null;
       while (authAttempt <= 1) {
         const latestManaged = useManagedNextChatStore.getState();
-        const request = buildImageRequest(
-          requestIndex,
-          latestManaged.imageSession?.api_key || "",
+        const imageSession = selectManagedImageSessionForGroup(
+          { image: latestManaged.imageSession || undefined },
+          taskGroupId || 0,
         );
+        if (!imageSession) {
+          throw new Error(text.errors.switchGroupFailed);
+        }
+        const request = buildImageRequest(requestIndex, imageSession.api_key);
         try {
           const response = await managedGatewayRequestText(
             taskBackendBaseUrl,
@@ -16555,7 +16573,7 @@ function AndroidImageStudio() {
               body: request.body,
               signal: controller.signal,
             },
-            latestManaged.imageSession?.api_key || "",
+            imageSession.api_key,
             text,
           );
           if (
@@ -16587,13 +16605,29 @@ function AndroidImageStudio() {
     }));
     try {
       let activeManaged = useManagedNextChatStore.getState();
+      const activeImageSession = selectManagedImageSessionForGroup(
+        { image: activeManaged.imageSession || undefined },
+        taskGroupId || 0,
+      );
+      const activeImageGroupID =
+        activeImageSession?.group_id ??
+        currentImageGroupID(activeManaged.workspace);
       if (
         !useLocalImageFixture &&
         taskGroupId &&
-        currentGroupID(activeManaged.workspace) !== taskGroupId
+        (!activeImageSession || activeImageGroupID !== taskGroupId)
       ) {
         await managed.switchImageGroup(taskGroupId);
         activeManaged = useManagedNextChatStore.getState();
+      }
+      if (
+        !useLocalImageFixture &&
+        !selectManagedImageSessionForGroup(
+          { image: activeManaged.imageSession || undefined },
+          taskGroupId || 0,
+        )
+      ) {
+        throw new Error(text.errors.switchGroupFailed);
       }
       for (let requestIndex = 0; requestIndex < taskCount; requestIndex += 1) {
         if (controller.signal.aborted)
@@ -17300,7 +17334,9 @@ function AndroidImageStudio() {
           disabled={
             Boolean(activeTask) ||
             !prompt.trim() ||
-            !managed.imageSession ||
+            !selectManagedImageSession({
+              image: managed.imageSession || undefined,
+            }) ||
             imageModelOptions.length === 0
           }
         >

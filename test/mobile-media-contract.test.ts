@@ -5,6 +5,8 @@ import {
   isExecutableManagedImageModel,
   isExecutableManagedVideoModel,
   isManagedImageSizeSupported,
+  selectManagedImageSession,
+  selectManagedImageSessionForGroup,
   validateManagedImageRequest,
   validateManagedVideoRequest,
 } from "../app/client/mobile-media-contract";
@@ -59,6 +61,60 @@ const video = {
 };
 
 describe("managed mobile media contract", () => {
+  test("requires an exact image purpose and group-pinned session", () => {
+    const image = {
+      user_id: 7,
+      api_key: "image-key",
+      api_key_id: 12,
+      purpose: "image",
+      group_id: 22,
+    } as const;
+
+    expect(
+      selectManagedImageSession({
+        image: { ...image, purpose: "chat" },
+      } as any),
+    ).toBeNull();
+    expect(
+      selectManagedImageSession({
+        image: { ...image, api_key: "" },
+      } as any),
+    ).toBeNull();
+    expect(selectManagedImageSession({ image } as any)).toMatchObject({
+      purpose: "image",
+      api_key: "image-key",
+    });
+    expect(
+      selectManagedImageSessionForGroup({ image } as any, 22),
+    ).toMatchObject({ group_id: 22 });
+    expect(selectManagedImageSessionForGroup({ image } as any, 23)).toBeNull();
+  });
+
+  test("does not mistake a same-ID chat group for the selected image group", () => {
+    const sessions = {
+      chat: {
+        user_id: 7,
+        api_key: "chat-key",
+        api_key_id: 11,
+        purpose: "chat",
+        group_id: 12,
+      },
+      image: {
+        user_id: 7,
+        api_key: "stale-image-key",
+        api_key_id: 12,
+        purpose: "image",
+        group_id: 21,
+      },
+    } as any;
+
+    expect(selectManagedImageSessionForGroup(sessions, 12)).toBeNull();
+    expect(selectManagedImageSessionForGroup(sessions, 21)).toMatchObject({
+      api_key: "stale-image-key",
+      group_id: 21,
+    });
+  });
+
   test("uses the exact SenseNova declaration instead of model-name heuristics", () => {
     expect(isExecutableManagedImageModel(u15 as any, "create")).toBe(true);
     expect(isExecutableManagedImageModel(u15 as any, "edit")).toBe(true);

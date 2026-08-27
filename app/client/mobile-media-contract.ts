@@ -1,5 +1,6 @@
 import type {
   ManagedImageCapabilities,
+  ManagedSession,
   ManagedVideoCapabilities,
   ManagedWorkspaceModel,
   ManagedWorkspaceModels,
@@ -13,6 +14,37 @@ import {
 export type ManagedMediaPurpose = "image" | "video";
 export type ManagedImageOperation = "create" | "edit";
 export type ManagedVideoOperation = "generate";
+
+/** A missing or mislabelled image session must never borrow another media key. */
+export function selectManagedImageSession(
+  sessions?: { chat?: ManagedSession; image?: ManagedSession } | null,
+): ManagedSession | null {
+  const session = sessions?.image;
+  if (!session) return null;
+  return session.purpose === "image" &&
+    session.api_key.trim() &&
+    session.api_key_id > 0
+    ? session
+    : null;
+}
+
+/**
+ * Image generation is authorized against one exact purpose/group key. A chat
+ * key, an image key for another group, or an unscoped response must stop
+ * before an Images API request is attempted.
+ */
+export function selectManagedImageSessionForGroup(
+  sessions:
+    | { chat?: ManagedSession; image?: ManagedSession }
+    | null
+    | undefined,
+  groupID: number,
+): ManagedSession | null {
+  const session = selectManagedImageSession(sessions);
+  return session && Number(session.group_id) === Number(groupID) && groupID > 0
+    ? session
+    : null;
+}
 
 export type ManagedImageRequestValidationCode =
   | "model_not_executable"

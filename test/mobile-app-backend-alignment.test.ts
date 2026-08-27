@@ -98,6 +98,10 @@ describe("mobile app backend alignment", () => {
   });
 
   test("routes reference image generation through the managed gateway transport", () => {
+    const imageStudio = source.slice(
+      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidGallery()"),
+    );
     expect(source).toContain("const imageOperation = taskReferences.length");
     expect(source).toContain('"images.edits"');
     expect(source).toMatch(
@@ -117,6 +121,13 @@ describe("mobile app backend alignment", () => {
     expect(source).toContain("dataUrl = await blobToDataUrl(localFile)");
     expect(source).toContain("getNativeE2EFixtureFlags()");
     expect(source).toContain("!useLocalImageFixture &&");
+    expect(imageStudio).toContain(
+      "currentImageGroupID(activeManaged.workspace)",
+    );
+    expect(imageStudio).toContain("selectManagedImageSessionForGroup(");
+    expect(imageStudio).not.toContain(
+      "currentGroupID(activeManaged.workspace) !== taskGroupId",
+    );
   });
 
   test("keeps selected reference images local and requires an explicit edit-capable model choice", () => {
