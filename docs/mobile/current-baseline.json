@@ -3,20 +3,21 @@
   "channel": "direct",
   "appRepository": "https://github.com/tqytwe/NextChat.git",
   "appBranch": "app/domestic",
-  "appCommit": "0d1fabcf309a825c86206b7e78a4ee20349c12d3",
+  "appCommit": "492a4ba535e803bde3d96471ecd1b583d6ace24a",
   "backendRepository": "https://github.com/tqytwe/sub2api.git",
   "backendBranch": "app/domestic",
   "backendCommit": "9131ff5cf",
-  "androidVersionName": "3.0.25",
-  "androidVersionCode": 325,
+  "androidVersionName": "3.0.28",
+  "androidVersionCode": 328,
   "artifactPath": "public/downloads/jisudengchat-android.apk",
-  "artifactSha256": "dac01bee1d9c4116972e598576812ab0fec31dae7aad373cad848fbec9de99a0",
+  "artifactSha256": "8ee3caa859c1b6c1b2df8f391422faa1ddf67610727ed56ceef6463e816edc86",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "knownLimitations": [
-    "Reference-image selection now uses a compatible gpt-image-1 model and reaches the attached-reference state, but its image task did not reach Completed within 101 seconds; backend task/provider execution evidence is required before the image fixtures can be accepted.",
+    "3.0.28 has signed Release AVD upgrade-smoke evidence. Its Android WebView prompt-input repair needs an authenticated Direct E2E re-run before this candidate can be marked accepted.",
+    "The 3.0.27 reference-image fixture reached a locally attached gpt-image-1 reference but its prompt did not enter the controlled WebView state. 3.0.28 adds native input handling; do not treat reference-image generation as accepted until that exact fixture reaches a terminal result.",
     "The shared Playwright cache is locked and checked by android:doctor, but the repository does not yet contain a pinned Playwright package or OAuth/WebView/download-page browser suite.",
     "The backend candidate is source-tested only and has not been deployed."
   ],
-  "updatedAt": "2026-08-27T14:05:00+08:00"
+  "updatedAt": "2026-08-27T17:44:00+08:00"
 }

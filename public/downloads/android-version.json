@@ -1,9 +1,9 @@
 {
   "platform": "android",
-  "version": "3.0.25",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.25-325-dac01bee1d9c4116972e598576812ab0fec31dae7aad373cad848fbec9de99a0",
+  "version": "3.0.28",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.28-328-8ee3caa859c1b6c1b2df8f391422faa1ddf67610727ed56ceef6463e816edc86",
   "size": "9.7 MB",
-  "sha256": "dac01bee1d9c4116972e598576812ab0fec31dae7aad373cad848fbec9de99a0",
+  "sha256": "8ee3caa859c1b6c1b2df8f391422faa1ddf67610727ed56ceef6463e816edc86",
   "minAndroidVersion": "6.0",
   "releaseDate": "2026-08-27",
   "notes": [
@@ -11,57 +11,67 @@
     "素材与提示词首次保存到本机，后续仅增量更新",
     "视频任务轮询与创作空间保持一致"
   ],
-  "versionCode": 325,
-  "bytes": 10187018,
+  "versionCode": 328,
+  "bytes": 10188121,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "3.0.25",
-  "sourceCommit": "0d1fabcf309a825c86206b7e78a4ee20349c12d3",
-  "builtFromCommit": "0d1fabcf309a825c86206b7e78a4ee20349c12d3",
+  "latestVersion": "3.0.28",
+  "sourceCommit": "492a4ba535e803bde3d96471ecd1b583d6ace24a",
+  "builtFromCommit": "492a4ba535e803bde3d96471ecd1b583d6ace24a",
   "sourceDirty": false,
   "channel": "direct",
   "notes_i18n": {
     "zh": [
-      "视频创作按服务端能力展示模型与参数",
-      "图像、视频、任务和素材使用独立会话与稳定任务链路",
-      "国内版构建、升级验收和测试环境已固定到 Dell 专用工具链"
+      "图片提示词目录可从创作空间在线更新，不上传账号凭据",
+      "视频模型和 1080p 等参数按账号可用能力自动显示",
+      "资产入口、系统设置和任务管理体验进一步统一",
+      "登录与找回密码流程更简洁，修复商汤无水印、语音和提示词输入问题"
     ],
     "en": [
-      "Video creation now follows server-declared model capabilities",
-      "Image, video, tasks, and assets use isolated sessions and stable task flows",
-      "Direct builds and upgrade checks now use the fixed Dell toolchain"
+      "Image prompts refresh from the Creation Space catalog without sending account credentials",
+      "Video models and options such as 1080p follow the capabilities available to the account",
+      "Assets, system settings, and task management are more consistent",
+      "Sign-in and password recovery are simpler",
+      "SenseNova, speech, and prompt-input issues are fixed"
     ],
     "ja": [
-      "動画作成はサーバーが公開するモデル機能に従って表示されます",
-      "画像、動画、タスク、素材は独立したセッションと安定したタスク処理を使用します",
-      "国内版のビルドとアップグレード確認は固定された Dell ツールチェーンを使用します"
+      "画像プロンプトはアカウント認証情報を送信せず、制作スペースのカタログから更新できます",
+      "動画モデルと 1080p などの設定は、アカウントで利用可能な機能に応じて表示されます",
+      "素材、システム設定、タスク管理の操作を統一しました",
+      "ログインとパスワード再設定を簡素化し、SenseNova、音声、プロンプト入力を改善しました"
     ],
     "ko": [
-      "동영상 만들기는 서버가 공개한 모델 기능에 따라 표시됩니다",
-      "이미지, 동영상, 작업 및 소재는 분리된 세션과 안정적인 작업 흐름을 사용합니다",
-      "국내판 빌드와 업그레이드 검증은 고정된 Dell 도구 체인을 사용합니다"
+      "이미지 프롬프트는 계정 자격 증명을 보내지 않고 제작 공간 카탈로그에서 갱신됩니다",
+      "동영상 모델과 1080p 등의 설정은 계정에서 사용할 수 있는 기능에 따라 표시됩니다",
+      "소재, 시스템 설정 및 작업 관리 경험을 더 일관되게 정리했습니다",
+      "로그인과 비밀번호 재설정을 단순화하고 SenseNova, 음성 및 프롬프트 입력 문제를 개선했습니다"
     ]
   },
   "notesByLocale": {
     "zh-CN": [
-      "视频创作按服务端能力展示模型与参数",
-      "图像、视频、任务和素材使用独立会话与稳定任务链路",
-      "国内版构建、升级验收和测试环境已固定到 Dell 专用工具链"
+      "图片提示词目录可从创作空间在线更新，不上传账号凭据",
+      "视频模型和 1080p 等参数按账号可用能力自动显示",
+      "资产入口、系统设置和任务管理体验进一步统一",
+      "登录与找回密码流程更简洁，修复商汤无水印、语音和提示词输入问题"
     ],
     "en": [
-      "Video creation now follows server-declared model capabilities",
-      "Image, video, tasks, and assets use isolated sessions and stable task flows",
-      "Direct builds and upgrade checks now use the fixed Dell toolchain"
+      "Image prompts refresh from the Creation Space catalog without sending account credentials",
+      "Video models and options such as 1080p follow the capabilities available to the account",
+      "Assets, system settings, and task management are more consistent",
+      "Sign-in and password recovery are simpler",
+      "SenseNova, speech, and prompt-input issues are fixed"
     ],
     "ja": [
-      "動画作成はサーバーが公開するモデル機能に従って表示されます",
-      "画像、動画、タスク、素材は独立したセッションと安定したタスク処理を使用します",
-      "国内版のビルドとアップグレード確認は固定された Dell ツールチェーンを使用します"
+      "画像プロンプトはアカウント認証情報を送信せず、制作スペースのカタログから更新できます",
+      "動画モデルと 1080p などの設定は、アカウントで利用可能な機能に応じて表示されます",
+      "素材、システム設定、タスク管理の操作を統一しました",
+      "ログインとパスワード再設定を簡素化し、SenseNova、音声、プロンプト入力を改善しました"
     ],
     "ko": [
-      "동영상 만들기는 서버가 공개한 모델 기능에 따라 표시됩니다",
-      "이미지, 동영상, 작업 및 소재는 분리된 세션과 안정적인 작업 흐름을 사용합니다",
-      "국내판 빌드와 업그레이드 검증은 고정된 Dell 도구 체인을 사용합니다"
+      "이미지 프롬프트는 계정 자격 증명을 보내지 않고 제작 공간 카탈로그에서 갱신됩니다",
+      "동영상 모델과 1080p 등의 설정은 계정에서 사용할 수 있는 기능에 따라 표시됩니다",
+      "소재, 시스템 설정 및 작업 관리 경험을 더 일관되게 정리했습니다",
+      "로그인과 비밀번호 재설정을 단순화하고 SenseNova, 음성 및 프롬프트 입력 문제를 개선했습니다"
     ]
   }
 }
