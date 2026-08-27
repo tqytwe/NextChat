@@ -159,9 +159,8 @@ describe("mobile app backend alignment", () => {
     expect(imageStudio).toContain("const promptRef = useRef<HTMLTextAreaElement | null>(null)");
     expect(imageStudio).toContain("defaultValue={prompt}");
     expect(imageStudio).toContain("overrides?.prompt ?? promptRef.current?.value ?? prompt");
-    expect(imageStudio).toContain(
-      "onInput={(event) => setPrompt(event.currentTarget.value)}",
-    );
+    expect(imageStudio).toContain("function setImagePrompt(next: string)");
+    expect(imageStudio).toContain("promptRef.current.value = next");
     expect(videoStudio).toContain('aria-label="video-prompt"');
     expect(videoStudio).toContain(
       "onInput={(event) => setPrompt(event.currentTarget.value)}",

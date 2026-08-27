@@ -17242,8 +17242,6 @@ function AndroidImageStudio() {
           ref={promptRef}
           aria-label="image-prompt"
           defaultValue={prompt}
-          onChange={(event) => setPrompt(event.currentTarget.value)}
-          onInput={(event) => setPrompt(event.currentTarget.value)}
           placeholder={text.image.promptPlaceholder}
         />
         <div className={styles["form-grid"]}>
