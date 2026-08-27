@@ -5332,6 +5332,39 @@ export function localizeManagedMobileError(input: {
   if (input.status === 401) {
     return text.errors.unauthorized;
   }
+  if (
+    /speech recognition is not available|speech_recognition_unavailable/.test(
+      normalized,
+    )
+  ) {
+    return {
+      cn: "设备语音识别服务不可用，请安装或启用系统语音识别服务后重试",
+      en: "Speech recognition is unavailable on this device. Enable a system speech service and try again.",
+      jp: "この端末では音声認識サービスを利用できません。システムの音声認識を有効にして再試行してください。",
+      ko: "이 기기에서 음성 인식 서비스를 사용할 수 없습니다. 시스템 음성 인식을 활성화한 후 다시 시도하세요.",
+    }[getManagedMobileLocale()];
+  }
+  if (
+    /speech recognition (?:no_match|speech_timeout)|no speech match/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.emptySpeechResult;
+  }
+  if (
+    /speech recognition (?:network|network_timeout)|speech.*network/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.networkFailed;
+  }
+  if (
+    /speech recognition (?:recognizer_busy|server|client)|speech.*busy/.test(
+      normalized,
+    )
+  ) {
+    return text.errors.serviceBusy;
+  }
   if (/timeout|timed out|超时/.test(normalized)) {
     return text.errors.requestTimeout;
   }

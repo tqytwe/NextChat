@@ -132,4 +132,16 @@ describe("mobile dynamic display localization", () => {
       }),
     ).toMatch(/step-up|二次验证/i);
   });
+
+  test("does not label unavailable speech recognition as a microphone permission failure", () => {
+    const unavailable = localizeManagedMobileError({
+      message: "speech recognition is not available",
+    });
+    const noMatch = localizeManagedMobileError({
+      message: "speech recognition no_match",
+    });
+    expect(unavailable).toMatch(/speech|语音|音声|음성/i);
+    expect(unavailable).not.toMatch(/权限未开启|permission denied/i);
+    expect(noMatch).toMatch(/识别|speech|音声|음성/i);
+  });
 });

@@ -995,6 +995,11 @@ export async function requestMicrophonePermission() {
   return NextChatNative.requestMicrophonePermission();
 }
 
+async function requireMicrophonePermission() {
+  const permission = await requestMicrophonePermission();
+  if (!permission.granted) throw new Error("microphone permission denied");
+}
+
 export async function captureImage(fileName = "jisudengchat-camera.jpg") {
   if (!isNativeAndroid()) {
     throw new Error("camera is only available in the Android app");
@@ -1012,7 +1017,7 @@ export async function recognizeSpeech(language?: string, prompt?: string) {
   if (!isNativeAndroid()) {
     throw new Error("speech recognition is only available in the Android app");
   }
-  await requestMicrophonePermission();
+  await requireMicrophonePermission();
   if (isDirectNativeBridgeAvailable()) {
     return callDirectNative<NativeSpeechResult>("recognizeSpeech", {
       language,
@@ -1029,7 +1034,7 @@ export async function startHoldSpeechRecognition(
   if (!isNativeAndroid()) {
     throw new Error("speech recognition is only available in the Android app");
   }
-  await requestMicrophonePermission();
+  await requireMicrophonePermission();
   if (isDirectNativeBridgeAvailable()) {
     return callDirectNative<NativeSpeechResult>("startHoldSpeech", {
       language,
