@@ -14,6 +14,8 @@
   "nodeVersion": "20.20.2",
   "gradleVersion": "8.11.1",
   "androidGradlePluginVersion": "8.7.2",
+  "compileSdkPlatform": "platforms;android-36",
+  "buildToolsVersion": "35.0.0",
   "emulatorVersion": "36.6.11.0",
   "platformToolsVersion": "37.0.0",
   "systemImage": "system-images;android-35;google_apis;x86_64",

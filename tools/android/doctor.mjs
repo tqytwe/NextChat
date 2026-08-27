@@ -57,6 +57,9 @@ try {
   check("SDK adb", existsSync(path.join(androidHome, "platform-tools/adb")), "adb is missing");
   check("SDK emulator", existsSync(path.join(androidHome, "emulator/emulator")), "emulator is missing");
   check("SDK avdmanager", existsSync(path.join(androidHome, "cmdline-tools/latest/bin/avdmanager")), "avdmanager is missing");
+  const compileSdkApi = manifest.compileSdkPlatform.match(/^platforms;android-(\d+)$/)?.[1];
+  check("compile SDK platform", Boolean(compileSdkApi) && existsSync(path.join(androidHome, `platforms/android-${compileSdkApi}/android.jar`)), `${manifest.compileSdkPlatform} is missing; run android:toolchain:provision --confirm-provision`);
+  check("Android build tools", existsSync(path.join(androidHome, "build-tools", manifest.buildToolsVersion, "aapt2")), `build-tools;${manifest.buildToolsVersion} is missing; run android:toolchain:provision --confirm-provision`);
   check("system image", existsSync(path.join(androidHome, "system-images/android-35/google_apis/x86_64/package.xml")), "API 35 Google APIs x86_64 image is missing");
   check("Maestro", existsSync(maestro), `${maestro} is missing`);
   check("Playwright no-download policy", process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD === "1", "must be 1");

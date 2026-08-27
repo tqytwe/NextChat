@@ -16,7 +16,32 @@ if (sdkRoot !== manifest.sdkRoot || avdHome !== manifest.avdRoot) {
 }
 
 const avdmanager = path.join(sdkRoot, "cmdline-tools/latest/bin/avdmanager");
+const sdkmanager = path.join(sdkRoot, "cmdline-tools/latest/bin/sdkmanager");
 const image = manifest.systemImage;
+
+const managedSdkPackages = [manifest.compileSdkPlatform, `build-tools;${manifest.buildToolsVersion}`];
+const packagePath = (sdkPackage) => {
+  if (sdkPackage.startsWith("platforms;android-")) {
+    return path.join(sdkRoot, "platforms", sdkPackage.slice("platforms;".length), "android.jar");
+  }
+  if (sdkPackage.startsWith("build-tools;")) {
+    return path.join(sdkRoot, "build-tools", sdkPackage.slice("build-tools;".length), "aapt2");
+  }
+  throw new Error(`Unsupported managed SDK package: ${sdkPackage}`);
+};
+
+const missingSdkPackages = managedSdkPackages.filter((sdkPackage) => !existsSync(packagePath(sdkPackage)));
+if (missingSdkPackages.length > 0) {
+  if (!existsSync(sdkmanager)) throw new Error(`Missing sdkmanager: ${sdkmanager}`);
+  console.log(`Installing missing fixed SDK packages: ${missingSdkPackages.join(", ")}`);
+  execFileSync(sdkmanager, ["--install", ...missingSdkPackages], { stdio: "inherit" });
+  for (const sdkPackage of missingSdkPackages) {
+    if (!existsSync(packagePath(sdkPackage))) throw new Error(`SDK package installation did not produce ${sdkPackage}`);
+  }
+} else {
+  console.log("Fixed SDK compile and build-tools packages are already present.");
+}
+
 for (const key of ["directRelease", "directE2E"]) {
   const avd = manifest.avds[key];
   const iniPath = path.join(avdHome, `${avd.name}.ini`);
@@ -43,4 +68,4 @@ for (const key of ["directRelease", "directE2E"]) {
   console.log(`Provisioned ${avd.name} from ${image}.`);
 }
 
-console.log("No SDK package or browser download was performed.");
+console.log("Provisioning completed. Browser revisions were not downloaded or modified.");
