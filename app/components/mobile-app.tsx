@@ -42,6 +42,7 @@ import SettingsIcon from "../icons/settings.svg";
 import ShareIcon from "../icons/share.svg";
 import ThreeDotsIcon from "../icons/three-dots.svg";
 import UploadIcon from "../icons/upload.svg";
+import UserIcon from "../icons/user.svg";
 import VoiceIcon from "../icons/voice.svg";
 import BotIcon from "../icons/bot.svg";
 import { getClientConfig } from "../config/client";
@@ -26105,7 +26106,7 @@ function AndroidAccountSettings() {
             onClick={() => navigate(Path.AccountNotifications)}
           />
           <AccountMenuItem
-            icon={<SettingsIcon />}
+            icon={<UserIcon />}
             title={text.account.profile}
             detail={text.account.profileHint}
             onClick={() => navigate(Path.AccountProfile)}

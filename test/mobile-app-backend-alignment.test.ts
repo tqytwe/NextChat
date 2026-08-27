@@ -67,7 +67,7 @@ describe("mobile app backend alignment", () => {
     expect(source).toContain("props.text.navigation.home");
     expect(source).toContain("props.text.navigation.chat");
     expect(source).toContain("props.text.navigation.create");
-    expect(source).toContain("props.text.navigation.projects");
+    expect(source).toContain("mobileAssetNavigationLabel()");
     expect(source).toContain("props.text.navigation.account");
   });
 
