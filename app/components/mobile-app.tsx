@@ -4927,6 +4927,15 @@ function useNativeDocumentScroll(enabled = true) {
 
 type AndroidTab = "home" | "chat" | "create" | "projects" | "account";
 
+function mobileAssetNavigationLabel() {
+  return {
+    cn: "资产",
+    en: "Assets",
+    jp: "素材",
+    ko: "소재",
+  }[getManagedMobileLocale()];
+}
+
 function AndroidBottomTabs(props: {
   active: AndroidTab;
   text: ManagedMobileText;
@@ -4958,8 +4967,8 @@ function AndroidBottomTabs(props: {
     },
     {
       id: "projects",
-      label: props.text.navigation.projects,
-      path: Path.Projects,
+      label: mobileAssetNavigationLabel(),
+      path: Path.Gallery,
       icon: <HistoryIcon />,
     },
     {
