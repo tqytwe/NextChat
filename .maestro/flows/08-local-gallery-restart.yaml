@@ -7,7 +7,7 @@ tags:
 - launchApp:
     clearState: false
 - runFlow: ../subflows/ensure-login.yaml
-- tapOn: "app-tab-gallery"
+- tapOn: "项目|Projects|プロジェクト|프로젝트"
 - extendedWaitUntil:
     visible: "local-gallery-item-1"
     timeout: 20000

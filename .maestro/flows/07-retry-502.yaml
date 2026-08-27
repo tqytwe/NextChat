@@ -4,7 +4,7 @@ tags:
   - fixture
 ---
 - runFlow: ../subflows/ensure-login.yaml
-- tapOn: "app-tab-image"
+- tapOn: "创作|Create|制作|제작"
 - tapOn: "image-prompt"
 - inputText: "maestro first 502 then success"
 - hideKeyboard

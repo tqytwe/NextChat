@@ -4,7 +4,7 @@ tags:
   - fixture
 ---
 - runFlow: ../subflows/ensure-login.yaml
-- tapOn: "app-tab-chat"
+- tapOn: "首页|Home|ホーム|홈"
 - extendedWaitUntil:
     visible: "dashboard-default-group"
     timeout: 15000

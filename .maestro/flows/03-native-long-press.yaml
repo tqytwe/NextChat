@@ -10,7 +10,7 @@ tags:
 - tapOn: "chat-composer"
 - inputText: "maestro-native-selection-message"
 - hideKeyboard
-- tapOn: "chat-send"
+- tapOn: "发送|Send|送信|보내기"
 - assertVisible: "maestro-native-selection-message"
 - longPressOn: "maestro-native-selection-message"
 - assertVisible:

@@ -11,7 +11,7 @@ tags:
 - tapOn: "chat-composer"
 - inputText: "maestro-first-message-session"
 - hideKeyboard
-- tapOn: "chat-send"
+- tapOn: "发送|Send|送信|보내기"
 - assertVisible: "maestro-first-message-session"
 - assertNotVisible: "chat-draft-no-session"
 - assertVisible: "chat-message-user-1"

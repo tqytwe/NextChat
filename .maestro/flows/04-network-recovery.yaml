@@ -11,7 +11,7 @@ tags:
 - tapOn: "chat-composer"
 - inputText: "maestro-network-recovery"
 - hideKeyboard
-- tapOn: "chat-send"
+- tapOn: "发送|Send|送信|보내기"
 - extendedWaitUntil:
     visible:
       text: ".*HTTP unavailable.*(offline|network|timeout).*"

@@ -14,5 +14,5 @@ tags:
 - tapOn: "chat-composer"
 - inputText: "maestro-local-chat-image"
 - hideKeyboard
-- tapOn: "chat-send"
+- tapOn: "发送|Send|送信|보내기"
 - assertVisible: "maestro-local-chat-image"
