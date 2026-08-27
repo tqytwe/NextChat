@@ -7931,49 +7931,37 @@ function ImagePromptLibrarySheet(props: {
   const [recentIds, setRecentIds] = useState<string[]>(() =>
     readStoredJSON("jisudengchat-image-prompt-recents-v1", [] as string[]),
   );
-  const coverObjectURLsRef = useRef<string[]>([]);
+  // The Canvas directory is deliberately large. Keeping an object URL for
+  // every cover (and mounting every prompt card) blocks Android WebView's main
+  // thread long enough that its modal can no longer receive a close gesture.
+  const [visibleCount, setVisibleCount] = useState(24);
+  const [visibleCoverURLs, setVisibleCoverURLs] = useState<
+    Record<string, string>
+  >({});
+  const coverObjectURLsRef = useRef(new Map<string, string>());
+  const appLocale = mobileTextLocale(props.text);
+  const catalogLocale =
+    appLocale === "cn"
+      ? "zh"
+      : appLocale === "jp"
+      ? "ja"
+      : appLocale === "ko"
+      ? "ko"
+      : "en";
 
   useEffect(() => {
     if (!props.open) return;
     let alive = true;
-    const appLocale = mobileTextLocale(props.text);
-    const locale =
-      appLocale === "cn"
-        ? "zh"
-        : appLocale === "jp"
-        ? "ja"
-        : appLocale === "ko"
-        ? "ko"
-        : "en";
     const releaseCoverObjectURLs = () => {
       coverObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      coverObjectURLsRef.current = [];
+      coverObjectURLsRef.current.clear();
     };
     async function applyCatalog(catalog: LocalPromptCatalog) {
-      const entries = await Promise.all(
-        catalog.items.map(async (item) => {
-          const coverUrl = await createLocalPromptCoverObjectURL(
-            catalog.accountId,
-            catalog.locale,
-            "image",
-            item.id,
-            catalog.source,
-          );
-          return { item, coverUrl };
-        }),
-      );
-      if (!alive) {
-        entries.forEach(({ coverUrl }) => {
-          if (coverUrl) URL.revokeObjectURL(coverUrl);
-        });
-        return;
-      }
-      releaseCoverObjectURLs();
-      coverObjectURLsRef.current = entries
-        .map(({ coverUrl }) => coverUrl)
-        .filter(Boolean);
-      const normalized = entries.map(({ item, coverUrl }) =>
-        localPromptCatalogItemToImageTemplate(item, coverUrl),
+      if (!alive) return;
+      // Metadata can be indexed in one pass, but cover blobs are hydrated only
+      // for the currently visible page below.
+      const normalized = catalog.items.map((item) =>
+        localPromptCatalogItemToImageTemplate(item),
       );
       if (normalized.length > 0) setLibraryItems(normalized);
       const systemCategories = fallbackImagePromptCategories(props.text).filter(
@@ -7994,14 +7982,14 @@ function ImagePromptLibrarySheet(props: {
         if (!accountId) return;
         const cached = await readLocalPromptCatalog(
           accountId,
-          locale,
+          catalogLocale,
           "image",
           "canvas",
         );
         if (cached) await applyCatalog(cached);
         const synced = await syncLocalPromptCatalog(
           accountId,
-          locale,
+          catalogLocale,
           "image",
           "",
           "",
@@ -8020,8 +8008,9 @@ function ImagePromptLibrarySheet(props: {
     return () => {
       alive = false;
       releaseCoverObjectURLs();
+      setVisibleCoverURLs({});
     };
-  }, [props.accountId, props.open, props.text]);
+  }, [catalogLocale, props.accountId, props.open, props.text]);
 
   function markRecent(id: string) {
     setRecentIds((ids) => {
@@ -8072,6 +8061,71 @@ function ImagePromptLibrarySheet(props: {
       .toLowerCase()
       .includes(queryValue);
   });
+  const visibleItems = items.slice(0, visibleCount);
+  const visibleItemIDs = visibleItems.map((item) => item.id).join("|");
+
+  useEffect(() => {
+    if (!props.open) return;
+    setVisibleCount(24);
+  }, [category, languageMode, props.open, queryValue]);
+
+  useEffect(() => {
+    if (!props.open) return;
+    const accountId = String(props.accountId || "").trim();
+    if (!accountId) return;
+    let alive = true;
+    const missing = visibleItems.filter(
+      (item) =>
+        !item.coverUrl && !coverObjectURLsRef.current.has(String(item.id)),
+    );
+    if (!missing.length) return;
+
+    void Promise.all(
+      // Keep IndexedDB reads bounded to one rendered page. This is the key
+      // difference from the old all-catalog Promise.all implementation.
+      missing.slice(0, 24).map(async (item) => ({
+        id: String(item.id),
+        url: await createLocalPromptCoverObjectURL(
+          accountId,
+          catalogLocale,
+          "image",
+          String(item.id),
+          "canvas",
+        ),
+      })),
+    ).then((entries) => {
+      if (!alive) {
+        entries.forEach(({ url }) => {
+          if (url) URL.revokeObjectURL(url);
+        });
+        return;
+      }
+      let changed = false;
+      for (const { id, url } of entries) {
+        if (!url || coverObjectURLsRef.current.has(id)) continue;
+        coverObjectURLsRef.current.set(id, url);
+        changed = true;
+      }
+      if (changed) {
+        setVisibleCoverURLs(
+          Object.fromEntries(coverObjectURLsRef.current.entries()),
+        );
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [catalogLocale, props.accountId, props.open, visibleItemIDs]);
+
+  const loadMoreLabel = localizedValue(
+    {
+      cn: "加载更多提示词",
+      en: "Load more prompts",
+      jp: "さらに読み込む",
+      ko: "프롬프트 더 보기",
+    },
+    props.text,
+  );
   return (
     <LibrarySheet
       open={props.open}
@@ -8129,12 +8183,12 @@ function ImagePromptLibrarySheet(props: {
         ))}
       </div>
       <div className={styles["library-list"]}>
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <article key={item.id} className={styles["library-item"]}>
-            {item.coverUrl && (
+            {(visibleCoverURLs[item.id] || item.coverUrl) && (
               <img
                 className={styles["prompt-library-cover"]}
-                src={item.coverUrl}
+                src={visibleCoverURLs[item.id] || item.coverUrl}
                 alt=""
                 loading="lazy"
               />
@@ -8207,6 +8261,17 @@ function ImagePromptLibrarySheet(props: {
         ))}
         {items.length === 0 && (
           <p className={styles["empty-copy"]}>{props.text.image.noPrompts}</p>
+        )}
+        {visibleItems.length < items.length && (
+          <div className={styles["prompt-library-pagination"]}>
+            <span>{`${visibleItems.length} / ${items.length}`}</span>
+            <button
+              type="button"
+              onClick={() => setVisibleCount((count) => count + 24)}
+            >
+              {loadMoreLabel}
+            </button>
+          </div>
         )}
       </div>
     </LibrarySheet>

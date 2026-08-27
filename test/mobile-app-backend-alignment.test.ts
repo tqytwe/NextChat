@@ -167,6 +167,19 @@ describe("mobile app backend alignment", () => {
     );
   });
 
+  test("renders the Canvas image-prompt directory in bounded pages", () => {
+    const imageLibrary = source.slice(
+      source.indexOf("function ImagePromptLibrarySheet"),
+      source.indexOf("function ChatAgentLibrarySheet"),
+    );
+    expect(imageLibrary).toContain("const [visibleCount, setVisibleCount] = useState(24)");
+    expect(imageLibrary).toContain("const visibleItems = items.slice(0, visibleCount)");
+    expect(imageLibrary).toContain("missing.slice(0, 24).map");
+    expect(imageLibrary).toContain("visibleItems.map((item)");
+    expect(imageLibrary).not.toContain("catalog.items.map(async (item)");
+    expect(styles).toContain(".prompt-library-pagination");
+  });
+
   test("pins ContentKit image work to its saved image-purpose group", () => {
     const contentKit = source.slice(
       source.indexOf("function AndroidContentKit()"),
