@@ -270,6 +270,13 @@ import {
   mergeMobileTaskPages,
   uploadMobileAssetFormData,
 } from "../client/mobile-platform";
+import { createMobileStudioClient } from "../client/mobile-studio";
+import type {
+  MobileStudioDocument,
+  MobileStudioDocumentType,
+  MobileStudioEpisode,
+  MobileStudioProject,
+} from "../client/mobile-studio";
 import { searchMobileWeb } from "../client/mobile-web-search";
 import {
   createMobileCompletionStreamAccumulator,
@@ -555,7 +562,9 @@ async function requestWithManagedAuth<T>(
 
 async function mobilePlatformClient() {
   type MobilePlatformClient = ReturnType<typeof createMobilePlatformClient>;
+  type MobileStudioClient = ReturnType<typeof createMobileStudioClient>;
   const makeClient = createMobilePlatformClient;
+  const makeStudioClient = createMobileStudioClient;
   return {
     assets: {
       list: (...args: Parameters<MobilePlatformClient["assets"]["list"]>) =>
@@ -672,6 +681,48 @@ async function mobilePlatformClient() {
         requestWithManagedAuth(({ baseUrl, accessToken }) =>
           makeClient(baseUrl, accessToken).projects.delete(...args),
         ),
+    },
+    studio: {
+      projects: {
+        create: (
+          ...args: Parameters<MobileStudioClient["projects"]["create"]>
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeStudioClient(baseUrl, accessToken).projects.create(...args),
+          ),
+        list: (...args: Parameters<MobileStudioClient["projects"]["list"]>) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeStudioClient(baseUrl, accessToken).projects.list(...args),
+          ),
+        archive: (
+          ...args: Parameters<MobileStudioClient["projects"]["archive"]>
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeStudioClient(baseUrl, accessToken).projects.archive(...args),
+          ),
+      },
+      episodes: {
+        list: (...args: Parameters<MobileStudioClient["episodes"]["list"]>) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeStudioClient(baseUrl, accessToken).episodes.list(...args),
+          ),
+        create: (
+          ...args: Parameters<MobileStudioClient["episodes"]["create"]>
+        ) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeStudioClient(baseUrl, accessToken).episodes.create(...args),
+          ),
+      },
+      documents: {
+        list: (...args: Parameters<MobileStudioClient["documents"]["list"]>) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeStudioClient(baseUrl, accessToken).documents.list(...args),
+          ),
+        put: (...args: Parameters<MobileStudioClient["documents"]["put"]>) =>
+          requestWithManagedAuth(({ baseUrl, accessToken }) =>
+            makeStudioClient(baseUrl, accessToken).documents.put(...args),
+          ),
+      },
     },
     payments: {
       create: (
@@ -4927,6 +4978,15 @@ function useNativeDocumentScroll(enabled = true) {
 
 type AndroidTab = "home" | "chat" | "create" | "projects" | "account";
 
+function mobileAssetNavigationLabel() {
+  return {
+    cn: "资产",
+    en: "Assets",
+    jp: "素材",
+    ko: "소재",
+  }[getManagedMobileLocale()];
+}
+
 function AndroidBottomTabs(props: {
   active: AndroidTab;
   text: ManagedMobileText;
@@ -4958,7 +5018,7 @@ function AndroidBottomTabs(props: {
     },
     {
       id: "projects",
-      label: props.text.navigation.projects,
+      label: mobileAssetNavigationLabel(),
       path: Path.Projects,
       icon: <HistoryIcon />,
     },
@@ -6437,6 +6497,546 @@ function AndroidDashboard() {
         }}
       />
     </AndroidAppShell>
+  );
+}
+
+const MOBILE_STUDIO_DOCUMENT_TYPES: MobileStudioDocumentType[] = [
+  "script",
+  "visual_bible",
+  "image_prompts",
+  "storyboard",
+  "video_prompts",
+];
+
+function isMobileStudioDocumentType(
+  value: string | null,
+): value is MobileStudioDocumentType {
+  return MOBILE_STUDIO_DOCUMENT_TYPES.includes(
+    value as MobileStudioDocumentType,
+  );
+}
+
+function studioWorkspaceCopy() {
+  const locale = getManagedMobileLocale();
+  return {
+    cn: {
+      assets: "资产",
+      assetsHint: "图片批次、视频片段与本机素材按用途整理",
+      gallery: "作品与素材库",
+      galleryHint: "查看图片批次、本机导入和已保存素材",
+      drama: "短剧工程",
+      dramaHint: "剧本、设定、分镜、提示词和生成素材保持在同一工程中",
+      newProject: "新建工程",
+      title: "工程名称",
+      titlePlaceholder: "例如：夏日悬疑短剧",
+      description: "创作说明（可选）",
+      create: "创建工程",
+      empty: "还没有短剧工程",
+      episode: "分集",
+      addEpisode: "添加分集",
+      episodeTitle: "分集标题",
+      noEpisode: "先创建一个分集，再编辑分集创作事实",
+      facts: "创作事实",
+      save: "保存",
+      archive: "归档工程",
+      confirmArchive: "归档该工程？素材不会被删除。",
+      loading: "正在同步工程",
+      failed: "工程暂时无法同步，请稍后重试",
+      script: "剧本",
+      visual_bible: "视觉设定",
+      storyboard: "分镜",
+      image_prompts: "图片提示词",
+      video_prompts: "视频提示词",
+      factHint: "编辑后会标记下游创作内容需要复核，不会自动生成或扣费。",
+    },
+    en: {
+      assets: "Assets",
+      assetsHint:
+        "Organize image batches, clips, and device materials by purpose",
+      gallery: "Gallery & materials",
+      galleryHint: "Browse image batches, device imports, and saved materials",
+      drama: "Drama projects",
+      dramaHint:
+        "Keep scripts, visual bible, storyboards, prompts, and assets together",
+      newProject: "New project",
+      title: "Project title",
+      titlePlaceholder: "For example: Summer mystery short drama",
+      description: "Creative note (optional)",
+      create: "Create project",
+      empty: "No drama project yet",
+      episode: "Episode",
+      addEpisode: "Add episode",
+      episodeTitle: "Episode title",
+      noEpisode: "Create an episode before editing episode facts",
+      facts: "Creative facts",
+      save: "Save",
+      archive: "Archive project",
+      confirmArchive: "Archive this project? Its materials will remain.",
+      loading: "Syncing projects",
+      failed: "Projects are unavailable right now. Try again shortly.",
+      script: "Script",
+      visual_bible: "Visual bible",
+      storyboard: "Storyboard",
+      image_prompts: "Image prompts",
+      video_prompts: "Video prompts",
+      factHint:
+        "Saving marks downstream work for review. It never generates or charges automatically.",
+    },
+    jp: {
+      assets: "素材",
+      assetsHint: "画像、動画クリップ、端末内素材を用途別に整理します",
+      gallery: "作品・素材ライブラリ",
+      galleryHint: "画像、端末から追加した素材、保存済み素材を確認します",
+      drama: "短編ドラマ制作",
+      dramaHint:
+        "脚本、ビジュアル設定、絵コンテ、プロンプト、素材を一つの制作にまとめます",
+      newProject: "制作を作成",
+      title: "制作名",
+      titlePlaceholder: "例：夏のミステリー短編",
+      description: "制作メモ（任意）",
+      create: "制作を作成",
+      empty: "短編ドラマ制作はまだありません",
+      episode: "話",
+      addEpisode: "話を追加",
+      episodeTitle: "話のタイトル",
+      noEpisode: "話を作成してから創作内容を編集してください",
+      facts: "創作内容",
+      save: "保存",
+      archive: "制作をアーカイブ",
+      confirmArchive: "この制作をアーカイブしますか？素材は削除されません。",
+      loading: "制作を同期しています",
+      failed: "制作を同期できません。しばらくしてから再試行してください。",
+      script: "脚本",
+      visual_bible: "ビジュアル設定",
+      storyboard: "絵コンテ",
+      image_prompts: "画像プロンプト",
+      video_prompts: "動画プロンプト",
+      factHint:
+        "保存すると後続の作業が要確認になります。自動生成や自動課金は行いません。",
+    },
+    ko: {
+      assets: "소재",
+      assetsHint: "이미지 묶음, 영상 클립 및 기기 소재를 용도별로 정리합니다",
+      gallery: "작품 및 소재함",
+      galleryHint: "이미지 묶음, 기기 가져오기 및 저장한 소재를 확인합니다",
+      drama: "숏폼 드라마 프로젝트",
+      dramaHint:
+        "대본, 비주얼 설정, 콘티, 프롬프트 및 소재를 하나의 프로젝트에 보관합니다",
+      newProject: "프로젝트 만들기",
+      title: "프로젝트 이름",
+      titlePlaceholder: "예: 여름 미스터리 숏드라마",
+      description: "제작 메모(선택)",
+      create: "프로젝트 만들기",
+      empty: "숏폼 드라마 프로젝트가 없습니다",
+      episode: "에피소드",
+      addEpisode: "에피소드 추가",
+      episodeTitle: "에피소드 제목",
+      noEpisode: "에피소드를 만든 뒤 창작 내용을 편집하세요",
+      facts: "창작 내용",
+      save: "저장",
+      archive: "프로젝트 보관",
+      confirmArchive: "이 프로젝트를 보관할까요? 소재는 삭제되지 않습니다.",
+      loading: "프로젝트를 동기화하는 중",
+      failed: "프로젝트를 동기화할 수 없습니다. 잠시 후 다시 시도하세요.",
+      script: "대본",
+      visual_bible: "비주얼 설정",
+      storyboard: "콘티",
+      image_prompts: "이미지 프롬프트",
+      video_prompts: "영상 프롬프트",
+      factHint:
+        "저장하면 다음 작업이 검토 필요로 표시됩니다. 자동 생성이나 자동 결제는 하지 않습니다.",
+    },
+  }[locale];
+}
+
+function AndroidAssetsWorkspace() {
+  const text = useMobileText();
+  const navigate = useNavigate();
+  const copy = studioWorkspaceCopy();
+  const [view, setView] = useState<"assets" | "studio">("assets");
+  return (
+    <AndroidAppShell active="projects" text={text} documentScroll>
+      <header className={styles["app-header"]}>
+        <div>
+          <span>{copy.assetsHint}</span>
+          <h1>{copy.assets}</h1>
+        </div>
+      </header>
+      <div className={styles["asset-workspace-tabs"]} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "assets"}
+          onClick={() => setView("assets")}
+        >
+          {copy.gallery}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === "studio"}
+          onClick={() => setView("studio")}
+        >
+          {copy.drama}
+        </button>
+      </div>
+      {view === "assets" ? (
+        <section className={styles["asset-workspace-panel"]}>
+          <ImageIcon />
+          <div>
+            <strong>{copy.gallery}</strong>
+            <p>{copy.galleryHint}</p>
+          </div>
+          <button type="button" onClick={() => navigate(Path.Gallery)}>
+            {text.common.open}
+          </button>
+        </section>
+      ) : (
+        <AndroidStudioProjects copy={copy} />
+      )}
+    </AndroidAppShell>
+  );
+}
+
+function AndroidStudioProjects({
+  copy,
+}: {
+  copy: ReturnType<typeof studioWorkspaceCopy>;
+}) {
+  const text = useMobileText();
+  const [items, setItems] = useState<MobileStudioProject[]>([]);
+  const [selected, setSelected] = useState<MobileStudioProject | null>(null);
+  const [episodes, setEpisodes] = useState<MobileStudioEpisode[]>([]);
+  const [episode, setEpisode] = useState<MobileStudioEpisode | null>(null);
+  const [documents, setDocuments] = useState<MobileStudioDocument[]>([]);
+  const [editing, setEditing] = useState<
+    "project" | "episode" | MobileStudioDocumentType | null
+  >(null);
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const client = await mobilePlatformClient();
+      const page = await client.studio.projects.list(1, 50);
+      setItems(page.items || []);
+      setError("");
+    } catch {
+      setError(copy.failed);
+    } finally {
+      setLoading(false);
+    }
+  }, [copy.failed]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const openProject = useCallback(
+    async (project: MobileStudioProject) => {
+      setSelected(project);
+      setEpisode(null);
+      setDocuments([]);
+      setEditing(null);
+      setError("");
+      setLoading(true);
+      try {
+        const client = await mobilePlatformClient();
+        const result = await client.studio.episodes.list(project.id);
+        setEpisodes(result.items || []);
+      } catch {
+        setError(copy.failed);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [copy.failed],
+  );
+
+  const openEpisode = useCallback(
+    async (nextEpisode: MobileStudioEpisode) => {
+      if (!selected) return;
+      setEpisode(nextEpisode);
+      setEditing(null);
+      setLoading(true);
+      try {
+        const client = await mobilePlatformClient();
+        const result = await client.studio.documents.list(
+          selected.id,
+          nextEpisode.id,
+        );
+        setDocuments(result.items || []);
+        setError("");
+      } catch {
+        setError(copy.failed);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [copy.failed, selected],
+  );
+
+  function documentText(document?: MobileStudioDocument) {
+    const value = document?.content?.text;
+    return typeof value === "string" ? value : "";
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!editing || saving) return;
+    setSaving(true);
+    try {
+      const client = await mobilePlatformClient();
+      if (editing === "project") {
+        const created = await client.studio.projects.create({
+          title: draft.trim(),
+          language: { cn: "zh-CN", en: "en-US", jp: "ja-JP", ko: "ko-KR" }[
+            getManagedMobileLocale()
+          ],
+        });
+        setItems((current) => [created, ...current]);
+        setEditing(null);
+        await openProject(created);
+      } else if (editing === "episode" && selected) {
+        const created = await client.studio.episodes.create(selected.id, {
+          stable_id: `EP-${String(episodes.length + 1).padStart(3, "0")}`,
+          title: draft.trim(),
+          sequence: episodes.length + 1,
+        });
+        setEpisodes((current) => [...current, created]);
+        setEditing(null);
+        await openEpisode(created);
+      } else if (selected && episode && isMobileStudioDocumentType(editing)) {
+        const current = documents.find(
+          (item) => item.document_type === editing,
+        );
+        const updated = await client.studio.documents.put(
+          selected.id,
+          editing,
+          {
+            episode_id: episode.id,
+            expected_version: current?.version || 0,
+            content: { text: draft, review_required: true },
+          },
+        );
+        setDocuments((currentDocuments) => [
+          ...currentDocuments.filter((item) => item.document_type !== editing),
+          updated,
+        ]);
+        setEditing(null);
+      }
+      setDraft("");
+      setError("");
+    } catch {
+      setError(copy.failed);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function archive() {
+    if (!selected || !window.confirm(copy.confirmArchive)) return;
+    setSaving(true);
+    try {
+      const client = await mobilePlatformClient();
+      await client.studio.projects.archive(selected.id);
+      setItems((current) => current.filter((item) => item.id !== selected.id));
+      setSelected(null);
+      setEpisode(null);
+      setDocuments([]);
+    } catch {
+      setError(copy.failed);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!selected) {
+    return (
+      <section className={styles["studio-workspace"]} aria-live="polite">
+        <div className={styles["studio-workspace-head"]}>
+          <p>{copy.dramaHint}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setDraft("");
+              setEditing("project");
+            }}
+          >
+            <AddIcon /> {copy.newProject}
+          </button>
+        </div>
+        {editing === "project" && (
+          <form className={styles["studio-editor"]} onSubmit={submit}>
+            <label>
+              {copy.title}
+              <input
+                autoFocus
+                value={draft}
+                maxLength={200}
+                placeholder={copy.titlePlaceholder}
+                onChange={(event) => setDraft(event.currentTarget.value)}
+              />
+            </label>
+            <button
+              className={styles["primary-action"]}
+              disabled={!draft.trim() || saving}
+              type="submit"
+            >
+              {copy.create}
+            </button>
+          </form>
+        )}
+        {!loading && !items.length && (
+          <p className={styles["empty-copy"]}>{copy.empty}</p>
+        )}
+        <div className={styles["studio-project-list"]}>
+          {items.map((project) => (
+            <button
+              type="button"
+              key={project.id}
+              onClick={() => void openProject(project)}
+            >
+              <HistoryIcon />
+              <span>
+                <strong>{project.title}</strong>
+                <small>
+                  {project.description ||
+                    formatDateTime(project.updated_at, text)}
+                </small>
+              </span>
+            </button>
+          ))}
+        </div>
+        {loading && <p className={styles["empty-copy"]}>{copy.loading}</p>}
+        {error && <div className={styles["form-error"]}>{error}</div>}
+      </section>
+    );
+  }
+
+  return (
+    <section className={styles["studio-workspace"]} aria-live="polite">
+      <div className={styles["studio-workspace-head"]}>
+        <button
+          type="button"
+          className={styles["compact-text-action"]}
+          onClick={() => {
+            setSelected(null);
+            setEpisode(null);
+          }}
+        >
+          {text.common.back}
+        </button>
+        <div>
+          <strong>{selected.title}</strong>
+          <p>{copy.factHint}</p>
+        </div>
+        <IconButton
+          label={copy.archive}
+          disabled={saving}
+          onClick={() => void archive()}
+        >
+          <DeleteIcon />
+        </IconButton>
+      </div>
+      <div className={styles["studio-episodes"]}>
+        {episodes.map((item) => (
+          <button
+            type="button"
+            aria-current={episode?.id === item.id ? "page" : undefined}
+            key={item.id}
+            onClick={() => void openEpisode(item)}
+          >
+            {item.stable_id} <span>{item.title}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => {
+            setDraft("");
+            setEditing("episode");
+          }}
+        >
+          {copy.addEpisode}
+        </button>
+      </div>
+      {editing === "episode" && (
+        <form className={styles["studio-editor"]} onSubmit={submit}>
+          <label>
+            {copy.episodeTitle}
+            <input
+              autoFocus
+              value={draft}
+              maxLength={200}
+              onChange={(event) => setDraft(event.currentTarget.value)}
+            />
+          </label>
+          <button
+            className={styles["primary-action"]}
+            disabled={!draft.trim() || saving}
+            type="submit"
+          >
+            {copy.addEpisode}
+          </button>
+        </form>
+      )}
+      {episode ? (
+        <>
+          <h2 className={styles["studio-fact-title"]}>
+            {copy.facts} · {episode.stable_id}
+          </h2>
+          <div className={styles["studio-facts"]}>
+            {MOBILE_STUDIO_DOCUMENT_TYPES.map((type) => {
+              const current = documents.find(
+                (item) => item.document_type === type,
+              );
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => {
+                    setEditing(type);
+                    setDraft(documentText(current));
+                  }}
+                >
+                  <strong>{copy[type]}</strong>
+                  <span>
+                    {current ? `${current.version}` : text.common.empty}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <p className={styles["empty-copy"]}>{copy.noEpisode}</p>
+      )}
+      {isMobileStudioDocumentType(editing) && (
+        <form className={styles["studio-editor"]} onSubmit={submit}>
+          <label>
+            {copy[editing]}
+            <textarea
+              autoFocus
+              rows={10}
+              value={draft}
+              onChange={(event) => setDraft(event.currentTarget.value)}
+            />
+          </label>
+          <button
+            className={styles["primary-action"]}
+            disabled={saving}
+            type="submit"
+          >
+            {copy.save}
+          </button>
+        </form>
+      )}
+      {loading && <p className={styles["empty-copy"]}>{copy.loading}</p>}
+      {error && <div className={styles["form-error"]}>{error}</div>}
+    </section>
   );
 }
 
@@ -27082,7 +27682,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   if (location.pathname === Path.Projects) {
     return (
       <>
-        <AndroidProjects />
+        <AndroidAssetsWorkspace />
         <AndroidGlobalUpdatePrompt />
       </>
     );
