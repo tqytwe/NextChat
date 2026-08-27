@@ -85,6 +85,8 @@ import {
   managedRequestText,
   getManagedRequestDiagnostics,
   isManagedAuthError,
+  managedWorkspaceModelID,
+  managedWorkspaceModelMatches,
   normalizeManagedBaseUrl,
   diagnosticCategory,
   diagnosticErrorMessage,
@@ -97,7 +99,15 @@ import type {
   ManagedWorkspaceModel,
 } from "../client/managed-nextchat";
 import {
+  isExecutableManagedImageModel,
+  isManagedImageSizeSupported,
+  managedImageReferenceLimit,
+  validateManagedImageRequest,
+  validateManagedVideoRequest,
+} from "../client/mobile-media-contract";
+import {
   buildMobileVideoScriptPrompt,
+  classifyMobileVideoBootstrapFailure,
   managedVideoCapabilities,
   managedVideoModels,
   MOBILE_VIDEO_POLL_INTERVAL_MS,
@@ -105,8 +115,13 @@ import {
   normalizeMobileVideoBootstrapGroups,
   resolveMobileVideoScriptSelection,
   resolveManagedVideoGroups,
+  selectManagedVideoSession,
+  selectManagedVideoSessionForGroup,
 } from "../client/mobile-video";
-import type { MobileVideoServerBootstrap } from "../client/mobile-video";
+import type {
+  MobileVideoBootstrapFailure,
+  MobileVideoServerBootstrap,
+} from "../client/mobile-video";
 import {
   formatManagedMobileError,
   getManagedMobileLocale,
@@ -260,7 +275,7 @@ import {
   MOBILE_WEB_SEARCH_TOOL,
   runMobileWebSearchToolLoop,
 } from "../client/mobile-chat-tools";
-import { isChatModel, isImageModel } from "../client/mobile-model-kind";
+import { isChatModel } from "../client/mobile-model-kind";
 import {
   inferLocalChatAttachmentMimeType,
   isLocalChatImage,
@@ -3125,6 +3140,18 @@ function currentGroupID(
   );
 }
 
+function currentVideoGroupID(
+  workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
+) {
+  return (
+    workspace?.managed_api_keys?.video?.group_id ??
+    workspace?.workspaces?.video?.models?.selected_group_id ??
+    workspace?.workspaces?.video?.models?.groups?.find(
+      (group) => group.is_current,
+    )?.id
+  );
+}
+
 function currentModels(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
@@ -3183,7 +3210,11 @@ function modelsForGroup(
 }
 
 function modelValue(model?: ManagedWorkspaceModel) {
-  return model?.name || model?.id || "";
+  return managedWorkspaceModelID(model);
+}
+
+function modelMatches(model: ManagedWorkspaceModel, value: string) {
+  return managedWorkspaceModelMatches(model, value);
 }
 
 function modelLabel(model?: ManagedWorkspaceModel) {
@@ -3206,14 +3237,18 @@ function chatModelsForGroup(
 function currentImageModels(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
-  return currentModels(workspace).filter(isImageModel);
+  return currentModels(workspace).filter((model) =>
+    isExecutableManagedImageModel(model, "create", workspace?.models),
+  );
 }
 
 function imageModelsForGroup(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
   groupID?: number,
 ) {
-  return modelsForGroup(workspace, groupID).filter(isImageModel);
+  return modelsForGroup(workspace, groupID).filter((model) =>
+    isExecutableManagedImageModel(model, "create", workspace?.models),
+  );
 }
 
 function imageModelSupportsStyle(model: string) {
@@ -3223,47 +3258,25 @@ function imageModelSupportsStyle(model: string) {
 function imageModelSupportsReferences(
   model: ManagedWorkspaceModel | string,
   knownModels: ManagedWorkspaceModel[] = [],
-  _allowLegacyFallback = false,
 ) {
   const workspaceModel =
     typeof model === "string"
-      ? knownModels.find((item) => modelValue(item) === model)
+      ? knownModels.find((item) => modelMatches(item, model))
       : model;
-  const capabilities = workspaceModel?.image_capabilities;
-  if (capabilities) {
-    return (
-      capabilities.operations?.includes("edit") === true &&
-      Number(capabilities.max_reference_images || 0) > 0
-    );
-  }
-
-  // Capability data is authoritative. An unknown model fails closed rather
-  // than being guessed from a private alias or a provider name.
-  return false;
+  return Boolean(
+    workspaceModel &&
+      isExecutableManagedImageModel(workspaceModel, "edit") &&
+      managedImageReferenceLimit(workspaceModel) > 0,
+  );
 }
 
 function contentKitReferenceLimit(model?: ManagedWorkspaceModel) {
-  return Math.max(
-    0,
-    Math.min(12, Number(model?.image_capabilities?.max_reference_images || 0)),
-  );
+  if (!model || !isExecutableManagedImageModel(model, "edit")) return 0;
+  return Math.min(12, managedImageReferenceLimit(model));
 }
 
-function contentKitModelSupportsSize(
-  model: ManagedWorkspaceModel | undefined,
-  size: string,
-) {
-  const supported = model?.image_capabilities?.supported_sizes;
-  return !supported?.length || supported.includes(size);
-}
-
-function firstReferenceImageModel(
-  models: ManagedWorkspaceModel[],
-  allowLegacyFallback = false,
-) {
-  return models.find((model) =>
-    imageModelSupportsReferences(model, [], allowLegacyFallback),
-  );
+function firstReferenceImageModel(models: ManagedWorkspaceModel[]) {
+  return models.find((model) => imageModelSupportsReferences(model));
 }
 
 function greatestCommonDivisor(left: number, right: number): number {
@@ -3298,8 +3311,9 @@ function imageSizeOption(size: string) {
 }
 
 function imageSizeOptionsForModel(model?: ManagedWorkspaceModel | string) {
-  const capabilities =
-    typeof model === "string" ? undefined : model?.image_capabilities;
+  if (typeof model === "string") return IMAGE_SIZE_OPTIONS;
+  const capabilities = model?.image_capabilities;
+  if (!capabilities) return [];
   const declaredSizes = Array.from(
     new Set(
       (capabilities?.supported_sizes || [])
@@ -3308,36 +3322,9 @@ function imageSizeOptionsForModel(model?: ManagedWorkspaceModel | string) {
     ),
   );
   if (declaredSizes.length) return declaredSizes.map(imageSizeOption);
-
-  const normalized = String(
-    typeof model === "string" ? model : modelValue(model),
-  ).toLowerCase();
-  if (/dall-e-3/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) =>
-      ["1024x1024", "1024x1792", "1792x1024"].includes(item.id),
-    );
-  }
-  if (/gpt-image-(?!2)/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) =>
-      ["1024x1024", "1536x1024", "1024x1536"].includes(item.id),
-    );
-  }
-  if (/grok-imagine|gemini|imagen/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) =>
-      [
-        "1024x1024",
-        "1536x1024",
-        "1024x1536",
-        "1792x1024",
-        "1024x1792",
-        "2048x2048",
-      ].includes(item.id),
-    );
-  }
-  if (/gpt-image-2/.test(normalized)) {
-    return IMAGE_SIZE_OPTIONS.filter((item) => item.id !== "4096x4096");
-  }
-  return IMAGE_SIZE_OPTIONS;
+  return IMAGE_SIZE_OPTIONS.filter((item) =>
+    isManagedImageSizeSupported(capabilities, item.id),
+  );
 }
 
 function imageSizeLabel(
@@ -3487,7 +3474,9 @@ function bestImageGroup(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
   return workspace?.models?.groups?.find((group) =>
-    (group.models || []).some(isImageModel),
+    (group.models || []).some((model) =>
+      isExecutableManagedImageModel(model, "create", workspace?.models),
+    ),
   );
 }
 
@@ -3553,6 +3542,7 @@ function resolveChatPreference(
     candidateModels,
     isChatModel,
     modelValue,
+    modelMatches,
   });
 }
 
@@ -3624,6 +3614,26 @@ function describeImageError(
     return context.text.errors.networkFailed;
   }
   return message || context.text.image.generateFailed;
+}
+
+function describeManagedImageValidation(
+  code:
+    | "model_not_executable"
+    | "operation_not_supported"
+    | "size_not_supported"
+    | "reference_not_supported",
+  model: string,
+  text: ManagedMobileText,
+) {
+  switch (code) {
+    case "size_not_supported":
+      return text.errors.imageSizeUnsupported(model);
+    case "operation_not_supported":
+    case "reference_not_supported":
+      return text.image.referenceModelUnsupported(model);
+    default:
+      return text.errors.imageModelUnavailable(model);
+  }
 }
 
 function makeImageFileName(prefix: string, id?: string, index = 0) {
@@ -9324,7 +9334,7 @@ function AndroidChat() {
   const selectedModel = currentSession?.model || draftModel || fallbackModel;
   const selectedModelIsAvailable =
     Boolean(selectedModel) &&
-    models.some((model) => modelValue(model) === selectedModel);
+    models.some((model) => modelMatches(model, selectedModel));
   const webSearchServiceAvailable = isMobileWebSearchAvailable(
     managed.mobileProtocol,
   );
@@ -9696,7 +9706,7 @@ function AndroidChat() {
 
   useEffect(() => {
     if (!currentSession) return;
-    if (models.some((model) => modelValue(model) === currentSession.model)) {
+    if (models.some((model) => modelMatches(model, currentSession.model))) {
       return;
     }
     const preference = resolveChatPreference(
@@ -10238,20 +10248,16 @@ function AndroidChat() {
     }
     const requestGroupId =
       currentSession?.groupId || draftChatGroupId || effectiveChatGroupId;
-    const model = selectedModel || fallbackModel;
-    const requestModelAvailable = Boolean(
-      requestGroupId &&
-        chatModelsForGroup(workspace, requestGroupId).some(
-          (item) => modelValue(item) === model,
-        ),
-    );
-    if (!model || !requestModelAvailable) {
+    const requestedModel = requestGroupId
+      ? chatModelsForGroup(workspace, requestGroupId).find((item) =>
+          modelMatches(item, selectedModel || fallbackModel),
+        )
+      : undefined;
+    const model = modelValue(requestedModel);
+    if (!model || !requestedModel) {
       setChatError(text.errors.noModel);
       return;
     }
-    const requestedModel = chatModelsForGroup(workspace, requestGroupId).find(
-      (item) => modelValue(item) === model,
-    );
     const modelSupportsWebSearch = Boolean(
       requestedModel?.tool_capabilities?.function_calling &&
         requestedModel.tool_capabilities?.web_search,
@@ -11308,8 +11314,8 @@ function AndroidChat() {
     }
   }
 
-  const selectedModelInfo = models.find(
-    (model) => modelValue(model) === selectedModel,
+  const selectedModelInfo = models.find((model) =>
+    modelMatches(model, selectedModel),
   );
   const currentGroupValue = String(effectiveChatGroupId || "");
 
@@ -11923,12 +11929,20 @@ function AndroidContentKit() {
   const [viewRunId, setViewRunId] = useState("");
 
   useEffect(() => {
-    if (!imageModels.some((item) => modelValue(item) === model)) {
+    const selectedImageModel = imageModels.find((item) =>
+      modelMatches(item, model),
+    );
+    const canonicalModel = modelValue(selectedImageModel);
+    if (canonicalModel && canonicalModel !== model) {
+      setModel(canonicalModel);
+      return;
+    }
+    if (!selectedImageModel) {
       setModel(modelValue(imageModels[0]));
     }
   }, [imageModels, model]);
 
-  const selectedModel = imageModels.find((item) => modelValue(item) === model);
+  const selectedModel = imageModels.find((item) => modelMatches(item, model));
 
   const presetOptions = contentWorkbenchPresets().map((preset) => ({
     ...preset,
@@ -12173,9 +12187,30 @@ function AndroidContentKit() {
     project: ManagedMobileContentKit,
     asset: ManagedMobileContentKitAsset,
   ) {
+    const projectModel = imageModels.find((item) =>
+      modelMatches(item, project.model),
+    );
+    const exactModel = modelValue(projectModel);
+    const imageValidation = validateManagedImageRequest({
+      model: projectModel,
+      models: workspace?.models,
+      operation: project.referenceImages.length ? "edit" : "create",
+      size: asset.size,
+      referenceCount: project.referenceImages.length,
+    });
+    if (!imageValidation.valid) {
+      const message = describeManagedImageValidation(
+        imageValidation.code,
+        project.model,
+        text,
+      );
+      patchAsset(project.id, asset.id, { status: "failed", error: message });
+      setError(message);
+      return;
+    }
     if (
       project.referenceImages.length &&
-      !imageModelSupportsReferences(project.model, imageModels, false)
+      !imageModelSupportsReferences(project.model, imageModels)
     ) {
       patchAsset(project.id, asset.id, {
         status: "failed",
@@ -12214,7 +12249,7 @@ function AndroidContentKit() {
         client_request_id: localTaskId,
         title: asset.label,
         title_zh: asset.label,
-        model: project.model,
+        model: exactModel,
         group_id: imageGroup?.id,
         parameters: {
           size: asset.size,
@@ -12246,7 +12281,7 @@ function AndroidContentKit() {
       };
       let body: BodyInit;
       const payload = {
-        model: project.model,
+        model: exactModel,
         prompt: asset.prompt,
         size: asset.size,
         n: 1,
@@ -12311,7 +12346,7 @@ function AndroidContentKit() {
       const saved = await persistContentKitImageResult(image, {
         taskId: localTaskId,
         prompt: asset.prompt,
-        model: project.model,
+        model: exactModel,
         ownerUserId: String(managed.user?.id || managed.session?.user_id || ""),
         projectId: project.id,
         runId: asset.runId,
@@ -12654,12 +12689,30 @@ function AndroidContentKit() {
       return setError(text.platform.contentKit.requiredProduct);
     if (!model || !imageModels.length)
       return setError(text.platform.contentKit.noImageModel);
-    if (
-      selectedPlanShots.some(
-        (shot) => !contentKitModelSupportsSize(selectedModel, shot.size),
-      )
-    ) {
-      return setError(text.platform.contentKit.unsupportedSize);
+    const requestedOperation = references.length ? "edit" : "create";
+    const invalidShot = selectedPlanShots.find((shot) => {
+      const validation = validateManagedImageRequest({
+        model: selectedModel,
+        models: workspace?.models,
+        operation: requestedOperation,
+        size: shot.size,
+        referenceCount: references.length,
+      });
+      return !validation.valid;
+    });
+    if (invalidShot) {
+      const validation = validateManagedImageRequest({
+        model: selectedModel,
+        models: workspace?.models,
+        operation: requestedOperation,
+        size: invalidShot.size,
+        referenceCount: references.length,
+      });
+      return setError(
+        validation.valid
+          ? text.platform.contentKit.unsupportedSize
+          : describeManagedImageValidation(validation.code, model, text),
+      );
     }
     if (estimateLoading) {
       return setError(text.platform.contentKit.estimateRequired);
@@ -12669,7 +12722,7 @@ function AndroidContentKit() {
     }
     if (
       references.length &&
-      !imageModelSupportsReferences(selectedModel || model, [], false)
+      !imageModelSupportsReferences(selectedModel || model)
     ) {
       return setError(text.platform.contentKit.referenceUnsupported);
     }
@@ -13932,6 +13985,27 @@ function videoStudioCopy() {
       capabilitiesUnavailableHint:
         "当前设备没有收到可用的视频工作区。请刷新重试；若持续失败，请检查服务端视频能力接口。",
       retryCapabilities: "重新获取",
+      bootstrapEndpointMissing: "服务端尚未提供视频能力接口",
+      bootstrapEndpointMissingHint:
+        "当前服务端还没有视频能力接口。请完成主站更新后重新获取，期间不会用聊天模型冒充视频模型。",
+      bootstrapUnauthorized: "视频能力登录已失效",
+      bootstrapUnauthorizedHint:
+        "请重新登录后再获取视频能力；当前不会改用聊天或图片会话。",
+      bootstrapFailed: "暂时无法获取服务端视频能力",
+      bootstrapFailedHint:
+        "请检查网络后重新获取；若持续失败，请检查服务端视频能力接口。",
+      serverCheckedNoVideo: "服务端已完成检查，但当前没有可执行的视频模型",
+      unavailableReasons: {
+        not_mapped: "模型未绑定到可调度账号",
+        capability_not_declared: "模型尚未声明视频能力",
+        price_missing: "模型缺少视频价格",
+        adapter_unsupported: "当前执行适配器不支持该视频能力",
+        no_schedulable_account: "没有可调度账号",
+        group_permission_denied: "当前账号无权使用该分组",
+        subscription_reservation_unsupported:
+          "订阅分组暂不支持视频任务预占，请选择钱包余额分组",
+        unknown: "服务端暂未提供该视频模型",
+      },
       resolution: "分辨率",
       ratio: "画面比例",
       duration: "时长",
@@ -13988,6 +14062,31 @@ function videoStudioCopy() {
       capabilitiesUnavailableHint:
         "This device did not receive an available video workspace. Refresh to retry; if it continues, check the server video-capabilities endpoint.",
       retryCapabilities: "Try again",
+      bootstrapEndpointMissing:
+        "The server has not published video capabilities",
+      bootstrapEndpointMissingHint:
+        "Update the main platform and try again. Chat models will not be used as video models in the meantime.",
+      bootstrapUnauthorized: "The video capability login has expired",
+      bootstrapUnauthorizedHint:
+        "Sign in again before loading video capabilities. The app will not substitute a chat or image session.",
+      bootstrapFailed: "Server video capabilities are temporarily unavailable",
+      bootstrapFailedHint:
+        "Check the network and try again. If it persists, check the server video-capabilities endpoint.",
+      serverCheckedNoVideo:
+        "The server completed its check, but no video model is executable for this account",
+      unavailableReasons: {
+        not_mapped: "The model is not mapped to a schedulable account",
+        capability_not_declared:
+          "The model does not have a declared video capability",
+        price_missing: "The model does not have video pricing",
+        adapter_unsupported:
+          "The current execution adapter does not support this video capability",
+        no_schedulable_account: "No account is currently schedulable",
+        group_permission_denied: "This account cannot use the selected group",
+        subscription_reservation_unsupported:
+          "Video task reservation is not available for subscription groups. Choose a wallet-billed group.",
+        unknown: "The server did not make this video model available",
+      },
       resolution: "Resolution",
       ratio: "Aspect ratio",
       duration: "Duration",
@@ -14043,6 +14142,30 @@ function videoStudioCopy() {
       capabilitiesUnavailableHint:
         "この端末は利用可能な動画ワークスペースを受信していません。更新して再試行し、継続する場合はサーバーの動画機能エンドポイントを確認してください。",
       retryCapabilities: "再取得",
+      bootstrapEndpointMissing: "サーバーに動画機能エンドポイントがありません",
+      bootstrapEndpointMissingHint:
+        "メインプラットフォームを更新してから再取得してください。その間、チャットモデルを動画モデルとして使用しません。",
+      bootstrapUnauthorized: "動画機能のログインが期限切れです",
+      bootstrapUnauthorizedHint:
+        "動画機能を取得する前に再ログインしてください。チャットまたは画像セッションには置き換えません。",
+      bootstrapFailed: "サーバー動画機能を一時的に取得できません",
+      bootstrapFailedHint:
+        "ネットワークを確認して再取得してください。解決しない場合はサーバーの動画機能エンドポイントを確認してください。",
+      serverCheckedNoVideo:
+        "サーバーの確認は完了しましたが、このアカウントで実行できる動画モデルはありません",
+      unavailableReasons: {
+        not_mapped: "モデルが実行可能なアカウントに紐付いていません",
+        capability_not_declared: "モデルに動画機能が宣言されていません",
+        price_missing: "モデルの動画料金が設定されていません",
+        adapter_unsupported:
+          "現在の実行アダプターはこの動画機能に対応していません",
+        no_schedulable_account: "現在実行可能なアカウントがありません",
+        group_permission_denied:
+          "このアカウントは選択したグループを利用できません",
+        subscription_reservation_unsupported:
+          "サブスクリプショングループでは動画タスクの予約に対応していません。残高課金グループを選択してください。",
+        unknown: "サーバーはこの動画モデルを利用可能にしていません",
+      },
       resolution: "解像度",
       ratio: "縦横比",
       duration: "長さ",
@@ -14098,6 +14221,29 @@ function videoStudioCopy() {
       capabilitiesUnavailableHint:
         "이 기기에서 사용 가능한 동영상 작업 영역을 받지 못했습니다. 새로고침하여 재시도하고 계속되면 서버 동영상 기능 엔드포인트를 확인하세요.",
       retryCapabilities: "다시 가져오기",
+      bootstrapEndpointMissing: "서버에 동영상 기능 엔드포인트가 없습니다",
+      bootstrapEndpointMissingHint:
+        "메인 플랫폼을 업데이트한 뒤 다시 가져오세요. 그 전까지 채팅 모델을 동영상 모델로 사용하지 않습니다.",
+      bootstrapUnauthorized: "동영상 기능 로그인이 만료되었습니다",
+      bootstrapUnauthorizedHint:
+        "동영상 기능을 불러오기 전에 다시 로그인하세요. 채팅 또는 이미지 세션으로 대체하지 않습니다.",
+      bootstrapFailed: "서버 동영상 기능을 일시적으로 가져올 수 없습니다",
+      bootstrapFailedHint:
+        "네트워크를 확인한 후 다시 가져오세요. 계속되면 서버 동영상 기능 엔드포인트를 확인하세요.",
+      serverCheckedNoVideo:
+        "서버 확인은 완료되었지만 이 계정에서 실행 가능한 동영상 모델이 없습니다",
+      unavailableReasons: {
+        not_mapped: "모델이 실행 가능한 계정에 연결되어 있지 않습니다",
+        capability_not_declared: "모델에 동영상 기능이 선언되지 않았습니다",
+        price_missing: "모델의 동영상 가격이 설정되지 않았습니다",
+        adapter_unsupported:
+          "현재 실행 어댑터가 이 동영상 기능을 지원하지 않습니다",
+        no_schedulable_account: "현재 실행 가능한 계정이 없습니다",
+        group_permission_denied: "이 계정은 선택한 그룹을 사용할 수 없습니다",
+        subscription_reservation_unsupported:
+          "구독 그룹에서는 동영상 작업 예약을 지원하지 않습니다. 잔액 결제 그룹을 선택하세요.",
+        unknown: "서버가 이 동영상 모델을 사용할 수 있게 하지 않았습니다",
+      },
       resolution: "해상도",
       ratio: "화면 비율",
       duration: "길이",
@@ -14130,6 +14276,37 @@ function videoStudioCopy() {
     },
   } as const;
   return copies[locale] || copies.cn;
+}
+
+function localizedVideoUnavailableReason(
+  copy: ReturnType<typeof videoStudioCopy>,
+  code: string,
+) {
+  const key = String(code || "").trim() as keyof typeof copy.unavailableReasons;
+  return copy.unavailableReasons[key] || copy.unavailableReasons.unknown;
+}
+
+function videoBootstrapFailureCopy(
+  copy: ReturnType<typeof videoStudioCopy>,
+  failure: MobileVideoBootstrapFailure | null,
+) {
+  switch (failure) {
+    case "not_found":
+      return {
+        title: copy.bootstrapEndpointMissing,
+        hint: copy.bootstrapEndpointMissingHint,
+      };
+    case "unauthorized":
+      return {
+        title: copy.bootstrapUnauthorized,
+        hint: copy.bootstrapUnauthorizedHint,
+      };
+    default:
+      return {
+        title: copy.bootstrapFailed,
+        hint: copy.bootstrapFailedHint,
+      };
+  }
 }
 
 function AndroidCreationStudio() {
@@ -14271,29 +14448,44 @@ function AndroidVideoStudio() {
     readStoredJSON(preferenceKey, DEFAULT_VIDEO_STUDIO_PREFERENCES),
   );
   const [serverGroups, setServerGroups] = useState<ManagedWorkspaceGroup[]>([]);
-  const [serverBootstrapLoaded, setServerBootstrapLoaded] = useState(false);
-  const [serverBootstrapLoading, setServerBootstrapLoading] = useState(false);
+  const [serverBootstrapState, setServerBootstrapState] = useState<
+    "idle" | "loading" | "ready" | "failed"
+  >("idle");
+  const [serverBootstrapFailure, setServerBootstrapFailure] =
+    useState<MobileVideoBootstrapFailure | null>(null);
+  const serverBootstrapLoaded = serverBootstrapState === "ready";
+  const serverBootstrapLoading = serverBootstrapState === "loading";
   const loadServerCapabilities = useCallback(async () => {
     if (!managed.accessToken) {
       setServerGroups([]);
-      setServerBootstrapLoaded(false);
+      setServerBootstrapState("idle");
+      setServerBootstrapFailure(null);
       return;
     }
-    setServerBootstrapLoading(true);
+    setServerBootstrapState("loading");
+    setServerBootstrapFailure(null);
     try {
       const payload =
         await managedAuthenticatedJsonRequest<MobileVideoServerBootstrap>(
           "/api/v1/mobile/video/bootstrap",
         );
-      setServerGroups(normalizeMobileVideoBootstrapGroups(payload?.groups));
-      setServerBootstrapLoaded(true);
-    } catch {
+      setServerGroups(
+        normalizeMobileVideoBootstrapGroups(
+          payload?.groups,
+          payload?.capabilities_version,
+          Boolean(payload?.protocol_version || payload?.capabilities_version),
+        ),
+      );
+      // A successful empty response is authoritative: it means the server
+      // completed the availability check, not that the request failed.
+      setServerBootstrapState("ready");
+    } catch (error) {
       // Keep the managed bootstrap as a short-lived compatibility fallback;
       // creation still uses the server-owned task API and will fail closed if
       // its capabilities are unavailable.
-      setServerBootstrapLoaded(false);
-    } finally {
-      setServerBootstrapLoading(false);
+      setServerGroups([]);
+      setServerBootstrapState("failed");
+      setServerBootstrapFailure(classifyMobileVideoBootstrapFailure(error));
     }
   }, [managed.accessToken]);
   useEffect(() => {
@@ -14310,6 +14502,24 @@ function AndroidVideoStudio() {
   );
   const groups = resolvedVideoGroups.groups;
   const videoGroupSource = resolvedVideoGroups.source;
+  const bootstrapFailureCopy = videoBootstrapFailureCopy(
+    copy,
+    serverBootstrapFailure,
+  );
+  const unavailableVideoDiagnostic = resolvedVideoGroups.suppressed[0];
+  const serverCheckedWithoutVideo =
+    serverBootstrapState === "ready" &&
+    videoGroupSource === "server" &&
+    groups.length === 0;
+  const serverUnavailableHint = unavailableVideoDiagnostic
+    ? [unavailableVideoDiagnostic.groupName, unavailableVideoDiagnostic.model]
+        .filter(Boolean)
+        .join(" / ") +
+      `: ${localizedVideoUnavailableReason(
+        copy,
+        unavailableVideoDiagnostic.code,
+      )}`
+    : copy.groupHint;
   const preferredGroup = groups.find(
     (group) => group.id === Number(preferences.groupId),
   );
@@ -14317,7 +14527,7 @@ function AndroidVideoStudio() {
   const videoModels = managedVideoModels(selectedGroup);
   const fallbackModel = videoModels[0];
   const selectedModel =
-    videoModels.find((model) => modelValue(model) === preferences.model) ||
+    videoModels.find((model) => modelMatches(model, preferences.model)) ||
     fallbackModel;
   const capabilities = managedVideoCapabilities(selectedModel, selectedGroup);
   const resolutions: string[] =
@@ -14326,6 +14536,9 @@ function AndroidVideoStudio() {
     capabilities?.ratios || capabilities?.supported_ratios || [];
   const durations: number[] =
     capabilities?.durations || capabilities?.supported_durations || [];
+  const resolutionOptionsKey = resolutions.join(",");
+  const ratioOptionsKey = ratios.join(",");
+  const durationOptionsKey = durations.join(",");
   const [prompt, setPrompt] = useState("");
   const [scriptRunning, setScriptRunning] = useState(false);
   const [references, setReferences] = useState<string[]>([]);
@@ -14690,9 +14903,9 @@ function AndroidVideoStudio() {
     preferenceKey,
     selectedGroup?.id,
     selectedModel?.id,
-    resolutions.join(","),
-    ratios.join(","),
-    durations.join(","),
+    resolutionOptionsKey,
+    ratioOptionsKey,
+    durationOptionsKey,
   ]);
 
   function clearSelectedReferences() {
@@ -14957,13 +15170,10 @@ function AndroidVideoStudio() {
       prompt: prompt.trim(),
       createdAt: Date.now(),
     });
-    // The result is now durable in this account's device cache. Release the
-    // private relay copy in the background; a transient acknowledgement error
-    // never turns a successful local save into a failed generation.
-    void managedAuthenticatedJsonRequest(
-      `/api/v1/mobile/video/jobs/${encodeURIComponent(id)}/content/acknowledge`,
-      { method: "POST" },
-    ).catch(() => undefined);
+    // Keep the private relay object while the user can still download this
+    // result. Android's DownloadManager reads that authenticated URL after the
+    // click, so acknowledging it here would race the download and delete the
+    // source before the native transfer begins.
     if (resultObjectURLRef.current) {
       URL.revokeObjectURL(resultObjectURLRef.current);
     }
@@ -14996,6 +15206,8 @@ function AndroidVideoStudio() {
           ? serverBootstrapLoading
             ? copy.loadingCapabilities
             : copy.capabilitiesUnavailable
+          : serverCheckedWithoutVideo
+          ? copy.serverCheckedNoVideo
           : groups.length
           ? copy.noModel
           : copy.noGroup,
@@ -15014,6 +15226,69 @@ function AndroidVideoStudio() {
       );
       return;
     }
+
+    const referenceCounts = Object.values(referenceAssetKinds).reduce(
+      (counts, kind) => {
+        counts[kind] = (counts[kind] || 0) + 1;
+        return counts;
+      },
+      {} as Record<LocalMaterialKind, number>,
+    );
+    const videoValidation = validateManagedVideoRequest({
+      model: selectedModel,
+      models:
+        videoGroupSource === "workspace"
+          ? managed.workspace?.workspaces?.video?.models
+          : undefined,
+      resolution: preferences.resolution,
+      ratio: preferences.ratio,
+      duration: Number(preferences.duration),
+      referenceAssetCount: referenceAssetIDs.length,
+      referenceImageCount: referenceCounts.image || 0,
+      referenceVideoCount: referenceCounts.video || 0,
+      referenceAudioCount: referenceCounts.audio || 0,
+    });
+    if (!videoValidation.valid) {
+      setError(copy.unsupported);
+      return;
+    }
+
+    try {
+      let activeManaged = useManagedNextChatStore.getState();
+      if (shouldRefreshManagedSession(activeManaged.videoSession)) {
+        await managed.bootstrap({ silent: true });
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      const activeVideoSession = selectManagedVideoSession({
+        video: activeManaged.videoSession || undefined,
+      });
+      if (!activeVideoSession) {
+        throw new Error(copy.capabilitiesUnavailable);
+      }
+      if (
+        activeVideoSession.group_id !== selectedGroup.id ||
+        currentVideoGroupID(activeManaged.workspace) !== selectedGroup.id
+      ) {
+        await managed.switchVideoGroup(selectedGroup.id);
+        activeManaged = useManagedNextChatStore.getState();
+      }
+      if (
+        !selectManagedVideoSessionForGroup(
+          {
+            video: activeManaged.videoSession || undefined,
+          },
+          selectedGroup.id,
+        )
+      ) {
+        throw new Error(copy.capabilitiesUnavailable);
+      }
+    } catch (sessionError) {
+      setError(
+        localizedMobileErrorMessage(sessionError, copy.capabilitiesUnavailable),
+      );
+      return;
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
     const requestID = clientRequestID("mobile-video");
@@ -15034,6 +15309,7 @@ function AndroidVideoStudio() {
         body: JSON.stringify({
           group_id: Number(selectedGroup.id),
           model: modelValue(selectedModel),
+          purpose: "video",
           prompt: prompt.trim(),
           resolution: preferences.resolution,
           ratio: preferences.ratio,
@@ -15137,6 +15413,15 @@ function AndroidVideoStudio() {
         setResultUrl("");
         setTaskID("");
       }
+      // The user has explicitly removed the only device copy. Release the
+      // temporary relay object best-effort; a cleanup failure must not restore
+      // deleted private local history.
+      void managedAuthenticatedJsonRequest(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(
+          item.taskId,
+        )}/content/ack`,
+        { method: "POST" },
+      ).catch(() => undefined);
     } catch {
       setError(copy.failed);
     }
@@ -15190,6 +15475,12 @@ function AndroidVideoStudio() {
         idempotencyKey: requestID,
       });
       await refreshReferenceMaterials();
+      // The user requested a durable account asset, so the temporary relay
+      // object is no longer required for later playback or native downloads.
+      void managedAuthenticatedJsonRequest(
+        `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/content/ack`,
+        { method: "POST" },
+      ).catch(() => undefined);
       setError("");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : copy.failed);
@@ -15225,7 +15516,11 @@ function AndroidVideoStudio() {
           <div className={styles["image-routing-hint"]}>
             <div>
               <strong>{copy.compatibilityTitle}</strong>
-              <span>{copy.compatibilityHint}</span>
+              <span>
+                {serverBootstrapFailure
+                  ? bootstrapFailureCopy.hint
+                  : copy.compatibilityHint}
+              </span>
             </div>
           </div>
         )}
@@ -15235,9 +15530,15 @@ function AndroidVideoStudio() {
               <strong>
                 {serverBootstrapLoading
                   ? copy.loadingCapabilities
+                  : serverBootstrapFailure
+                  ? bootstrapFailureCopy.title
                   : copy.capabilitiesUnavailable}
               </strong>
-              <span>{copy.capabilitiesUnavailableHint}</span>
+              <span>
+                {serverBootstrapFailure
+                  ? bootstrapFailureCopy.hint
+                  : copy.capabilitiesUnavailableHint}
+              </span>
             </div>
             {!serverBootstrapLoading && (
               <button
@@ -15249,14 +15550,24 @@ function AndroidVideoStudio() {
             )}
           </div>
         )}
-        {noCapability && videoGroupSource !== "unavailable" && (
+        {serverCheckedWithoutVideo && (
           <div className={styles["image-routing-hint"]}>
             <div>
-              <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
-              <span>{copy.groupHint}</span>
+              <strong>{copy.serverCheckedNoVideo}</strong>
+              <span>{serverUnavailableHint}</span>
             </div>
           </div>
         )}
+        {noCapability &&
+          videoGroupSource !== "unavailable" &&
+          !serverCheckedWithoutVideo && (
+            <div className={styles["image-routing-hint"]}>
+              <div>
+                <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
+                <span>{copy.groupHint}</span>
+              </div>
+            </div>
+          )}
         <div className={styles["form-grid"]}>
           <label>
             <span>{copy.group}</span>
@@ -15684,21 +15995,22 @@ function AndroidImageStudio() {
     number | undefined
   >(() => Number(imagePrefs.groupId) || imageGroup?.id);
   const effectiveImageGroupId = selectedImageGroupId || imageGroup?.id;
-  const models = modelsForGroup(workspace, effectiveImageGroupId);
   const imageModelOptions = imageModelsForGroup(
     workspace,
     effectiveImageGroupId,
   );
-  // The backend must declare image capabilities. Never infer edit support from
-  // a model name; older servers therefore show an explicit unsupported state.
-  const allowLegacyImageCapabilityFallback = false;
   const fallbackModel = imageModelOptions[0];
   const [selectedModel, setSelectedModel] = useState(
     String(imagePrefs.model || modelValue(fallbackModel)),
   );
   const selectedImageModelInfo =
-    imageModelOptions.find((model) => modelValue(model) === selectedModel) ||
+    imageModelOptions.find((model) => modelMatches(model, selectedModel)) ||
     fallbackModel;
+  const selectedReferenceLimit =
+    selectedImageModelInfo &&
+    imageModelSupportsReferences(selectedImageModelInfo)
+      ? managedImageReferenceLimit(selectedImageModelInfo)
+      : 0;
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState(String(imagePrefs.size || "1024x1024"));
   const [quality, setQuality] = useState(String(imagePrefs.quality || "auto"));
@@ -15750,9 +16062,15 @@ function AndroidImageStudio() {
 
   useEffect(() => {
     const fallback = modelValue(fallbackModel);
-    const selectedBelongsToImageGroup = imageModelOptions.some(
-      (model) => modelValue(model) === selectedModel,
+    const selectedImageModel = imageModelOptions.find((model) =>
+      modelMatches(model, selectedModel),
     );
+    const canonicalSelectedModel = modelValue(selectedImageModel);
+    if (canonicalSelectedModel && canonicalSelectedModel !== selectedModel) {
+      setSelectedModel(canonicalSelectedModel);
+      return;
+    }
+    const selectedBelongsToImageGroup = Boolean(selectedImageModel);
     if (fallback && (!selectedModel || !selectedBelongsToImageGroup)) {
       setSelectedModel(fallback);
     }
@@ -15779,9 +16097,27 @@ function AndroidImageStudio() {
     const state = location.state as any;
     const dataUrl = String(state?.materialDataUrl || "");
     if (!dataUrl) return;
-    setReferences((items) => [...items, dataUrl].slice(0, 6));
+    if (!selectedReferenceLimit) {
+      setError(text.image.noReferenceModel);
+      navigate(Path.Sd, { replace: true, state: null });
+      return;
+    }
+    setReferences((items) =>
+      [...items, dataUrl].slice(0, selectedReferenceLimit),
+    );
     navigate(Path.Sd, { replace: true, state: null });
-  }, [location.state, navigate]);
+  }, [
+    location.state,
+    navigate,
+    selectedReferenceLimit,
+    text.image.noReferenceModel,
+  ]);
+
+  useEffect(() => {
+    if (references.length > selectedReferenceLimit) {
+      setReferences((items) => items.slice(0, selectedReferenceLimit));
+    }
+  }, [references.length, selectedReferenceLimit]);
 
   const sizeOptions = useMemo(
     () => imageSizeOptionsForModel(selectedImageModelInfo || selectedModel),
@@ -15918,25 +16254,21 @@ function AndroidImageStudio() {
     const files = input.files;
     if (!files?.length) return;
     try {
-      const selectedFiles = Array.from(files).slice(0, 6);
-      const urls = await readImageFiles(selectedFiles, 6);
-      setReferences((items) => [...items, ...urls].slice(0, 6));
-      if (
-        !imageModelSupportsReferences(
-          selectedModel,
-          imageModelOptions,
-          allowLegacyImageCapabilityFallback,
-        )
-      ) {
+      if (!selectedReferenceLimit) {
         setError(
-          firstReferenceImageModel(
-            imageModelOptions,
-            allowLegacyImageCapabilityFallback,
-          )
+          firstReferenceImageModel(imageModelOptions)
             ? text.image.referenceModelUnsupported(selectedModel)
             : text.image.noReferenceModel,
         );
+        return;
       }
+      const remaining = Math.max(0, selectedReferenceLimit - references.length);
+      if (!remaining) return;
+      const selectedFiles = Array.from(files).slice(0, remaining);
+      const urls = await readImageFiles(selectedFiles, remaining);
+      setReferences((items) =>
+        [...items, ...urls].slice(0, selectedReferenceLimit),
+      );
     } catch (err) {
       setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     } finally {
@@ -15960,11 +16292,7 @@ function AndroidImageStudio() {
           setError(text.errors.noImageModelsInCurrentGroup);
         } else if (
           references.length &&
-          !imageModelSupportsReferences(
-            nextModel,
-            [],
-            allowLegacyImageCapabilityFallback,
-          )
+          !imageModelSupportsReferences(nextModel, [])
         ) {
           setError(text.image.referenceModelUnsupported(modelValue(nextModel)));
         }
@@ -16005,29 +16333,6 @@ function AndroidImageStudio() {
     const imageOperation = taskReferences.length
       ? "images.edits"
       : "images.generations";
-    const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
-      image502ThenSuccess: false,
-    }));
-    const useLocalImageFixture = e2eFixture.image502ThenSuccess === true;
-
-    if (
-      taskReferences.length &&
-      !imageModelSupportsReferences(
-        model,
-        imageModelOptions,
-        allowLegacyImageCapabilityFallback,
-      )
-    ) {
-      setError(
-        firstReferenceImageModel(
-          imageModelOptions,
-          allowLegacyImageCapabilityFallback,
-        )
-          ? text.image.referenceModelUnsupported(model)
-          : text.image.noReferenceModel,
-      );
-      return;
-    }
 
     if (!promptText) {
       setError(text.errors.emptyPrompt);
@@ -16037,7 +16342,7 @@ function AndroidImageStudio() {
       setError(text.errors.loginRequired);
       return;
     }
-    if (!model || imageModelOptions.length === 0) {
+    if (imageModelOptions.length === 0) {
       setError(
         describeImageError("", {
           text,
@@ -16049,11 +16354,43 @@ function AndroidImageStudio() {
       return;
     }
 
+    const requestedModel = model;
+    const modelInfo = imageModelOptions.find((item) =>
+      modelMatches(item, requestedModel),
+    );
+    model = modelValue(modelInfo);
+    if (!model) {
+      setError(
+        describeImageError("", {
+          text,
+          selectedModel: requestedModel,
+          imageModelCount: imageModelOptions.length,
+          hasImageGroup,
+        }),
+      );
+      return;
+    }
+    const imageValidation = validateManagedImageRequest({
+      model: modelInfo,
+      models: workspace?.models,
+      operation: taskReferences.length ? "edit" : "create",
+      size: taskSize,
+      referenceCount: taskReferences.length,
+    });
+    if (!imageValidation.valid) {
+      setError(
+        describeManagedImageValidation(imageValidation.code, model, text),
+      );
+      return;
+    }
+
+    const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
+      image502ThenSuccess: false,
+    }));
+    const useLocalImageFixture = e2eFixture.image502ThenSuccess === true;
+
     const id = `image-${Date.now()}`;
     const createdAt = new Date().toLocaleString(text.dateLocale);
-    const modelInfo = models.find(
-      (item) => item.name === model || item.id === model,
-    );
     const draft = {
       id,
       status: "queued",
@@ -16880,30 +17217,21 @@ function AndroidImageStudio() {
           <button
             aria-label="image-add-reference"
             onClick={() => fileRef.current?.click()}
+            disabled={!selectedReferenceLimit}
           >
             <UploadIcon />
             <span>{text.image.addReference}</span>
           </button>
         </div>
         {references.length > 0 &&
-          !imageModelSupportsReferences(
-            selectedModel,
-            imageModelOptions,
-            allowLegacyImageCapabilityFallback,
-          ) && (
+          !imageModelSupportsReferences(selectedModel, imageModelOptions) && (
             <div className={styles["reference-model-picker"]}>
               <strong>
                 {text.image.referenceModelUnsupported(selectedModel)}
               </strong>
               <div>
                 {imageModelOptions
-                  .filter((model) =>
-                    imageModelSupportsReferences(
-                      model,
-                      [],
-                      allowLegacyImageCapabilityFallback,
-                    ),
-                  )
+                  .filter((model) => imageModelSupportsReferences(model, []))
                   .map((model) => (
                     <button
                       key={modelValue(model)}
@@ -16972,7 +17300,7 @@ function AndroidImageStudio() {
           disabled={
             Boolean(activeTask) ||
             !prompt.trim() ||
-            !managed.session ||
+            !managed.imageSession ||
             imageModelOptions.length === 0
           }
         >
@@ -17164,7 +17492,7 @@ function AndroidImageStudio() {
           id: String(group.id),
           title: group.name,
           detail: text.modelCount(
-            group.models?.filter(isImageModel).length || 0,
+            imageModelsForGroup(workspace, group.id).length,
           ),
           active: String(group.id) === currentGroupValue,
         }))}
@@ -17180,12 +17508,7 @@ function AndroidImageStudio() {
         items={imageModelOptions
           .filter(
             (model) =>
-              !references.length ||
-              imageModelSupportsReferences(
-                model,
-                [],
-                allowLegacyImageCapabilityFallback,
-              ),
+              !references.length || imageModelSupportsReferences(model, []),
           )
           .map((model) => ({
             id: modelValue(model),
@@ -26366,7 +26689,8 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
         current.accessToken &&
         (!current.workspace ||
           shouldRefreshManagedSession(current.session) ||
-          shouldRefreshManagedSession(current.imageSession))
+          shouldRefreshManagedSession(current.imageSession) ||
+          shouldRefreshManagedSession(current.videoSession))
       ) {
         await current
           .bootstrap({ silent: Boolean(current.workspace) })
@@ -26463,7 +26787,10 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       backendBaseUrl &&
       managed.backendBaseUrl === backendBaseUrl &&
       managed.accessToken &&
-      (!managed.workspace || shouldRefreshManagedSession(managed.session)) &&
+      (!managed.workspace ||
+        shouldRefreshManagedSession(managed.session) ||
+        shouldRefreshManagedSession(managed.imageSession) ||
+        shouldRefreshManagedSession(managed.videoSession)) &&
       !managed.loading
     ) {
       managed.bootstrap().catch(() => {});
@@ -26494,7 +26821,8 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
         if (
           !latest.workspace ||
           shouldRefreshManagedSession(latest.session) ||
-          shouldRefreshManagedSession(latest.imageSession)
+          shouldRefreshManagedSession(latest.imageSession) ||
+          shouldRefreshManagedSession(latest.videoSession)
         ) {
           await latest
             .bootstrap({ silent: Boolean(latest.workspace) })

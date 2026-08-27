@@ -1,18 +1,21 @@
 import type {
   ManagedModelModality,
   ManagedSession,
+  ManagedVideoSuppressedModel,
   ManagedWorkspaceBootstrap,
   ManagedWorkspaceGroup,
   ManagedWorkspaceModel,
   ManagedWorkspaceModels,
 } from "./managed-nextchat";
+import {
+  ManagedApiError,
+  managedWorkspaceModelID,
+  managedWorkspaceModelMatches,
+} from "./managed-nextchat";
 import { resolveMobileChatPreference } from "./mobile-chat-preference";
 import type { MobileChatPreference } from "./mobile-chat-preference";
-import {
-  isChatModel,
-  isVideoModel,
-  modelHasDeclaredModality,
-} from "./mobile-model-kind";
+import { isChatModel, isVideoModel } from "./mobile-model-kind";
+import { isExecutableManagedVideoModel } from "./mobile-media-contract";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -27,14 +30,26 @@ export type MobileVideoServerCapabilities = NonNullable<
   ManagedWorkspaceModel["video_capabilities"]
 >;
 
+export type MobileVideoServerSuppressedModel = ManagedVideoSuppressedModel;
+
+export type ManagedVideoUnavailableDiagnostic =
+  MobileVideoServerSuppressedModel & {
+    groupId: number;
+    groupName: string;
+  };
+
 export type MobileVideoServerModel =
   | string
   | {
       id?: string;
+      /** Exact provider model ID used by the mobile video bootstrap. */
+      model?: string;
       name?: string;
       display_name?: string;
       platform?: string;
       modalities?: ManagedModelModality[];
+      adapter?: string;
+      capability_version?: string;
       video_capabilities?: MobileVideoServerCapabilities;
       /** Compatibility shape used by the original mobile endpoint. */
       capabilities?: MobileVideoServerCapabilities;
@@ -52,17 +67,29 @@ export type MobileVideoServerGroup = {
   capabilities?: MobileVideoServerCapabilities;
   video_capabilities?: MobileVideoServerCapabilities;
   model_capabilities?: Record<string, MobileVideoServerCapabilities>;
+  /** Models the server inspected but intentionally did not expose as runnable. */
+  suppressed?: MobileVideoServerSuppressedModel[];
 };
 
 export type MobileVideoServerBootstrap = {
+  protocol_version?: number;
+  capabilities_version?: string;
   groups?: MobileVideoServerGroup[];
 };
+
+/** The retry UI distinguishes a missing endpoint from an expired login. */
+export type MobileVideoBootstrapFailure =
+  | "not_found"
+  | "unauthorized"
+  | "request_failed";
 
 export type ManagedVideoGroupSource = "server" | "workspace" | "unavailable";
 
 export type ResolvedManagedVideoGroups = {
   source: ManagedVideoGroupSource;
   groups: ManagedWorkspaceGroup[];
+  /** Raw server codes are preserved; callers must localize before display. */
+  suppressed: ManagedVideoUnavailableDiagnostic[];
 };
 
 function record(value: unknown): JsonRecord | null {
@@ -96,22 +123,77 @@ export function managedVideoWorkspaceModels(
   return workspace?.workspaces?.video?.models;
 }
 
-function groupHasDeclaredVideoModality(group: ManagedWorkspaceGroup) {
-  return modelHasDeclaredModality(group, "video") === true;
+function hasDeclaredVideoCapabilities(
+  value: Pick<ManagedWorkspaceModel, "video_capabilities">,
+) {
+  return (
+    value.video_capabilities !== undefined && value.video_capabilities !== null
+  );
 }
 
-function isManagedVideoGroup(group: ManagedWorkspaceGroup) {
+/**
+ * A single declared field makes the enclosing response a capability-aware
+ * contract.  Mixing declared and name-guessed models would let a stale alias
+ * bypass the platform's authorization decision, so legacy recognition is
+ * allowed only when the entire group is genuinely old.
+ */
+function groupHasAnyMediaDeclaration(group: ManagedWorkspaceGroup) {
+  if (
+    Array.isArray(group.modalities) ||
+    group.video_available !== undefined ||
+    hasDeclaredVideoCapabilities(group) ||
+    Boolean(String(group.media_contract_version || "").trim())
+  ) {
+    return true;
+  }
+  return groupHasPerModelMediaDeclaration(group);
+}
+
+function groupHasPerModelMediaDeclaration(group: ManagedWorkspaceGroup) {
+  return (group.models || []).some(
+    (model) =>
+      Array.isArray(model.modalities) ||
+      model.image_capabilities !== undefined ||
+      hasDeclaredVideoCapabilities(model),
+  );
+}
+
+/**
+ * Media contract markers may be declared at group scope. Pass that scope to
+ * the shared resolver so a normalized mobile bootstrap cannot silently fall
+ * back to provider-name matching for an undeclared model.
+ */
+function groupMediaContract(
+  group: ManagedWorkspaceGroup,
+): ManagedWorkspaceModels {
+  return {
+    groups: [group],
+    video_capabilities_version: group.media_contract_version,
+  };
+}
+
+function isExecutableVideoModelInGroup(
+  model: ManagedWorkspaceModel,
+  group: ManagedWorkspaceGroup,
+) {
+  return isExecutableManagedVideoModel(model, groupMediaContract(group));
+}
+
+function isManagedVideoGroup(
+  group: ManagedWorkspaceGroup,
+  allowLegacyNameFallback: boolean,
+) {
   if (group.video_available === false) return false;
+  if (!allowLegacyNameFallback && !groupHasAnyMediaDeclaration(group)) {
+    return false;
+  }
+  const models = group.models || [];
   return Boolean(
-    group.video_available ||
-      groupHasDeclaredVideoModality(group) ||
-      group.video_capabilities ||
-      (group.models || []).some(
-        (model) =>
-          modelHasDeclaredModality(model, "video") === true ||
-          Boolean(model.video_capabilities) ||
-          isVideoModel(model),
-      ),
+    models.some(
+      (model) =>
+        isExecutableVideoModelInGroup(model, group) ||
+        (allowLegacyNameFallback && isVideoModel(model)),
+    ),
   );
 }
 
@@ -119,7 +201,11 @@ function isManagedVideoGroup(group: ManagedWorkspaceGroup) {
 export function filterManagedVideoGroups(
   groups?: ManagedWorkspaceGroup[],
 ): ManagedWorkspaceGroup[] {
-  return (groups || []).filter(isManagedVideoGroup);
+  const items = groups || [];
+  const allowLegacyNameFallback = !items.some(groupHasAnyMediaDeclaration);
+  return items.filter((group) =>
+    isManagedVideoGroup(group, allowLegacyNameFallback),
+  );
 }
 
 export function managedVideoGroups(
@@ -139,16 +225,10 @@ export function managedVideoModels(
   group?: ManagedWorkspaceGroup,
 ): ManagedWorkspaceModel[] {
   if (!group || group.video_available === false) return [];
+  const allowLegacyNameFallback = !groupHasAnyMediaDeclaration(group);
   return (group.models || []).filter((model) => {
-    if (!managedVideoCapabilities(model, group)) return false;
-    const declared = modelHasDeclaredModality(model, "video");
-    if (declared !== undefined) return declared;
-    return Boolean(
-      group.video_available ||
-        groupHasDeclaredVideoModality(group) ||
-        group.video_capabilities ||
-        isVideoModel(model),
-    );
+    if (isExecutableVideoModelInGroup(model, group)) return true;
+    return allowLegacyNameFallback && isVideoModel(model);
   });
 }
 
@@ -164,6 +244,7 @@ function normalizeServerModalities(
 function normalizeServerVideoModel(
   model: MobileVideoServerModel,
   group: MobileVideoServerGroup,
+  capabilitiesVersion?: string,
 ): ManagedWorkspaceModel | undefined {
   if (typeof model === "string") {
     const name = model.trim();
@@ -179,29 +260,49 @@ function normalizeServerVideoModel(
     };
   }
 
-  const id = String(model.id || model.name || "").trim();
+  const id = String(model.model || model.id || model.name || "").trim();
   if (!id) return undefined;
-  const name = String(model.name || id).trim();
+  const legacyName = String(model.name || "").trim();
+  const displayName = String(
+    model.display_name || (legacyName && legacyName !== id ? legacyName : ""),
+  ).trim();
   return {
     id,
-    name,
-    display_name: model.display_name,
+    name: id,
+    ...(displayName ? { display_name: displayName } : {}),
     platform: model.platform || group.platform,
     modalities: normalizeServerModalities(model.modalities),
+    adapter: model.adapter,
+    capability_version: model.capability_version || capabilitiesVersion,
     video_capabilities:
       model.video_capabilities ||
       model.capabilities ||
-      group.model_capabilities?.[name] ||
       group.model_capabilities?.[id] ||
+      group.model_capabilities?.[legacyName] ||
       group.video_capabilities ||
       group.capabilities,
   };
 }
 
+function normalizeServerVideoSuppressed(
+  suppressed?: MobileVideoServerSuppressedModel[],
+): MobileVideoServerSuppressedModel[] {
+  return (suppressed || []).flatMap((item) => {
+    const model = String(item?.model || "").trim();
+    const code = String(item?.code || "").trim();
+    return model && code ? [{ model, code }] : [];
+  });
+}
+
 /** Convert both the old string-list and new typed video bootstrap payloads. */
 export function normalizeMobileVideoBootstrapGroups(
   groups?: MobileVideoServerGroup[],
+  capabilitiesVersion?: string,
+  strictMediaContract = false,
 ): ManagedWorkspaceGroup[] {
+  const mediaContractVersion =
+    String(capabilitiesVersion || "").trim() ||
+    (strictMediaContract ? "mobile-video-contract" : "");
   return (groups || []).flatMap((group) => {
     const id = Number(group.id);
     if (!Number.isFinite(id)) return [];
@@ -216,9 +317,15 @@ export function normalizeMobileVideoBootstrapGroups(
         modalities: normalizeServerModalities(group.modalities),
         video_available: group.video_available,
         video_unavailable_code: group.video_unavailable_code,
+        media_contract_version: mediaContractVersion || undefined,
+        video_suppressed: normalizeServerVideoSuppressed(group.suppressed),
         video_capabilities: group.video_capabilities || group.capabilities,
         models: sourceModels.flatMap((model) => {
-          const normalized = normalizeServerVideoModel(model, group);
+          const normalized = normalizeServerVideoModel(
+            model,
+            group,
+            capabilitiesVersion,
+          );
           return normalized ? [normalized] : [];
         }),
       },
@@ -240,19 +347,61 @@ export function resolveManagedVideoGroups(input: {
     return {
       source: "server",
       groups: filterManagedVideoGroups(input.serverGroups),
+      suppressed: collectManagedVideoUnavailableDiagnostics(input.serverGroups),
     };
   }
   const workspaceGroups = managedVideoGroups(input.workspace);
   return workspaceGroups.length
-    ? { source: "workspace", groups: workspaceGroups }
-    : { source: "unavailable", groups: [] };
+    ? { source: "workspace", groups: workspaceGroups, suppressed: [] }
+    : { source: "unavailable", groups: [], suppressed: [] };
+}
+
+/**
+ * Preserve every server suppression reason even when its group has no
+ * executable models and is therefore not selectable. A successful bootstrap
+ * with only suppressions is different from a failed bootstrap.
+ */
+function collectManagedVideoUnavailableDiagnostics(
+  groups?: ManagedWorkspaceGroup[],
+): ManagedVideoUnavailableDiagnostic[] {
+  const diagnostics: ManagedVideoUnavailableDiagnostic[] = [];
+  for (const group of groups || []) {
+    const groupId = Number(group.id);
+    const groupName = String(group.name || group.id || "").trim();
+    for (const item of group.video_suppressed || []) {
+      const model = String(item?.model || "").trim();
+      const code = String(item?.code || "").trim();
+      if (model && code) diagnostics.push({ model, code, groupId, groupName });
+    }
+    // Older compatible servers can provide one group reason without the
+    // per-model list. Retain it as a diagnostic rather than treating the
+    // successful response as a transport failure.
+    if (
+      group.video_available === false &&
+      group.video_unavailable_code &&
+      !(group.video_suppressed || []).length
+    ) {
+      diagnostics.push({
+        model: "",
+        code: String(group.video_unavailable_code).trim(),
+        groupId,
+        groupName,
+      });
+    }
+  }
+  return diagnostics;
 }
 
 export function managedVideoCapabilities(
   model?: ManagedWorkspaceModel,
   group?: ManagedWorkspaceGroup,
 ) {
-  return model?.video_capabilities || group?.video_capabilities;
+  if (model?.video_capabilities) return model.video_capabilities;
+  // A group summary can support an entirely legacy bootstrap, but a current
+  // response must carry the exact model capability that its adapter executes.
+  return group && !groupHasAnyMediaDeclaration(group)
+    ? group.video_capabilities
+    : undefined;
 }
 
 export type MobileVideoScriptChatSession = {
@@ -274,7 +423,7 @@ export type MobileVideoScriptSelection = {
 };
 
 function workspaceModelValue(model?: ManagedWorkspaceModel) {
-  return String(model?.name || model?.id || "").trim();
+  return managedWorkspaceModelID(model);
 }
 
 export function resolveMobileVideoScriptSelection(input: {
@@ -294,11 +443,15 @@ export function resolveMobileVideoScriptSelection(input: {
   // unavailable, fail closed instead of silently changing its model.
   if (activeSession && activeModel) {
     const group = groups.find((item) => item.id === activeGroupId);
-    const matchingModel = group?.models?.find(
-      (model) => workspaceModelValue(model) === activeModel,
+    const matchingModel = group?.models?.find((model) =>
+      managedWorkspaceModelMatches(model, activeModel),
     );
     if (group && matchingModel && isChatModel(matchingModel)) {
-      return { groupId: group.id, model: activeModel, source: "session" };
+      return {
+        groupId: group.id,
+        model: workspaceModelValue(matchingModel),
+        source: "session",
+      };
     }
     return { groupId: activeGroupId, model: "", source: "unavailable" };
   }
@@ -310,10 +463,11 @@ export function resolveMobileVideoScriptSelection(input: {
     preferredGroupId: activeGroupId,
     isChatModel,
     modelValue: workspaceModelValue,
+    modelMatches: managedWorkspaceModelMatches,
   });
   const group = groups.find((item) => item.id === resolved.groupId);
-  const matchingModel = group?.models?.find(
-    (model) => workspaceModelValue(model) === resolved.model,
+  const matchingModel = group?.models?.find((model) =>
+    managedWorkspaceModelMatches(model, resolved.model),
   );
   if (!group || !matchingModel || !isChatModel(matchingModel)) {
     return {
@@ -322,7 +476,11 @@ export function resolveMobileVideoScriptSelection(input: {
       source: "unavailable",
     };
   }
-  return { groupId: group.id, model: resolved.model, source: "preference" };
+  return {
+    groupId: group.id,
+    model: workspaceModelValue(matchingModel),
+    source: "preference",
+  };
 }
 
 export function buildMobileVideoScriptPrompt(brief: string, locale = "") {
@@ -348,8 +506,39 @@ export function selectManagedVideoSession(
 ): ManagedSession | null {
   const session = sessions?.video;
   if (!session) return null;
-  if (session.purpose && session.purpose !== "video") return null;
-  return session;
+  return session.purpose === "video" &&
+    session.api_key.trim() &&
+    session.api_key_id > 0
+    ? session
+    : null;
+}
+
+/**
+ * Video jobs are authorized against one exact purpose/group key. A chat key,
+ * a video key for another group, or an old unscoped response must all stop
+ * before a job request is attempted.
+ */
+export function selectManagedVideoSessionForGroup(
+  sessions:
+    | { chat?: ManagedSession; video?: ManagedSession }
+    | null
+    | undefined,
+  groupID: number,
+): ManagedSession | null {
+  const session = selectManagedVideoSession(sessions);
+  return session && Number(session.group_id) === Number(groupID) && groupID > 0
+    ? session
+    : null;
+}
+
+export function classifyMobileVideoBootstrapFailure(
+  error: unknown,
+): MobileVideoBootstrapFailure {
+  if (error instanceof ManagedApiError) {
+    if (error.status === 404) return "not_found";
+    if (error.status === 401 || error.status === 403) return "unauthorized";
+  }
+  return "request_failed";
 }
 
 export function parseMobileVideoID(payload: unknown): string {

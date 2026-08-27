@@ -4,7 +4,9 @@ import { resolve } from "node:path";
 
 import {
   buildMobileVideoScriptPrompt,
+  classifyMobileVideoBootstrapFailure,
   managedVideoCapabilities,
+  filterManagedVideoGroups,
   managedVideoGroups,
   managedVideoModels,
   managedVideoWorkspaceModels,
@@ -17,13 +19,19 @@ import {
   resolveMobileVideoScriptSelection,
   resolveManagedVideoGroups,
   selectManagedVideoSession,
+  selectManagedVideoSessionForGroup,
 } from "../app/client/mobile-video";
+import { ManagedApiError } from "../app/client/managed-nextchat";
 
 const chatModel = { id: "gpt-5", name: "gpt-5" };
 const videoModel = {
   id: "seedance-1",
   name: "seedance-1",
+  modalities: ["video"],
+  adapter: "grok_video",
+  capability_version: "2026-08-26.1",
   video_capabilities: {
+    operations: ["generate"],
     supported_resolutions: ["720p"],
     supported_ratios: ["16:9"],
     supported_durations: [8],
@@ -109,7 +117,8 @@ describe("mobile video capability and response contract", () => {
       resolve(process.cwd(), "app/components/mobile-app.tsx"),
       "utf8",
     );
-    expect(app).toContain("content/acknowledge");
+    expect(app).toContain("/content/ack");
+    expect(app).not.toContain("/content/acknowledge");
     expect(app).toContain('form.append("source", "video_result")');
     expect(app).toContain('"/api/v1/mobile/assets"');
     expect(app).not.toContain("/save-as-asset");
@@ -146,7 +155,7 @@ describe("mobile video capability and response contract", () => {
     ).toEqual([]);
   });
 
-  test("uses model capabilities first and group capabilities as the declared fallback", () => {
+  test("does not let a group capability make an incomplete model executable", () => {
     const group = {
       id: 2,
       name: "video",
@@ -160,7 +169,7 @@ describe("mobile video capability and response contract", () => {
     );
     expect(
       managedVideoCapabilities({ id: "model-without-own-caps" } as any, group),
-    ).toEqual(group.video_capabilities);
+    ).toBeUndefined();
   });
 
   test("uses server-declared modalities for opaque video IDs", () => {
@@ -174,13 +183,27 @@ describe("mobile video capability and response contract", () => {
           id: "opaque-provider-id",
           name: "opaque-provider-id",
           modalities: ["video"],
-          video_capabilities: { supported_durations: [10] },
+          adapter: "grok_video",
+          capability_version: "2026-08-26.1",
+          video_capabilities: {
+            operations: ["generate"],
+            supported_resolutions: ["720p"],
+            supported_ratios: ["16:9"],
+            supported_durations: [10],
+          },
         },
         {
           id: "misleading-video-name",
           name: "misleading-video-name",
           modalities: ["chat"],
-          video_capabilities: { supported_durations: [10] },
+          adapter: "grok_video",
+          capability_version: "2026-08-26.1",
+          video_capabilities: {
+            operations: ["generate"],
+            supported_resolutions: ["720p"],
+            supported_ratios: ["16:9"],
+            supported_durations: [10],
+          },
         },
       ],
     } as any;
@@ -190,27 +213,110 @@ describe("mobile video capability and response contract", () => {
     ]);
   });
 
-  test("normalizes typed and legacy video bootstrap models without losing capabilities", () => {
-    const groups = normalizeMobileVideoBootstrapGroups([
+  test("does not promote undeclared siblings from a capability-aware video group", () => {
+    const group = {
+      id: 2,
+      name: "mixed media",
+      video_available: true,
+      models: [
+        {
+          id: "opaque-provider-id",
+          modalities: ["video"],
+          adapter: "grok_video",
+          capability_version: "2026-08-26.1",
+          video_capabilities: {
+            operations: ["generate"],
+            supported_resolutions: ["720p"],
+            supported_ratios: ["16:9"],
+            supported_durations: [10],
+          },
+        },
+        // A legacy chat row can still be present in a workspace group. The
+        // group-level video flag must not make it selectable for video jobs.
+        { id: "chat-model-without-media-contract" },
+      ],
+    } as any;
+
+    expect(managedVideoModels(group).map((model) => model.id)).toEqual([
+      "opaque-provider-id",
+    ]);
+  });
+
+  test("fails closed for legacy-named groups when a response contains capability declarations", () => {
+    const groups = filterManagedVideoGroups([
       {
-        id: 21,
-        name: "video视频",
+        id: 2,
+        name: "declared video",
         video_available: true,
-        video_capabilities: { supported_durations: [5] },
         models: [
           {
-            id: "provider-video-1",
-            display_name: "Provider video 1",
+            id: "opaque-provider-id",
             modalities: ["video"],
-            video_capabilities: { supported_durations: [10] },
+            adapter: "grok_video",
+            capability_version: "2026-08-26.1",
+            video_capabilities: {
+              operations: ["generate"],
+              supported_resolutions: ["720p"],
+              supported_ratios: ["16:9"],
+              supported_durations: [10],
+            },
           },
-          "legacy-video-2",
         ],
-        model_capabilities: {
-          "legacy-video-2": { supported_durations: [8] },
-        },
       },
-    ]);
+      {
+        id: 3,
+        name: "legacy-only",
+        models: [{ id: "video-looking-name" }],
+      },
+    ] as any);
+
+    expect(groups.map((group) => group.id)).toEqual([2]);
+  });
+
+  test("normalizes typed and legacy video bootstrap models without losing capabilities", () => {
+    const groups = normalizeMobileVideoBootstrapGroups(
+      [
+        {
+          id: 21,
+          name: "video视频",
+          video_available: true,
+          video_capabilities: { supported_durations: [5] },
+          models: [
+            {
+              id: "provider-video-1",
+              display_name: "Provider video 1",
+              modalities: ["video"],
+              adapter: "grok_video",
+              capability_version: "2026-08-26.1",
+              video_capabilities: {
+                operations: ["generate"],
+                supported_resolutions: ["720p"],
+                supported_ratios: ["16:9"],
+                supported_durations: [10],
+              },
+            },
+            {
+              model: "provider-video-2",
+              name: "Provider video 2",
+              modalities: ["video"],
+              adapter: "agnes_video",
+              capability_version: "2026-08-26.1",
+              video_capabilities: {
+                operations: ["generate"],
+                supported_resolutions: ["480p"],
+                supported_ratios: ["16:9"],
+                supported_durations: [6],
+              },
+            },
+            "legacy-video-2",
+          ],
+          model_capabilities: {
+            "legacy-video-2": { supported_durations: [8] },
+          },
+        },
+      ],
+      "2026-08-26.1",
+    );
 
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({ id: 21, name: "video视频" });
@@ -218,13 +324,195 @@ describe("mobile video capability and response contract", () => {
       expect.objectContaining({
         id: "provider-video-1",
         modalities: ["video"],
-        video_capabilities: { supported_durations: [10] },
+        adapter: "grok_video",
+        capability_version: "2026-08-26.1",
+        video_capabilities: expect.objectContaining({
+          operations: ["generate"],
+          supported_durations: [10],
+        }),
+      }),
+      expect.objectContaining({
+        id: "provider-video-2",
+        name: "provider-video-2",
+        display_name: "Provider video 2",
+        modalities: ["video"],
+        adapter: "agnes_video",
+        capability_version: "2026-08-26.1",
+        video_capabilities: expect.objectContaining({
+          operations: ["generate"],
+          supported_durations: [6],
+        }),
       }),
       expect.objectContaining({
         id: "legacy-video-2",
         video_capabilities: { supported_durations: [8] },
       }),
     ]);
+  });
+
+  test("keeps a server display name out of the exact video task model value", () => {
+    const [group] = normalizeMobileVideoBootstrapGroups(
+      [
+        {
+          id: 22,
+          name: "video视频",
+          video_available: true,
+          models: [
+            {
+              model: "provider-exact-video-id",
+              name: "展示名称",
+              modalities: ["video"],
+              adapter: "grok_video",
+              capability_version: "2026-08-26.1",
+              video_capabilities: {
+                operations: ["generate"],
+                supported_resolutions: ["720p"],
+                supported_ratios: ["16:9"],
+                supported_durations: [5],
+              },
+            },
+          ],
+        },
+      ],
+      "2026-08-26.1",
+    );
+
+    expect(group?.models?.[0]).toMatchObject({
+      id: "provider-exact-video-id",
+      name: "provider-exact-video-id",
+      display_name: "展示名称",
+    });
+  });
+
+  test("shows executable models from both configured video groups by exact server IDs", () => {
+    const groups = normalizeMobileVideoBootstrapGroups(
+      [
+        {
+          id: 21,
+          name: "video视频",
+          video_available: true,
+          models: [
+            {
+              model: "agnes-video-v2.0",
+              display_name: "Agnes Video",
+              modalities: ["video"],
+              adapter: "agnes_video",
+              capability_version: "2026-08-26.1",
+              video_capabilities: {
+                operations: ["generate"],
+                supported_resolutions: ["720p"],
+                supported_ratios: ["16:9"],
+                supported_durations: [8],
+              },
+            },
+          ],
+        },
+        {
+          id: 22,
+          name: "Grok Heavy",
+          video_available: true,
+          models: [
+            {
+              model: "grok-imagine-video-1.5",
+              display_name: "Grok Imagine Video",
+              modalities: ["video"],
+              adapter: "grok_video",
+              capability_version: "2026-08-26.1",
+              video_capabilities: {
+                operations: ["generate"],
+                supported_resolutions: ["1080p"],
+                supported_ratios: ["16:9"],
+                supported_durations: [10],
+              },
+            },
+          ],
+        },
+      ],
+      "2026-08-26.1",
+      true,
+    );
+
+    const resolved = resolveManagedVideoGroups({
+      serverBootstrapLoaded: true,
+      serverGroups: groups,
+    });
+    expect(resolved.source).toBe("server");
+    expect(resolved.groups.map((group) => group.name)).toEqual([
+      "video视频",
+      "Grok Heavy",
+    ]);
+    expect(
+      managedVideoModels(resolved.groups[0]).map((model) => model.id),
+    ).toEqual(["agnes-video-v2.0"]);
+    expect(
+      managedVideoModels(resolved.groups[1]).map((model) => model.id),
+    ).toEqual(["grok-imagine-video-1.5"]);
+  });
+
+  test("treats a root video protocol marker as strict even for an old-shaped group", () => {
+    const groups = normalizeMobileVideoBootstrapGroups(
+      [
+        {
+          id: 31,
+          name: "legacy-shaped group",
+          models: ["video-looking-but-undeclared"],
+        },
+      ],
+      undefined,
+      true,
+    );
+
+    expect(filterManagedVideoGroups(groups)).toEqual([]);
+    expect(managedVideoModels(groups[0])).toEqual([]);
+  });
+
+  test("preserves successful server suppression diagnostics without exposing a model", () => {
+    const groups = normalizeMobileVideoBootstrapGroups([
+      {
+        id: 22,
+        name: "Grok Heavy",
+        video_available: false,
+        video_unavailable_code: "price_missing",
+        suppressed: [
+          { model: "grok-video-preview", code: "price_missing" },
+          { model: "mapped-but-unsupported", code: "adapter_unsupported" },
+        ],
+      },
+    ]);
+
+    expect(groups).toEqual([
+      expect.objectContaining({
+        id: 22,
+        video_available: false,
+        video_suppressed: [
+          { model: "grok-video-preview", code: "price_missing" },
+          { model: "mapped-but-unsupported", code: "adapter_unsupported" },
+        ],
+      }),
+    ]);
+    expect(
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded: true,
+        serverGroups: groups,
+      }),
+    ).toEqual({
+      source: "server",
+      groups: [],
+      suppressed: [
+        {
+          groupId: 22,
+          groupName: "Grok Heavy",
+          model: "grok-video-preview",
+          code: "price_missing",
+        },
+        {
+          groupId: 22,
+          groupName: "Grok Heavy",
+          model: "mapped-but-unsupported",
+          code: "adapter_unsupported",
+        },
+      ],
+    });
   });
 
   test("uses the video workspace only when video bootstrap is unavailable", () => {
@@ -252,7 +540,14 @@ describe("mobile video capability and response contract", () => {
                   {
                     id: "opaque-video",
                     modalities: ["video"],
-                    video_capabilities: { supported_durations: [8] },
+                    adapter: "grok_video",
+                    capability_version: "2026-08-26.1",
+                    video_capabilities: {
+                      operations: ["generate"],
+                      supported_resolutions: ["720p"],
+                      supported_ratios: ["16:9"],
+                      supported_durations: [8],
+                    },
                   },
                 ],
               },
@@ -274,13 +569,28 @@ describe("mobile video capability and response contract", () => {
         serverGroups: [],
         workspace,
       }),
-    ).toEqual({ source: "server", groups: [] });
+    ).toEqual({ source: "server", groups: [], suppressed: [] });
     expect(
       resolveManagedVideoGroups({
         serverBootstrapLoaded: false,
         workspace: { ...workspace, workspaces: undefined },
       }),
-    ).toEqual({ source: "unavailable", groups: [] });
+    ).toEqual({ source: "unavailable", groups: [], suppressed: [] });
+  });
+
+  test("keeps a successful empty bootstrap distinct from a failed bootstrap", () => {
+    expect(
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded: true,
+        serverGroups: [],
+      }),
+    ).toEqual({ source: "server", groups: [], suppressed: [] });
+    expect(
+      resolveManagedVideoGroups({
+        serverBootstrapLoaded: false,
+        workspace: null,
+      }),
+    ).toEqual({ source: "unavailable", groups: [], suppressed: [] });
   });
 
   test("does not reuse chat credentials when the video session is absent or mislabelled", () => {
@@ -311,6 +621,117 @@ describe("mobile video capability and response contract", () => {
         },
       } as any),
     ).toMatchObject({ api_key: "video-key", purpose: "video" });
+    expect(
+      selectManagedVideoSession({
+        video: {
+          user_id: 7,
+          api_key: "unlabelled-key",
+          api_key_id: 3,
+        },
+      } as any),
+    ).toBeNull();
+    expect(
+      selectManagedVideoSession({
+        video: {
+          user_id: 7,
+          api_key: "",
+          api_key_id: 4,
+          purpose: "video",
+        },
+      } as any),
+    ).toBeNull();
+  });
+
+  test("requires the video key to be pinned to the selected group", () => {
+    const sessions = {
+      video: {
+        user_id: 7,
+        api_key: "video-key",
+        api_key_id: 2,
+        purpose: "video",
+        group_id: 22,
+      },
+    } as any;
+    expect(selectManagedVideoSessionForGroup(sessions, 22)).toMatchObject({
+      api_key: "video-key",
+      group_id: 22,
+    });
+    expect(selectManagedVideoSessionForGroup(sessions, 21)).toBeNull();
+    expect(
+      selectManagedVideoSessionForGroup(
+        { video: { ...sessions.video, group_id: undefined } },
+        22,
+      ),
+    ).toBeNull();
+  });
+
+  test("classifies bootstrap endpoint, login, and transport failures for truthful retry UI", () => {
+    expect(
+      classifyMobileVideoBootstrapFailure(
+        new ManagedApiError("missing", 404, "/api/v1/mobile/video/bootstrap"),
+      ),
+    ).toBe("not_found");
+    expect(
+      classifyMobileVideoBootstrapFailure(
+        new ManagedApiError("expired", 401, "/api/v1/mobile/video/bootstrap"),
+      ),
+    ).toBe("unauthorized");
+    expect(classifyMobileVideoBootstrapFailure(new Error("offline"))).toBe(
+      "request_failed",
+    );
+  });
+
+  test("binds video creation to the dedicated video session and purpose", () => {
+    const app = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.tsx"),
+      "utf8",
+    );
+    const studio = app.slice(
+      app.indexOf("function AndroidVideoStudio()"),
+      app.indexOf("function AndroidImageStudio()"),
+    );
+
+    expect(studio).toContain("managed.switchVideoGroup(selectedGroup.id)");
+    expect(studio).toContain('purpose: "video"');
+    expect(studio).toContain("selectManagedVideoSessionForGroup(");
+    expect(studio).toContain(
+      "shouldRefreshManagedSession(activeManaged.videoSession)",
+    );
+    expect(studio).not.toContain("managed.switchGroup(selectedGroup.id)");
+  });
+
+  test("localizes server suppression codes instead of rendering the raw code", () => {
+    const app = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.tsx"),
+      "utf8",
+    );
+    const studio = app.slice(
+      app.indexOf("function AndroidVideoStudio()"),
+      app.indexOf("function AndroidImageStudio()"),
+    );
+
+    expect(app).toContain("function localizedVideoUnavailableReason(");
+    expect(app).toContain("price_missing: ");
+    expect(app).toContain("adapter_unsupported:");
+    expect(app).toContain("subscription_reservation_unsupported:");
+    expect(studio).toContain("serverCheckedWithoutVideo");
+    expect(studio).toContain("localizedVideoUnavailableReason(");
+    expect(studio).not.toContain("unavailableVideoDiagnostic.code}</span>");
+  });
+
+  test("shows distinct retry states for missing endpoint, expired login, and failed requests", () => {
+    const app = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.tsx"),
+      "utf8",
+    );
+    const studio = app.slice(
+      app.indexOf("function AndroidVideoStudio()"),
+      app.indexOf("function AndroidImageStudio()"),
+    );
+    expect(app).toContain("function videoBootstrapFailureCopy(");
+    expect(studio).toContain("classifyMobileVideoBootstrapFailure(error)");
+    expect(studio).toContain("bootstrapFailureCopy.title");
+    expect(studio).toContain("bootstrapFailureCopy.hint");
   });
 
   test("parses Agnes IDs, completion state, and metadata URL fields", () => {

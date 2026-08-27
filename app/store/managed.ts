@@ -7,11 +7,13 @@ import {
   ManagedWorkspaceBootstrap,
   flattenManagedModels,
   getManagedMobileBootstrap,
+  isGroupPinnedManagedSessionSwitch,
   isManagedAuthError,
   isManagedTotpLogin,
   loginManagedUser,
   loginManagedUser2FA,
   logoutManagedUser,
+  managedWorkspaceModelMatches,
   managedGatewayBaseUrl,
   normalizeManagedBaseUrl,
   pickManagedDefaultModel,
@@ -133,14 +135,32 @@ export const useManagedNextChatStore = createPersistStore<
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    async function applyManagedGroupSwitch(
+      bootstrap: ManagedMobileBootstrap,
+      purpose: "chat" | "image" | "video",
+      groupID: number,
+    ) {
+      if (isGroupPinnedManagedSessionSwitch(bootstrap, purpose, groupID)) {
+        // The current server returned all scopes plus a verified replacement
+        // for exactly one purpose. Applying this response preserves that new
+        // pinned key; issuing a generic bootstrap here could replace it with
+        // a different default-group session.
+        get().applyBootstrap(bootstrap);
+        return;
+      }
+      // Compatibility servers return a command acknowledgement or an older
+      // mutable session shape. Only a fresh complete bootstrap is safe there.
+      await get().bootstrap({ silent: true });
+    }
+
     function workspaceHasModel(
       workspaceModels: ManagedWorkspaceBootstrap["models"] | undefined,
       modelName: string | undefined,
     ) {
       if (!modelName) return false;
       return (workspaceModels?.groups ?? []).some((group) =>
-        (group.models ?? []).some(
-          (model) => (model.name || model.id) === modelName,
+        (group.models ?? []).some((model) =>
+          managedWorkspaceModelMatches(model, modelName),
         ),
       );
     }
@@ -411,18 +431,14 @@ export const useManagedNextChatStore = createPersistStore<
               groupID,
             );
           };
-          let bootstrap: ManagedMobileBootstrap | null;
+          let bootstrap: ManagedMobileBootstrap;
           try {
             bootstrap = await requestSwitch();
           } catch (error) {
             if (!isManagedAuthError(error) || !get().refreshToken) throw error;
             bootstrap = await requestSwitch(true);
           }
-          if (bootstrap) {
-            get().applyBootstrap(bootstrap);
-          } else {
-            await get().bootstrap({ silent: true });
-          }
+          await applyManagedGroupSwitch(bootstrap, "chat", groupID);
         } catch (error) {
           set({
             loading: false,
@@ -445,18 +461,14 @@ export const useManagedNextChatStore = createPersistStore<
               groupID,
             );
           };
-          let legacyBootstrap: ManagedMobileBootstrap | null;
+          let bootstrap: ManagedMobileBootstrap;
           try {
-            legacyBootstrap = await requestSwitch();
+            bootstrap = await requestSwitch();
           } catch (error) {
             if (!isManagedAuthError(error) || !get().refreshToken) throw error;
-            legacyBootstrap = await requestSwitch(true);
+            bootstrap = await requestSwitch(true);
           }
-          if (legacyBootstrap) {
-            get().applyBootstrap(legacyBootstrap);
-          } else {
-            await get().bootstrap({ silent: true });
-          }
+          await applyManagedGroupSwitch(bootstrap, "image", groupID);
         } catch (error) {
           set({
             loading: false,
@@ -479,15 +491,14 @@ export const useManagedNextChatStore = createPersistStore<
               groupID,
             );
           };
-          let bootstrap: ManagedMobileBootstrap | null;
+          let bootstrap: ManagedMobileBootstrap;
           try {
             bootstrap = await requestSwitch();
           } catch (error) {
             if (!isManagedAuthError(error) || !get().refreshToken) throw error;
             bootstrap = await requestSwitch(true);
           }
-          if (bootstrap) get().applyBootstrap(bootstrap);
-          else await get().bootstrap({ silent: true });
+          await applyManagedGroupSwitch(bootstrap, "video", groupID);
         } catch (error) {
           set({
             loading: false,

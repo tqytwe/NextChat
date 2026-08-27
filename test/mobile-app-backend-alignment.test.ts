@@ -134,7 +134,8 @@ describe("mobile app backend alignment", () => {
     expect(imageStudio).toContain("firstReferenceImageModel(");
     expect(imageStudio).toContain("referenceModelUnsupported(selectedModel)");
     expect(attachReferences).not.toContain("setSelectedModel(modelValue");
-    expect(imageStudio).toContain("allowLegacyImageCapabilityFallback");
+    expect(imageStudio).toContain("selectedReferenceLimit");
+    expect(imageStudio).toContain("validateManagedImageRequest({");
   });
 
   test("allows a ready shared file to start chat and passes its asset ID to the task", () => {
@@ -594,7 +595,8 @@ describe("mobile app backend alignment", () => {
   });
 
   test("uses the server capability contract and coupon IDs", () => {
-    expect(source).toContain('capabilities.operations?.includes("edit")');
+    expect(source).toContain("validateManagedImageRequest");
+    expect(source).toContain("validateManagedVideoRequest");
     expect(source).toContain('"/api/v1/payment/coupons/quote"');
     expect(source).toContain("coupon_id: selectedCouponID || undefined");
   });
@@ -819,8 +821,12 @@ describe("mobile app backend alignment", () => {
     expect(chat).toContain("if (!effectiveChatGroupId) return;");
     expect(chat).toContain("const selectedModelIsAvailable =");
     expect(chat).toContain("if (!selectedModelIsAvailable) return;");
-    expect(chat).toContain("const requestModelAvailable = Boolean(");
-    expect(chat).toContain("if (!model || !requestModelAvailable)");
+    expect(chat).toContain("const requestedModel = requestGroupId");
+    expect(chat).toContain(
+      "modelMatches(item, selectedModel || fallbackModel)",
+    );
+    expect(chat).toContain("const model = modelValue(requestedModel);");
+    expect(chat).toContain("if (!model || !requestedModel)");
     expect(chat).toContain("resolveChatPreference(");
     expect(source).toContain("workspaceLoaded: Boolean(workspace)");
   });

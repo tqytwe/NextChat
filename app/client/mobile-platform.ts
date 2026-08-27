@@ -400,16 +400,46 @@ export interface MobileTaskCreateRequest {
 }
 
 export interface MobileVideoCapabilities {
+  operations?: string[];
   text_to_video?: boolean;
   image_to_video?: boolean;
   video_reference?: boolean;
   audio_reference?: boolean;
-  resolutions: string[];
-  ratios: string[];
-  durations: number[];
+  /** Legacy aliases retained for pre-contract servers only. */
+  resolutions?: string[];
+  ratios?: string[];
+  durations?: number[];
+  supported_resolutions?: string[];
+  supported_ratios?: string[];
+  supported_durations?: number[];
   generate_audio?: boolean;
   watermark?: boolean;
+  max_reference_assets?: number;
+  max_reference_images?: number;
+  max_reference_videos?: number;
+  max_reference_audios?: number;
 }
+
+export interface MobileVideoSuppressedModel {
+  model: string;
+  /** Server-owned code. Consumers localize it; they must not discard it. */
+  code: string;
+}
+
+export type MobileVideoBootstrapModel =
+  | string
+  | {
+      id?: string;
+      model?: string;
+      name?: string;
+      display_name?: string;
+      platform?: string;
+      modalities?: Array<"chat" | "image" | "video" | "audio">;
+      adapter?: string;
+      capability_version?: string;
+      video_capabilities?: MobileVideoCapabilities;
+      capabilities?: MobileVideoCapabilities;
+    };
 
 export interface MobileVideoGroup {
   id: number;
@@ -417,8 +447,10 @@ export interface MobileVideoGroup {
   platform?: string;
   video_available: boolean;
   video_unavailable_code?: string;
-  models: string[];
+  models: MobileVideoBootstrapModel[];
   capabilities?: MobileVideoCapabilities;
+  video_capabilities?: MobileVideoCapabilities;
+  suppressed?: MobileVideoSuppressedModel[];
 }
 
 export interface MobileVideoBootstrap {
@@ -428,6 +460,8 @@ export interface MobileVideoBootstrap {
 }
 
 export interface MobileVideoJobRequest {
+  /** Dedicated routes reject chat/image requests instead of inferring purpose. */
+  purpose: "video";
   group_id: number;
   model: string;
   prompt: string;
@@ -1286,6 +1320,7 @@ export function estimateMobileVideo(
   body: Pick<
     MobileVideoJobRequest,
     | "group_id"
+    | "purpose"
     | "model"
     | "prompt"
     | "resolution"
@@ -1375,16 +1410,20 @@ export function retryMobileVideoJob(
   );
 }
 
-export function saveMobileVideoJobAsAsset(
+/**
+ * Releases a temporary video relay object after the client has made a durable
+ * copy. The asset upload itself remains the normal /mobile/assets flow.
+ */
+export function acknowledgeMobileVideoContent(
   baseUrl: string,
   accessToken: string,
   taskId: MobileId,
   options?: MobileRequestOptions,
 ) {
-  return mobilePlatformJsonRequest<MobileAsset>(
+  return mobilePlatformJsonRequest<{ released: boolean }>(
     baseUrl,
     accessToken,
-    `/video/jobs/${encodePathId(taskId)}/save-as-asset`,
+    `/video/jobs/${encodePathId(taskId)}/content/ack`,
     jsonInit("POST", {}, options),
   );
 }
