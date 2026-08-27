@@ -1,9 +1,9 @@
 {
   "platform": "android",
-  "version": "3.0.24",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.24-324-6297795c269ded59829295ff634727360c2ee75b610446006d87b313918e55dd",
+  "version": "3.0.25",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.25-325-dac01bee1d9c4116972e598576812ab0fec31dae7aad373cad848fbec9de99a0",
   "size": "9.7 MB",
-  "sha256": "6297795c269ded59829295ff634727360c2ee75b610446006d87b313918e55dd",
+  "sha256": "dac01bee1d9c4116972e598576812ab0fec31dae7aad373cad848fbec9de99a0",
   "minAndroidVersion": "6.0",
   "releaseDate": "2026-08-27",
   "notes": [
@@ -11,49 +11,57 @@
     "素材与提示词首次保存到本机，后续仅增量更新",
     "视频任务轮询与创作空间保持一致"
   ],
-  "versionCode": 324,
-  "bytes": 10186641,
+  "versionCode": 325,
+  "bytes": 10187018,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "3.0.24",
-  "sourceCommit": "1ef9bb3793c8cfc005d64c10196915ba918c8ed4",
-  "builtFromCommit": "1ef9bb3793c8cfc005d64c10196915ba918c8ed4",
+  "latestVersion": "3.0.25",
+  "sourceCommit": "0d1fabcf309a825c86206b7e78a4ee20349c12d3",
+  "builtFromCommit": "0d1fabcf309a825c86206b7e78a4ee20349c12d3",
   "sourceDirty": false,
   "channel": "direct",
   "notes_i18n": {
     "zh": [
-      "新增视频创作：在创作页切换图像和视频",
-      "素材、封面与提示词首次同步到本机，之后仅增量检查更新",
-      "完成视频优先保存在本机，可选择保存为素材"
+      "视频创作按服务端能力展示模型与参数",
+      "图像、视频、任务和素材使用独立会话与稳定任务链路",
+      "国内版构建、升级验收和测试环境已固定到 Dell 专用工具链"
     ],
     "en": [
-      "Adds video creation in the unified Create page",
-      "Materials, covers, and prompts sync locally once then use incremental update checks",
-      "Completed videos stay on this device and can be saved as materials"
+      "Video creation now follows server-declared model capabilities",
+      "Image, video, tasks, and assets use isolated sessions and stable task flows",
+      "Direct builds and upgrade checks now use the fixed Dell toolchain"
     ],
     "ja": [
-      "作成ページに動画作成を追加。素材、カバー、プロンプトは初回に端末へ同期し、以後は差分のみ確認。生成した動画は端末に保存され、素材として保存できます"
+      "動画作成はサーバーが公開するモデル機能に従って表示されます",
+      "画像、動画、タスク、素材は独立したセッションと安定したタスク処理を使用します",
+      "国内版のビルドとアップグレード確認は固定された Dell ツールチェーンを使用します"
     ],
     "ko": [
-      "통합 만들기 화면에 동영상 생성을 추가했습니다. 소재, 표지, 프롬프트는 최초 한 번 기기에 동기화하고 이후 증분 업데이트만 확인합니다. 완성된 동영상은 기기에 저장되며 소재로 저장할 수 있습니다"
+      "동영상 만들기는 서버가 공개한 모델 기능에 따라 표시됩니다",
+      "이미지, 동영상, 작업 및 소재는 분리된 세션과 안정적인 작업 흐름을 사용합니다",
+      "국내판 빌드와 업그레이드 검증은 고정된 Dell 도구 체인을 사용합니다"
     ]
   },
   "notesByLocale": {
     "zh-CN": [
-      "新增视频创作：在创作页切换图像和视频",
-      "素材、封面与提示词首次同步到本机，之后仅增量检查更新",
-      "完成视频优先保存在本机，可选择保存为素材"
+      "视频创作按服务端能力展示模型与参数",
+      "图像、视频、任务和素材使用独立会话与稳定任务链路",
+      "国内版构建、升级验收和测试环境已固定到 Dell 专用工具链"
     ],
     "en": [
-      "Adds video creation in the unified Create page",
-      "Materials, covers, and prompts sync locally once then use incremental update checks",
-      "Completed videos stay on this device and can be saved as materials"
+      "Video creation now follows server-declared model capabilities",
+      "Image, video, tasks, and assets use isolated sessions and stable task flows",
+      "Direct builds and upgrade checks now use the fixed Dell toolchain"
     ],
     "ja": [
-      "作成ページに動画作成を追加。素材、カバー、プロンプトは初回に端末へ同期し、以後は差分のみ確認。生成した動画は端末に保存され、素材として保存できます"
+      "動画作成はサーバーが公開するモデル機能に従って表示されます",
+      "画像、動画、タスク、素材は独立したセッションと安定したタスク処理を使用します",
+      "国内版のビルドとアップグレード確認は固定された Dell ツールチェーンを使用します"
     ],
     "ko": [
-      "통합 만들기 화면에 동영상 생성을 추가했습니다. 소재, 표지, 프롬프트는 최초 한 번 기기에 동기화하고 이후 증분 업데이트만 확인합니다. 완성된 동영상은 기기에 저장되며 소재로 저장할 수 있습니다"
+      "동영상 만들기는 서버가 공개한 모델 기능에 따라 표시됩니다",
+      "이미지, 동영상, 작업 및 소재는 분리된 세션과 안정적인 작업 흐름을 사용합니다",
+      "국내판 빌드와 업그레이드 검증은 고정된 Dell 도구 체인을 사용합니다"
     ]
   }
 }
