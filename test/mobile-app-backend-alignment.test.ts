@@ -97,6 +97,22 @@ describe("mobile app backend alignment", () => {
     expect(activity).toContain("jisudeng-oauth-callback");
   });
 
+  test("keeps password recovery as a focused secondary login flow", () => {
+    const login = source.slice(
+      source.indexOf("function AndroidLogin()"),
+      source.indexOf("function AndroidDashboard()"),
+    );
+    expect(login).toContain("const primaryTabs");
+    expect(login).toContain('value: "login"');
+    expect(login).toContain('value: "register"');
+    expect(login).not.toContain('value: "forgot"');
+    expect(login).not.toContain('value: "reset"');
+    expect(login).toContain("const showingPrimaryAuth");
+    expect(login).toContain("showingPrimaryAuth && backendBaseUrl");
+    expect(login).toContain('setMode("forgot")');
+    expect(login).toContain('setMode("login")');
+  });
+
   test("routes reference image generation through the managed gateway transport", () => {
     const imageStudio = source.slice(
       source.indexOf("function AndroidImageStudio()"),

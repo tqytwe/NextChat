@@ -312,60 +312,55 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  padding-top: calc(env(safe-area-inset-top) + 58px);
+  padding-top: calc(env(safe-area-inset-top) + 30px);
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 76px;
-  height: 76px;
-  margin: 0 auto 22px;
-  border: 1px solid rgba(255, 255, 255, 0.58);
-  border-radius: 24px;
-  background: radial-gradient(
-      circle at 28% 22%,
-      rgba(255, 255, 255, 0.68),
-      transparent 28%
-    ),
-    linear-gradient(135deg, #007aff, #34c759 62%, #ff9500);
-  box-shadow: var(--mobile-float-shadow);
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  border: 0;
+  border-radius: 8px;
+  background: #1677d2;
+  box-shadow: none;
   color: #fff;
-  font-size: 32px;
+  font-size: 25px;
   font-weight: 900;
 }
 
 .login-screen h1 {
   margin: 0;
   color: var(--black);
-  font-size: 36px;
-  line-height: 1;
+  font-size: 28px;
+  line-height: 1.15;
   text-align: center;
 }
 
 .login-screen p {
-  margin: 10px 0 24px;
+  margin: 7px 0 18px;
   color: var(--ios-gray);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.45;
   text-align: center;
 }
 
 .auth-tabs {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   border: var(--border-in-light);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--white) 70%, transparent);
+  border-radius: 8px;
+  background: var(--surface);
 
   button {
     min-width: 0;
-    min-height: 34px;
+    min-height: 40px;
     border: 0;
-    border-radius: 999px;
+    border-radius: 6px;
     background: transparent;
     color: var(--ios-gray);
     font-size: 12px;
@@ -379,24 +374,46 @@
   }
 }
 
+.auth-flow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  margin-bottom: 10px;
+
+  strong {
+    color: var(--black);
+    font-size: 17px;
+    font-weight: 800;
+  }
+
+  button {
+    min-height: 36px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ios-blue);
+    font-size: 13px;
+    font-weight: 750;
+  }
+}
+
 .oauth-panel {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 9px;
   width: 100%;
-  padding: 12px;
-  margin-bottom: 12px;
+  padding: 10px;
+  margin-bottom: 10px;
   border: var(--border-in-light);
-  border-radius: 18px;
-  background: radial-gradient(
-      circle at 12% 10%,
-      rgba(0, 122, 255, 0.12),
-      transparent 32%
-    ),
-    var(--surface);
-  box-shadow: var(--card-shadow);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: none;
 
   div {
     display: grid;
+    grid-column: 1 / -1;
     gap: 3px;
   }
 
@@ -414,14 +431,14 @@
   }
 
   button {
-    min-height: 44px;
+    min-height: 40px;
     border: var(--border-in-light);
-    border-radius: 14px;
-    background: var(--surface-strong);
+    border-radius: 6px;
+    background: var(--gray);
     color: var(--black);
-    font-size: 14px;
-    font-weight: 950;
-    box-shadow: var(--card-shadow);
+    font-size: 13px;
+    font-weight: 750;
+    box-shadow: none;
   }
 }
 
@@ -432,13 +449,13 @@
 
   label {
     display: grid;
-    gap: 7px;
+    gap: 4px;
     width: 100%;
-    padding: 10px 12px;
+    padding: 8px 10px;
     border: var(--border-in-light);
-    border-radius: 14px;
+    border-radius: 8px;
     background: var(--surface);
-    box-shadow: var(--card-shadow);
+    box-shadow: none;
   }
 
   span {
@@ -459,6 +476,34 @@
     font-weight: 700;
     text-align: left;
   }
+}
+
+.login-utility-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.login-form .login-utility-row .remember-login {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+}
+
+.auth-link {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ios-blue);
+  font-size: 13px;
+  font-weight: 750;
 }
 
 .password-field {

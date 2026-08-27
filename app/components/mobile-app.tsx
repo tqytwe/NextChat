@@ -5518,12 +5518,11 @@ function AndroidLogin() {
         (mode === "reset" && (!email.trim() || !resetToken.trim())))) ||
     (Boolean(managed.pendingTotpToken) && totpCode.trim().length < 6);
 
-  const tabs = [
+  const primaryTabs = [
     { value: "login", label: text.login.loginTab },
     { value: "register", label: text.login.registerTab },
-    { value: "forgot", label: text.login.forgotTab },
-    { value: "reset", label: text.login.resetTab },
   ] as const;
+  const showingPrimaryAuth = mode === "login" || mode === "register";
 
   return (
     <main className={styles["mobile-app"]}>
@@ -5534,7 +5533,7 @@ function AndroidLogin() {
 
         {!managed.pendingTotpToken && (
           <div className={styles["auth-tabs"]}>
-            {tabs.map((tab) => (
+            {primaryTabs.map((tab) => (
               <button
                 key={tab.value}
                 className={clsx({ [styles["active"]]: mode === tab.value })}
@@ -5550,7 +5549,25 @@ function AndroidLogin() {
           </div>
         )}
 
-        {!managed.pendingTotpToken && backendBaseUrl && (
+        {!managed.pendingTotpToken && !showingPrimaryAuth && (
+          <div className={styles["auth-flow-header"]}>
+            <strong>
+              {mode === "forgot" ? text.login.forgotTab : text.login.resetTab}
+            </strong>
+            <button
+              type="button"
+              onClick={() => {
+                setMode("login");
+                setError("");
+                setMessage("");
+              }}
+            >
+              {text.common.back}
+            </button>
+          </div>
+        )}
+
+        {!managed.pendingTotpToken && showingPrimaryAuth && backendBaseUrl && (
           <section className={styles["oauth-panel"]}>
             <div>
               <strong>{text.login.quickLoginTitle}</strong>
@@ -5630,17 +5647,30 @@ function AndroidLogin() {
                 </label>
               )}
               {mode === "login" && (
-                <label className={styles["remember-login"]}>
-                  <input
-                    aria-label="login-remember-account"
-                    type="checkbox"
-                    checked={rememberAccount}
-                    onChange={(event) =>
-                      setRememberAccount(event.currentTarget.checked)
-                    }
-                  />
-                  <span>{text.login.rememberAccount}</span>
-                </label>
+                <div className={styles["login-utility-row"]}>
+                  <label className={styles["remember-login"]}>
+                    <input
+                      aria-label="login-remember-account"
+                      type="checkbox"
+                      checked={rememberAccount}
+                      onChange={(event) =>
+                        setRememberAccount(event.currentTarget.checked)
+                      }
+                    />
+                    <span>{text.login.rememberAccount}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className={styles["auth-link"]}
+                    onClick={() => {
+                      setMode("forgot");
+                      setError("");
+                      setMessage("");
+                    }}
+                  >
+                    {text.login.forgotTab}
+                  </button>
+                </div>
               )}
               {(mode === "register" || mode === "reset") && (
                 <label>
