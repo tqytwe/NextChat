@@ -1,85 +1,87 @@
 {
   "platform": "android",
-  "version": "3.0.29",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.29-329-517fbc01027bd8887696f3c975fbfadef70ab4da28baa595c722669d450d4592",
+  "version": "3.0.32",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.32-332-b01274c19f5fd728fe9a518af68fae0d667974f2fc5007842baf88679481b2f6",
   "size": "9.7 MB",
-  "sha256": "517fbc01027bd8887696f3c975fbfadef70ab4da28baa595c722669d450d4592",
+  "sha256": "b01274c19f5fd728fe9a518af68fae0d667974f2fc5007842baf88679481b2f6",
   "minAndroidVersion": "6.0",
-  "releaseDate": "2026-08-27",
+  "releaseDate": "2026-08-28",
   "notes": [
     "视频创作界面适配手机窄屏",
     "素材与提示词首次保存到本机，后续仅增量更新",
     "视频任务轮询与创作空间保持一致"
   ],
-  "versionCode": 329,
-  "bytes": 10188170,
+  "versionCode": 332,
+  "bytes": 10197501,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "3.0.29",
-  "sourceCommit": "bfbd714752202e3f2e9d59d7b283afba1eae2382",
-  "builtFromCommit": "bfbd714752202e3f2e9d59d7b283afba1eae2382",
+  "latestVersion": "3.0.32",
+  "sourceCommit": "a324f1040c384546bfa4380184545c8f109b4fcc",
+  "builtFromCommit": "a324f1040c384546bfa4380184545c8f109b4fcc",
   "sourceDirty": false,
   "channel": "direct",
   "notes_i18n": {
     "zh": [
-      "图片提示词目录可从创作空间在线更新，不上传账号凭据",
-      "视频模型和 1080p 等参数按账号可用能力自动显示",
-      "资产入口、系统设置和任务管理体验进一步统一",
-      "登录与找回密码流程更简洁，修复商汤无水印、语音和提示词输入问题",
-      "修复 Android WebView 粘贴或原生输入后提示词被清空、生成按钮不可用的问题"
+      "启动时先显示应用界面，工作区、模型、账户和同步内容在后台补齐",
+      "图片和视频工作台完整显示账号分组与模型",
+      "输出张数支持 1 至 16 张",
+      "提示词库支持分类和搜索，移除不存在的正文语言切换",
+      "内容创作工作台改为本地项目三步流程，支持 Canvas 提示词作为可编辑镜头、图片队列和工程包导入导出",
+      "仅供真机功能验证，尚未发布"
     ],
     "en": [
-      "Image prompts refresh from the Creation Space catalog without sending account credentials",
-      "Video models and options such as 1080p follow the capabilities available to the account",
-      "Assets, system settings, and task management are more consistent",
-      "Sign-in and password recovery are simpler",
-      "SenseNova, speech, and prompt-input issues are fixed",
-      "Fixed Android WebView prompt loss after native paste or input"
+      "The app shell now appears before workspace, model, account, and sync data finish loading",
+      "Image and video studios show all account-returned groups and models",
+      "output count supports 1 through 16",
+      "The prompt library adds mobile categories and search, without unsupported body-language toggles",
+      "The content workbench now uses a three-step local project flow with editable Canvas prompt shots, image queueing, and project package import/export",
+      "For real-device functional testing only. Not released"
     ],
     "ja": [
-      "画像プロンプトはアカウント認証情報を送信せず、制作スペースのカタログから更新できます",
-      "動画モデルと 1080p などの設定は、アカウントで利用可能な機能に応じて表示されます",
-      "素材、システム設定、タスク管理の操作を統一しました",
-      "ログインとパスワード再設定を簡素化し、SenseNova、音声、プロンプト入力を改善しました",
-      "Android WebView で貼り付けやネイティブ入力後にプロンプトが消え、生成できなくなる問題を修正しました"
+      "起動時はワークスペース、モデル、アカウント、同期データの完了を待たずにアプリ画面を表示します",
+      "画像・動画スタジオはアカウントから返されたすべてのグループとモデルを表示し、出力数は 1 から 16 に対応します",
+      "プロンプトライブラリにモバイル向け分類と検索を追加し、対応していない本文言語切替を削除しました",
+      "コンテンツ作成ワークベンチをローカルプロジェクトの3ステップに変更し、編集可能な Canvas プロンプト、画像キュー、工程パッケージの入出力に対応しました",
+      "実機での機能検証専用です。未リリースです"
     ],
     "ko": [
-      "이미지 프롬프트는 계정 자격 증명을 보내지 않고 제작 공간 카탈로그에서 갱신됩니다",
-      "동영상 모델과 1080p 등의 설정은 계정에서 사용할 수 있는 기능에 따라 표시됩니다",
-      "소재, 시스템 설정 및 작업 관리 경험을 더 일관되게 정리했습니다",
-      "로그인과 비밀번호 재설정을 단순화하고 SenseNova, 음성 및 프롬프트 입력 문제를 개선했습니다",
-      "Android WebView에서 붙여넣기 또는 네이티브 입력 후 프롬프트가 사라져 생성할 수 없던 문제를 수정했습니다"
+      "시작 시 작업 공간, 모델, 계정 및 동기화 데이터가 완료되기 전에 앱 화면을 표시합니다",
+      "이미지 및 동영상 스튜디오는 계정에서 반환된 모든 그룹과 모델을 표시하며 출력 수는 1에서 16까지 지원합니다",
+      "프롬프트 라이브러리에 모바일용 분류와 검색을 추가하고 지원되지 않는 본문 언어 전환을 제거했습니다",
+      "콘텐츠 제작 작업대를 로컬 프로젝트 3단계로 변경하고 편집 가능한 Canvas 프롬프트, 이미지 대기열, 프로젝트 패키지 가져오기/내보내기를 지원합니다",
+      "실기기 기능 검증 전용이며 아직 출시되지 않았습니다"
     ]
   },
   "notesByLocale": {
     "zh-CN": [
-      "图片提示词目录可从创作空间在线更新，不上传账号凭据",
-      "视频模型和 1080p 等参数按账号可用能力自动显示",
-      "资产入口、系统设置和任务管理体验进一步统一",
-      "登录与找回密码流程更简洁，修复商汤无水印、语音和提示词输入问题",
-      "修复 Android WebView 粘贴或原生输入后提示词被清空、生成按钮不可用的问题"
+      "启动时先显示应用界面，工作区、模型、账户和同步内容在后台补齐",
+      "图片和视频工作台完整显示账号分组与模型",
+      "输出张数支持 1 至 16 张",
+      "提示词库支持分类和搜索，移除不存在的正文语言切换",
+      "内容创作工作台改为本地项目三步流程，支持 Canvas 提示词作为可编辑镜头、图片队列和工程包导入导出",
+      "仅供真机功能验证，尚未发布"
     ],
     "en": [
-      "Image prompts refresh from the Creation Space catalog without sending account credentials",
-      "Video models and options such as 1080p follow the capabilities available to the account",
-      "Assets, system settings, and task management are more consistent",
-      "Sign-in and password recovery are simpler",
-      "SenseNova, speech, and prompt-input issues are fixed",
-      "Fixed Android WebView prompt loss after native paste or input"
+      "The app shell now appears before workspace, model, account, and sync data finish loading",
+      "Image and video studios show all account-returned groups and models",
+      "output count supports 1 through 16",
+      "The prompt library adds mobile categories and search, without unsupported body-language toggles",
+      "The content workbench now uses a three-step local project flow with editable Canvas prompt shots, image queueing, and project package import/export",
+      "For real-device functional testing only. Not released"
     ],
     "ja": [
-      "画像プロンプトはアカウント認証情報を送信せず、制作スペースのカタログから更新できます",
-      "動画モデルと 1080p などの設定は、アカウントで利用可能な機能に応じて表示されます",
-      "素材、システム設定、タスク管理の操作を統一しました",
-      "ログインとパスワード再設定を簡素化し、SenseNova、音声、プロンプト入力を改善しました",
-      "Android WebView で貼り付けやネイティブ入力後にプロンプトが消え、生成できなくなる問題を修正しました"
+      "起動時はワークスペース、モデル、アカウント、同期データの完了を待たずにアプリ画面を表示します",
+      "画像・動画スタジオはアカウントから返されたすべてのグループとモデルを表示し、出力数は 1 から 16 に対応します",
+      "プロンプトライブラリにモバイル向け分類と検索を追加し、対応していない本文言語切替を削除しました",
+      "コンテンツ作成ワークベンチをローカルプロジェクトの3ステップに変更し、編集可能な Canvas プロンプト、画像キュー、工程パッケージの入出力に対応しました",
+      "実機での機能検証専用です。未リリースです"
     ],
     "ko": [
-      "이미지 프롬프트는 계정 자격 증명을 보내지 않고 제작 공간 카탈로그에서 갱신됩니다",
-      "동영상 모델과 1080p 등의 설정은 계정에서 사용할 수 있는 기능에 따라 표시됩니다",
-      "소재, 시스템 설정 및 작업 관리 경험을 더 일관되게 정리했습니다",
-      "로그인과 비밀번호 재설정을 단순화하고 SenseNova, 음성 및 프롬프트 입력 문제를 개선했습니다",
-      "Android WebView에서 붙여넣기 또는 네이티브 입력 후 프롬프트가 사라져 생성할 수 없던 문제를 수정했습니다"
+      "시작 시 작업 공간, 모델, 계정 및 동기화 데이터가 완료되기 전에 앱 화면을 표시합니다",
+      "이미지 및 동영상 스튜디오는 계정에서 반환된 모든 그룹과 모델을 표시하며 출력 수는 1에서 16까지 지원합니다",
+      "프롬프트 라이브러리에 모바일용 분류와 검색을 추가하고 지원되지 않는 본문 언어 전환을 제거했습니다",
+      "콘텐츠 제작 작업대를 로컬 프로젝트 3단계로 변경하고 편집 가능한 Canvas 프롬프트, 이미지 대기열, 프로젝트 패키지 가져오기/내보내기를 지원합니다",
+      "실기기 기능 검증 전용이며 아직 출시되지 않았습니다"
     ]
   }
 }

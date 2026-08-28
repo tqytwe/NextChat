@@ -440,8 +440,8 @@ test("native bridge records bounded Firebase performance traces", async () => {
     "utf8",
   );
   expect(activity).toContain("FirebasePerformance.getInstance()");
-  expect(activity).toContain('newTrace("app_cold_start")');
-  expect(activity).toContain('newTrace("webview_first_load")');
+  expect(activity).toContain('newTrace("native_start_to_webview_visible")');
+  expect(activity).toContain('newTrace("webview_first_interactive")');
   expect(activity).toContain('case "startPerformanceTrace"');
   expect(activity).toContain('case "stopPerformanceTrace"');
 });
