@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Component,
   Fragment,
   createContext,
   lazy,
@@ -13,7 +14,13 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ChangeEvent, FormEvent, PointerEvent, ReactNode } from "react";
+import type {
+  ChangeEvent,
+  ErrorInfo,
+  FormEvent,
+  PointerEvent,
+  ReactNode,
+} from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import clsx from "clsx";
 import styles from "./mobile-app.module.scss";
@@ -105,9 +112,12 @@ import {
   managedImageReferenceLimit,
   selectManagedImageSession,
   selectManagedImageSessionForGroup,
-  validateManagedImageRequest,
-  validateManagedVideoRequest,
 } from "../client/mobile-media-contract";
+import {
+  canRunMobileImageQueueTask,
+  MobileImageAccountQueueGate,
+  recoverMobileImageQueueTask,
+} from "../client/mobile-image-queue";
 import {
   buildMobileVideoScriptPrompt,
   classifyMobileVideoBootstrapFailure,
@@ -153,6 +163,12 @@ import type {
   ContentWorkbenchBrief,
   ContentWorkbenchShotPlan as WorkbenchShotPlan,
 } from "../client/content-workbench";
+import {
+  contentWorkbenchPackageAssetPath,
+  contentWorkbenchPackageFileName,
+  exportContentWorkbenchPackage,
+  importContentWorkbenchPackage,
+} from "../client/content-workbench-package";
 import { renderContentTextOverlay } from "../client/content-text-overlay";
 import {
   normalizeMobileChatPreference,
@@ -199,6 +215,7 @@ import {
   saveImageToGallery,
   shareImage,
   shareImages,
+  shareFile,
   shareText,
   copyTextToClipboard,
   showNativeNotification,
@@ -220,6 +237,7 @@ import {
   acknowledgePlayBillingPurchase,
   configureNativeCrashlyticsUser,
   recordNativeCrashlyticsException,
+  reportNativeStartupInteractive,
   startNativePerformanceTrace,
   stopNativePerformanceTrace,
   getNativePushInbox,
@@ -363,11 +381,17 @@ type ServerSkillSelection = {
 
 const SERVER_SKILL_SELECTION_KEY = "jisudengchat-server-skills-v1";
 const COLLABORATION_AGENT_ID = "multi-agent-collaboration";
-const CONTENT_KIT_GLOBAL_CONCURRENCY = 2;
 const CONTENT_KIT_MAX_OUTPUTS_PER_RUN = 24;
 const CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT =
   CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT;
-const activeContentKitOutputs = new Set<string>();
+const mobileImageQueueGate = new MobileImageAccountQueueGate();
+
+async function withMobileImageGenerationLock<T>(
+  accountId: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  return mobileImageQueueGate.run(accountId, work);
+}
 
 type ContentKitShotPlan = WorkbenchShotPlan;
 
@@ -1498,8 +1522,6 @@ type ImagePromptCategory = {
   label: string;
   axis?: string;
 };
-
-type ImagePromptLanguageMode = "app" | "zh" | "en" | "jp" | "ko" | "both";
 
 type ImagePromptLibraryPayload = {
   id: string;
@@ -2665,21 +2687,9 @@ function localizedValue(value: LocalizedString, text: ManagedMobileText) {
 function imagePromptText(
   template: ImagePromptTemplate,
   text: ManagedMobileText,
-  mode: ImagePromptLanguageMode = "app",
 ) {
-  const zh = template.prompt.cn;
-  const en = template.prompt.en;
-  if (mode === "zh") return zh;
-  if (mode === "en") return en || zh;
-  if (mode === "jp") return template.prompt.jp || en || zh;
-  if (mode === "ko") return template.prompt.ko || en || zh;
-  if (mode === "both") {
-    const localized = localizedValue(template.prompt, text);
-    const secondary = mobileTextLocale(text) === "en" ? zh : en;
-    return [...new Set([localized, secondary].filter(Boolean))].join(
-      "\n\n---\n\n",
-    );
-  }
+  // Canvas publishes one authoritative prompt body per entry. Do not present
+  // locale buttons that imply translations which have not been supplied.
   return localizedValue(template.prompt, text);
 }
 
@@ -2912,6 +2922,157 @@ function fallbackImagePromptCategories(text: ManagedMobileText) {
         },
         text,
       ),
+    },
+  ];
+}
+
+function mobilePromptSemanticCategory(item: ImagePromptTemplate) {
+  const searchable = [
+    item.category,
+    ...(item.categories || []),
+    item.domain,
+    item.style,
+    item.subject,
+    item.title.cn,
+    item.title.en,
+    item.description.cn,
+    item.description.en,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const includes = (...values: string[]) =>
+    values.some((value) => searchable.includes(value));
+
+  if (includes("portrait", "character", "人物", "角色", "avatar"))
+    return "portrait-character";
+  if (includes("e-commerce", "ecommerce", "product", "电商", "产品", "商品"))
+    return "commerce";
+  if (includes("poster", "brand", "海报", "品牌", "marketing", "广告"))
+    return "brand-poster";
+  if (includes("ui", "web", "interface", "界面", "网站")) return "ui";
+  if (includes("illustration", "art", "插画", "艺术", "watercolor", "国风"))
+    return "art";
+  if (includes("photography", "photo", "cinematic", "摄影", "写实", "场景"))
+    return "photography";
+  if (includes("game", "comic", "storyboard", "游戏", "漫画", "分镜"))
+    return "game-entertainment";
+  if (includes("edit", "reference", "style transfer", "图片编辑", "参考"))
+    return "image-editing";
+  if (
+    includes("typography", "document", "infographic", "字体", "文档", "信息图")
+  )
+    return "text-infographic";
+  return "other";
+}
+
+function mobilePromptCategories(
+  text: ManagedMobileText,
+): ImagePromptCategory[] {
+  const label = (value: LocalizedString) => localizedValue(value, text);
+  return [
+    { id: "all", label: text.common.all },
+    {
+      id: "featured",
+      label: label({ cn: "精选", en: "Featured", jp: "おすすめ", ko: "추천" }),
+    },
+    {
+      id: "favorites",
+      label: label({
+        cn: "收藏",
+        en: "Favorites",
+        jp: "お気に入り",
+        ko: "즐겨찾기",
+      }),
+    },
+    {
+      id: "recent",
+      label: label({ cn: "最近", en: "Recent", jp: "最近", ko: "최근" }),
+    },
+    {
+      id: "portrait-character",
+      label: label({
+        cn: "人像与角色",
+        en: "People & Characters",
+        jp: "人物とキャラクター",
+        ko: "인물과 캐릭터",
+      }),
+    },
+    {
+      id: "commerce",
+      label: label({
+        cn: "商品与电商",
+        en: "Products & Commerce",
+        jp: "商品とEC",
+        ko: "상품과 이커머스",
+      }),
+    },
+    {
+      id: "brand-poster",
+      label: label({
+        cn: "海报与品牌",
+        en: "Posters & Brand",
+        jp: "ポスターとブランド",
+        ko: "포스터와 브랜드",
+      }),
+    },
+    {
+      id: "ui",
+      label: label({
+        cn: "UI 与界面",
+        en: "UI & Interface",
+        jp: "UIと画面",
+        ko: "UI와 인터페이스",
+      }),
+    },
+    {
+      id: "art",
+      label: label({
+        cn: "插画与艺术",
+        en: "Illustration & Art",
+        jp: "イラストとアート",
+        ko: "일러스트와 아트",
+      }),
+    },
+    {
+      id: "photography",
+      label: label({
+        cn: "摄影与场景",
+        en: "Photography & Scenes",
+        jp: "写真とシーン",
+        ko: "사진과 장면",
+      }),
+    },
+    {
+      id: "game-entertainment",
+      label: label({
+        cn: "游戏与娱乐",
+        en: "Games & Entertainment",
+        jp: "ゲームとエンタメ",
+        ko: "게임과 엔터테인먼트",
+      }),
+    },
+    {
+      id: "image-editing",
+      label: label({
+        cn: "图片编辑与参考图",
+        en: "Editing & References",
+        jp: "画像編集と参考",
+        ko: "이미지 편집과 참조",
+      }),
+    },
+    {
+      id: "text-infographic",
+      label: label({
+        cn: "文字与信息图",
+        en: "Text & Infographics",
+        jp: "文字とインフォグラフィック",
+        ko: "텍스트와 인포그래픽",
+      }),
+    },
+    {
+      id: "other",
+      label: label({ cn: "其他", en: "Other", jp: "その他", ko: "기타" }),
     },
   ];
 }
@@ -3252,18 +3413,14 @@ function chatModelsForGroup(
 function currentImageModels(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
-  return currentModels(workspace).filter((model) =>
-    isExecutableManagedImageModel(model, "create", workspace?.models),
-  );
+  return currentModels(workspace);
 }
 
 function imageModelsForGroup(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
   groupID?: number,
 ) {
-  return modelsForGroup(workspace, groupID).filter((model) =>
-    isExecutableManagedImageModel(model, "create", workspace?.models),
-  );
+  return modelsForGroup(workspace, groupID);
 }
 
 /**
@@ -3279,9 +3436,7 @@ function imageModelsForExactGroup(
   const group = workspace?.models?.groups?.find(
     (item) => Number(item.id) === exactGroupID,
   );
-  return (group?.models || []).filter((model) =>
-    isExecutableManagedImageModel(model, "create", workspace?.models),
-  );
+  return group?.models || [];
 }
 
 function imageModelSupportsStyle(model: string) {
@@ -3290,11 +3445,7 @@ function imageModelSupportsStyle(model: string) {
 
 /** SenseNova requires a root boolean field; prompt wording cannot disable it. */
 function mustDisableSenseNovaWatermark(model: string) {
-  return ["sensenova-u1-fast", "sensenova-u1.5-lite"].includes(
-    String(model || "")
-      .trim()
-      .toLowerCase(),
-  );
+  return /sensenova|sense-nova/i.test(String(model || ""));
 }
 
 function imageModelSupportsReferences(
@@ -3305,16 +3456,29 @@ function imageModelSupportsReferences(
     typeof model === "string"
       ? knownModels.find((item) => modelMatches(item, model))
       : model;
-  return Boolean(
-    workspaceModel &&
-      isExecutableManagedImageModel(workspaceModel, "edit") &&
-      managedImageReferenceLimit(workspaceModel) > 0,
+  if (!workspaceModel) return false;
+  // Older image workspaces do not expose an optional capability row. The
+  // platform is still authoritative for whether its selected model accepts an
+  // edit request, so do not hide that model or the reference picker locally.
+  if (!workspaceModel.image_capabilities) return true;
+  return (
+    isExecutableManagedImageModel(workspaceModel, "edit") &&
+    managedImageReferenceLimit(workspaceModel) > 0
   );
 }
 
 function contentKitReferenceLimit(model?: ManagedWorkspaceModel) {
-  if (!model || !isExecutableManagedImageModel(model, "edit")) return 0;
+  if (!model) return 0;
+  if (!model.image_capabilities) return 4;
+  if (!isExecutableManagedImageModel(model, "edit")) return 0;
   return Math.min(12, managedImageReferenceLimit(model));
+}
+
+function imageReferenceLimit(model?: ManagedWorkspaceModel) {
+  if (!model || !imageModelSupportsReferences(model)) return 0;
+  return model.image_capabilities
+    ? Math.min(12, managedImageReferenceLimit(model))
+    : 4;
 }
 
 function firstReferenceImageModel(models: ManagedWorkspaceModel[]) {
@@ -3355,7 +3519,10 @@ function imageSizeOption(size: string) {
 function imageSizeOptionsForModel(model?: ManagedWorkspaceModel | string) {
   if (typeof model === "string") return IMAGE_SIZE_OPTIONS;
   const capabilities = model?.image_capabilities;
-  if (!capabilities) return [];
+  // Absence of optional metadata is not a statement that the account cannot
+  // generate images. Keep the standard chooser and let the selected platform
+  // model validate the request, rather than silently resetting to one size.
+  if (!capabilities) return IMAGE_SIZE_OPTIONS;
   const declaredSizes = Array.from(
     new Set(
       (capabilities?.supported_sizes || [])
@@ -3451,6 +3618,10 @@ function imageTaskStatusText(item: any, text: ManagedMobileText) {
   switch (item?.status) {
     case "queued":
       return text.image.statusQueued;
+    case "submitting":
+      return text.image.statusSubmitting;
+    case "reconciling":
+      return text.image.statusReconciling;
     case "running":
       return text.image.statusRunning;
     case "success":
@@ -3515,10 +3686,8 @@ function imageTaskSlots(item: any, text: ManagedMobileText) {
 function bestImageGroup(
   workspace: ReturnType<typeof useManagedNextChatStore.getState>["workspace"],
 ) {
-  return workspace?.models?.groups?.find((group) =>
-    (group.models || []).some((model) =>
-      isExecutableManagedImageModel(model, "create", workspace?.models),
-    ),
+  return workspace?.models?.groups?.find(
+    (group) => (group.models || []).length > 0,
   );
 }
 
@@ -3656,26 +3825,6 @@ function describeImageError(
     return context.text.errors.networkFailed;
   }
   return message || context.text.image.generateFailed;
-}
-
-function describeManagedImageValidation(
-  code:
-    | "model_not_executable"
-    | "operation_not_supported"
-    | "size_not_supported"
-    | "reference_not_supported",
-  model: string,
-  text: ManagedMobileText,
-) {
-  switch (code) {
-    case "size_not_supported":
-      return text.errors.imageSizeUnsupported(model);
-    case "operation_not_supported":
-    case "reference_not_supported":
-      return text.image.referenceModelUnsupported(model);
-    default:
-      return text.errors.imageModelUnavailable(model);
-  }
 }
 
 function makeImageFileName(prefix: string, id?: string, index = 0) {
@@ -4813,6 +4962,24 @@ function MobileLoading() {
         <span>{text.loading}</span>
       </div>
     </main>
+  );
+}
+
+function AndroidStartupShell() {
+  const text = useMobileText();
+  return (
+    <AndroidAppShell active="home" text={text}>
+      <section className={styles["home-hero"]} aria-busy="true">
+        <div>
+          <span>{text.navigation.home}</span>
+          <h1>{text.loading}</h1>
+        </div>
+      </section>
+      <section className={styles["home-summary-grid"]} aria-hidden="true">
+        <div className={styles["summary-card"]} />
+        <div className={styles["summary-card"]} />
+      </section>
+    </AndroidAppShell>
   );
 }
 
@@ -7917,14 +8084,12 @@ function ImagePromptLibrarySheet(props: {
 }) {
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
-  const [languageMode, setLanguageMode] =
-    useState<ImagePromptLanguageMode>("app");
   const [libraryItems, setLibraryItems] = useState<ImagePromptTemplate[]>(
     IMAGE_PROMPT_TEMPLATES,
   );
   const [libraryCategories, setLibraryCategories] = useState<
     ImagePromptCategory[]
-  >(() => fallbackImagePromptCategories(props.text));
+  >(() => mobilePromptCategories(props.text));
   const [favoriteIds, setFavoriteIds] = useState<string[]>(() =>
     readStoredJSON("jisudengchat-image-prompt-favorites-v1", [] as string[]),
   );
@@ -7964,17 +8129,7 @@ function ImagePromptLibrarySheet(props: {
         localPromptCatalogItemToImageTemplate(item),
       );
       if (normalized.length > 0) setLibraryItems(normalized);
-      const systemCategories = fallbackImagePromptCategories(props.text).filter(
-        (item) => ["all", "featured", "favorites", "recent"].includes(item.id),
-      );
-      const remoteOnly = catalog.categories
-        .map(localPromptCatalogCategoryToImageCategory)
-        .filter(
-          (item) =>
-            item.id &&
-            !systemCategories.some((system) => system.id === item.id),
-        );
-      setLibraryCategories([...systemCategories, ...remoteOnly]);
+      setLibraryCategories(mobilePromptCategories(props.text));
     }
     async function loadLibrary() {
       const accountId = String(props.accountId || "").trim();
@@ -8000,7 +8155,7 @@ function ImagePromptLibrarySheet(props: {
       } catch {
         if (alive && !String(props.accountId || "").trim()) {
           setLibraryItems(IMAGE_PROMPT_TEMPLATES);
-          setLibraryCategories(fallbackImagePromptCategories(props.text));
+          setLibraryCategories(mobilePromptCategories(props.text));
         }
       }
     }
@@ -8037,8 +8192,7 @@ function ImagePromptLibrarySheet(props: {
       (category === "featured" && item.featured) ||
       (category === "favorites" && favoriteIds.includes(item.id)) ||
       (category === "recent" && recentIds.includes(item.id)) ||
-      item.category === category ||
-      item.categories?.includes(category);
+      mobilePromptSemanticCategory(item) === category;
     if (!categoryMatch) return false;
     if (!queryValue) return true;
     return [
@@ -8067,7 +8221,7 @@ function ImagePromptLibrarySheet(props: {
   useEffect(() => {
     if (!props.open) return;
     setVisibleCount(24);
-  }, [category, languageMode, props.open, queryValue]);
+  }, [category, props.open, queryValue]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -8144,44 +8298,6 @@ function ImagePromptLibrarySheet(props: {
           placeholder={props.text.image.searchPrompts}
         />
       </label>
-      <div className={styles["prompt-language-row"]}>
-        {(
-          [
-            ["app", props.text.image.languageApp],
-            ["zh", "中文"],
-            [
-              "en",
-              localizedValue(
-                { cn: "英文", en: "English", jp: "英語", ko: "영어" },
-                props.text,
-              ),
-            ],
-            [
-              "jp",
-              localizedValue(
-                { cn: "日文", en: "Japanese", jp: "日本語", ko: "일본어" },
-                props.text,
-              ),
-            ],
-            [
-              "ko",
-              localizedValue(
-                { cn: "韩文", en: "Korean", jp: "韓国語", ko: "한국어" },
-                props.text,
-              ),
-            ],
-            ["both", props.text.image.languageBoth],
-          ] as Array<[ImagePromptLanguageMode, string]>
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            className={clsx({ [styles["active"]]: languageMode === id })}
-            onClick={() => setLanguageMode(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
       <div className={styles["library-list"]}>
         {visibleItems.map((item) => (
           <article key={item.id} className={styles["library-item"]}>
@@ -8197,7 +8313,7 @@ function ImagePromptLibrarySheet(props: {
               <strong>{localizedValue(item.title, props.text)}</strong>
               <small>{localizedValue(item.description, props.text)}</small>
               <p className={styles["image-prompt-text"]}>
-                {imagePromptText(item, props.text, languageMode)}
+                {imagePromptText(item, props.text)}
               </p>
               <em className={styles["library-meta"]}>
                 {[
@@ -8239,8 +8355,8 @@ function ImagePromptLibrarySheet(props: {
                   props.onCopy({
                     ...item,
                     prompt: {
-                      cn: imagePromptText(item, props.text, languageMode),
-                      en: imagePromptText(item, props.text, languageMode),
+                      cn: imagePromptText(item, props.text),
+                      en: imagePromptText(item, props.text),
                     },
                   });
                 }}
@@ -9021,11 +9137,15 @@ function ImageTaskActionSheet(props: {
   onOpen: () => void;
   onReuse: () => void;
   onRetry: () => void;
+  onCancel: () => void;
   onReport: () => void;
   onDelete: () => void;
 }) {
   if (!props.item) return null;
-  const canRetry = !["running", "queued"].includes(String(props.item.status));
+  const active = ["running", "submitting"].includes(String(props.item.status));
+  const canRetry = !["running", "submitting", "queued", "reconciling"].includes(
+    String(props.item.status),
+  );
   return (
     <div
       className={styles["sheet-mask"]}
@@ -9063,6 +9183,15 @@ function ImageTaskActionSheet(props: {
             <ReloadIcon />
             <span>{props.text.image.retryTask}</span>
           </button>
+          {active && (
+            <button
+              className={styles["danger-inline"]}
+              onClick={props.onCancel}
+            >
+              <CloseIcon />
+              <span>{props.text.image.cancelTask}</span>
+            </button>
+          )}
           <button onClick={props.onReport}>
             <CloudFailIcon />
             <span>{props.text.account.aiContentReport}</span>
@@ -12042,8 +12171,10 @@ function AndroidContentKit() {
   const [error, setError] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [showComposer, setShowComposer] = useState(false);
+  const [composerStep, setComposerStep] = useState<1 | 2 | 3>(1);
   const [showPlanEditor, setShowPlanEditor] = useState(false);
   const [showAdvancedFields, setShowAdvancedFields] = useState(false);
+  const [canvasPromptSheetOpen, setCanvasPromptSheetOpen] = useState(false);
   const [presetId, setPresetId] = useState("ecommerce");
   const [customShots, setCustomShots] = useState<ContentKitShotPlan[]>(() =>
     contentWorkbenchShotOptions()
@@ -12054,11 +12185,9 @@ function AndroidContentKit() {
     Record<string, ContentKitShotPlan[]>
   >({});
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const packageImportRef = useRef<HTMLInputElement | null>(null);
   const queueRef = useRef(new Set<string>());
   const recoveredQueuesRef = useRef(false);
-  const [batchEstimate, setBatchEstimate] = useState<ContentKitBatchEstimate>();
-  const [estimateLoading, setEstimateLoading] = useState(false);
-  const [estimateUnavailable, setEstimateUnavailable] = useState(false);
   const [assetTagFilter, setAssetTagFilter] = useState<
     "all" | ContentKitAssetTag
   >("all");
@@ -12099,16 +12228,6 @@ function AndroidContentKit() {
       Number(
         modelCapabilities?.max_queued_outputs ||
           CONTENT_KIT_MAX_OUTPUTS_PER_RUN,
-      ),
-    ),
-  );
-  const recommendedParallelism = Math.max(
-    1,
-    Math.min(
-      CONTENT_KIT_GLOBAL_CONCURRENCY,
-      Number(
-        modelCapabilities?.recommended_parallelism ||
-          CONTENT_KIT_GLOBAL_CONCURRENCY,
       ),
     ),
   );
@@ -12173,82 +12292,6 @@ function AndroidContentKit() {
     });
   }
 
-  useEffect(() => {
-    if (!managed.accessToken || !model || !selectedPlanCount) {
-      setBatchEstimate(undefined);
-      setEstimateLoading(false);
-      setEstimateUnavailable(false);
-      return;
-    }
-    let cancelled = false;
-    setBatchEstimate(undefined);
-    setEstimateUnavailable(false);
-    const timer = window.setTimeout(() => {
-      setEstimateLoading(true);
-      const sampleAssets = assetSpecs("content-kit-estimate");
-      const batches = Array.from(
-        {
-          length: Math.ceil(sampleAssets.length / maxOutputsPerRun),
-        },
-        (_, index) =>
-          sampleAssets.slice(
-            index * maxOutputsPerRun,
-            (index + 1) * maxOutputsPerRun,
-          ),
-      );
-      void Promise.all(
-        batches.map((items) =>
-          managedAuthenticatedJsonRequest<ContentKitBatchEstimate>(
-            "/api/v1/nextchat/image-studio/estimate-batch",
-            {
-              method: "POST",
-              body: JSON.stringify({
-                items: items.map((asset) => ({
-                  id: asset.id,
-                  template_id: "free-create",
-                  size: asset.size,
-                  model,
-                })),
-              }),
-            },
-          ),
-        ),
-      )
-        .then((estimates) => {
-          if (cancelled) return;
-          setBatchEstimate({
-            estimated_cost: estimates.reduce(
-              (total, estimate) => total + Number(estimate.estimated_cost || 0),
-              0,
-            ),
-            balance: Number(estimates[0]?.balance || 0),
-            sufficient: estimates.every((estimate) => estimate.sufficient),
-          });
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setBatchEstimate(undefined);
-            setEstimateUnavailable(true);
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setEstimateLoading(false);
-        });
-    }, 350);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-    // assetSpecs captures the current brief; the signature covers every factor used by this estimate.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    managed.accessToken,
-    maxOutputsPerRun,
-    model,
-    planSignature,
-    selectedPlanCount,
-  ]);
-
   async function attachReferences(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
     if (!input.files?.length) return;
@@ -12269,6 +12312,121 @@ function AndroidContentKit() {
       setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     } finally {
       input.value = "";
+    }
+  }
+
+  function addCanvasPromptToPlan(template: ImagePromptTemplate) {
+    const promptTemplate = localizedValue(template.prompt, text).trim();
+    if (!promptTemplate) return;
+    const shot = localizedContentKitShot(
+      {
+        ...contentWorkbenchCustomShot(clientRequestID("canvas-prompt-shot")),
+        scene: selectedPreset.id,
+        label: localizedValue(template.title, text) || "Prompt",
+        purpose: localizedValue(template.description, text) || "Canvas prompt",
+        promptTemplate,
+      },
+      text,
+    );
+    updateSelectedPlan((items) => [...items, shot]);
+    setCanvasPromptSheetOpen(false);
+    setShowPlanEditor(true);
+    setComposerStep(2);
+  }
+
+  async function dataUrlForPackageBlob(blob: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function exportProjectPackage(project: ManagedMobileContentKit) {
+    try {
+      const files: Array<{ path: string; blob: Blob }> = [];
+      for (const [index, image] of project.referenceImages.entries()) {
+        files.push({
+          path: contentWorkbenchPackageAssetPath(
+            "assets",
+            index,
+            "reference.png",
+          ),
+          blob: dataUrlToBlob(image),
+        });
+      }
+      for (const [index, asset] of project.assets.entries()) {
+        if (!asset.imageUrl) continue;
+        try {
+          const blob = asset.imageUrl.startsWith("data:")
+            ? dataUrlToBlob(asset.imageUrl)
+            : await fetch(asset.imageUrl).then((response) => {
+                if (!response.ok) throw new Error("output unavailable");
+                return response.blob();
+              });
+          files.push({
+            path: contentWorkbenchPackageAssetPath(
+              "outputs",
+              index,
+              asset.fileName || "output.png",
+            ),
+            blob,
+          });
+        } catch {
+          // A missing local output is retained as metadata; do not export a
+          // partial byte stream that would later look like a valid backup.
+        }
+      }
+      const archive = await exportContentWorkbenchPackage({ project, files });
+      await shareFile(archive, contentWorkbenchPackageFileName(project), {
+        title: project.productName,
+        mimeType: "application/zip",
+      });
+    } catch (err) {
+      setError(localizedMobileErrorMessage(err, text.errors.shareFailed));
+    }
+  }
+
+  async function importProjectPackage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || !activeAccountId) return;
+    try {
+      const restored = await importContentWorkbenchPackage(file);
+      const project = restored.project;
+      const assetPaths = [...restored.files.keys()].filter((path) =>
+        path.startsWith("assets/"),
+      );
+      const outputPaths = [...restored.files.keys()].filter((path) =>
+        path.startsWith("outputs/"),
+      );
+      const restoredReferences = await Promise.all(
+        assetPaths.map((path) =>
+          dataUrlForPackageBlob(restored.files.get(path)!),
+        ),
+      );
+      const outputUrls = await Promise.all(
+        outputPaths.map((path) =>
+          dataUrlForPackageBlob(restored.files.get(path)!),
+        ),
+      );
+      const projectId = mobileStore.createContentKit({
+        ...project,
+        referenceImages: restoredReferences,
+        assets: project.assets.map((asset, index) => ({
+          ...asset,
+          imageUrl: outputUrls[index] || asset.imageUrl,
+          status: outputUrls[index] ? "completed" : asset.status,
+          updatedAt: Date.now(),
+        })),
+        runs: project.runs || [],
+        copyStatus: project.copyStatus || "idle",
+      });
+      setSelectedProjectId(projectId);
+      setError("");
+    } catch (err) {
+      setError(localizedMobileErrorMessage(err, text.errors.saveFailed));
     }
   }
 
@@ -12324,6 +12482,15 @@ function AndroidContentKit() {
     project: ManagedMobileContentKit,
     asset: ManagedMobileContentKitAsset,
   ) {
+    const currentAccountId = String(
+      useManagedNextChatStore.getState().user?.id ||
+        useManagedNextChatStore.getState().session?.user_id ||
+        useManagedNextChatStore.getState().workspace?.user?.id ||
+        "",
+    );
+    // Local projects are account-scoped. A worker that survived a React
+    // transition must never submit an old account's saved request.
+    if (!currentAccountId || currentAccountId !== project.accountId) return;
     const projectImageGroupId = Number(project.imageGroupId);
     if (
       !Number.isSafeInteger(projectImageGroupId) ||
@@ -12345,32 +12512,10 @@ function AndroidContentKit() {
       modelMatches(item, project.model),
     );
     const exactModel = modelValue(projectModel);
-    const imageValidation = validateManagedImageRequest({
-      model: projectModel,
-      models: workspace?.models,
-      operation: project.referenceImages.length ? "edit" : "create",
-      size: asset.size,
-      referenceCount: project.referenceImages.length,
-    });
-    if (!imageValidation.valid) {
-      const message = describeManagedImageValidation(
-        imageValidation.code,
-        project.model,
-        text,
-      );
+    if (!exactModel) {
+      const message = text.errors.imageModelUnavailable(project.model);
       patchAsset(project.id, asset.id, { status: "failed", error: message });
       setError(message);
-      return;
-    }
-    if (
-      project.referenceImages.length &&
-      !imageModelSupportsReferences(project.model, projectImageModels)
-    ) {
-      patchAsset(project.id, asset.id, {
-        status: "failed",
-        error: text.platform.contentKit.referenceUnsupported,
-      });
-      setError(text.platform.contentKit.referenceUnsupported);
       return;
     }
     let activeManaged = useManagedNextChatStore.getState();
@@ -12717,19 +12862,29 @@ function AndroidContentKit() {
           });
           continue;
         }
-        await Promise.all(
-          queued.slice(0, recommendedParallelism).map(async (asset) => {
-            while (activeContentKitOutputs.size >= recommendedParallelism) {
-              await sleep(80);
-            }
-            activeContentKitOutputs.add(asset.id);
-            try {
-              await generateAsset(project, asset);
-            } finally {
-              activeContentKitOutputs.delete(asset.id);
-            }
-          }),
-        );
+        const asset = queued[0];
+        await withMobileImageGenerationLock(activeAccountId, async () => {
+          const latestProject = useManagedMobileAppStore
+            .getState()
+            .contentKits.find((item) => item.id === projectId);
+          const latestRun = latestProject?.runs?.find(
+            (item) => item.id === latestProject.activeRunId,
+          );
+          const latestAsset = latestProject?.assets.find(
+            (item) => item.id === asset.id,
+          );
+          if (
+            !latestProject ||
+            latestProject.accountId !== activeAccountId ||
+            !latestAsset ||
+            !["queued", "idle"].includes(latestAsset.status) ||
+            !latestRun ||
+            !["queued", "running"].includes(latestRun.status)
+          ) {
+            return;
+          }
+          await generateAsset(latestProject, latestAsset);
+        });
       }
     } finally {
       queueRef.current.delete(projectId);
@@ -12877,43 +13032,10 @@ function AndroidContentKit() {
     ) {
       return setError(text.platform.contentKit.noImageModel);
     }
-    const requestedOperation = references.length ? "edit" : "create";
-    const invalidShot = selectedPlanShots.find((shot) => {
-      const validation = validateManagedImageRequest({
-        model: selectedModel,
-        models: workspace?.models,
-        operation: requestedOperation,
-        size: shot.size,
-        referenceCount: references.length,
-      });
-      return !validation.valid;
-    });
-    if (invalidShot) {
-      const validation = validateManagedImageRequest({
-        model: selectedModel,
-        models: workspace?.models,
-        operation: requestedOperation,
-        size: invalidShot.size,
-        referenceCount: references.length,
-      });
-      return setError(
-        validation.valid
-          ? text.platform.contentKit.unsupportedSize
-          : describeManagedImageValidation(validation.code, model, text),
-      );
-    }
-    if (estimateLoading) {
-      return setError(text.platform.contentKit.estimateRequired);
-    }
-    if (batchEstimate && !batchEstimate.sufficient) {
-      return setError(text.platform.contentKit.insufficientBalance);
-    }
-    if (
-      references.length &&
-      !imageModelSupportsReferences(selectedModel || model)
-    ) {
-      return setError(text.platform.contentKit.referenceUnsupported);
-    }
+    // The selected image group owns model availability, size and billing. Do
+    // not reject a saved project merely because optional capability fields are
+    // incomplete; submit its immutable request and surface the platform's
+    // exact response on the affected asset.
     if (
       !selectedPlanCount ||
       selectedPlanCount > CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT
@@ -13013,13 +13135,17 @@ function AndroidContentKit() {
           mobileStore.updateContentKit(project.id, {
             assets: project.assets.map((asset) =>
               asset.status === "running"
-                ? { ...asset, status: "queued", updatedAt: Date.now() }
+                ? {
+                    ...asset,
+                    status: "reconciling",
+                    updatedAt: Date.now(),
+                  }
                 : asset,
             ),
           });
         }
         if (activeRun?.status === "running") {
-          updateRun(project.id, activeRun.id, "queued");
+          updateRun(project.id, activeRun.id, "paused");
         }
       });
     }
@@ -13036,6 +13162,8 @@ function AndroidContentKit() {
   function taskStatusLabel(status: ManagedMobileContentKitAsset["status"]) {
     if (status === "completed") return text.platform.contentKit.completed;
     if (status === "running") return text.platform.contentKit.generating;
+    if (status === "reconciling")
+      return text.platform.contentKit.billingPending;
     if (status === "failed") return text.platform.contentKit.failed;
     return text.platform.contentKit.waiting;
   }
@@ -13061,6 +13189,9 @@ function AndroidContentKit() {
       )
     ) {
       return text.platform.contentKit.generating;
+    }
+    if (statuses.some((status) => status === "reconciling")) {
+      return text.platform.contentKit.billingPending;
     }
     if (statuses.some((status) => status === "completed")) {
       return text.platform.contentKit.partial;
@@ -13314,6 +13445,13 @@ function AndroidContentKit() {
                 {text.platform.contentKit.newVersion}
               </button>
             )}
+          <button
+            type="button"
+            onClick={() => void exportProjectPackage(selectedProject)}
+          >
+            <ShareIcon />
+            <span>{text.common.export}</span>
+          </button>
         </section>
         <section className={styles["section"]}>
           <div className={styles["section-head"]}>
@@ -13616,10 +13754,26 @@ function AndroidContentKit() {
           <button
             type="button"
             className={styles["primary-action"]}
-            onClick={() => setShowComposer(true)}
+            onClick={() => {
+              setComposerStep(1);
+              setShowComposer(true);
+            }}
           >
             <AddIcon />
             {text.platform.contentKit.newProject}
+          </button>
+          <input
+            ref={packageImportRef}
+            type="file"
+            accept=".zip,application/zip"
+            hidden
+            onChange={importProjectPackage}
+          />
+          <button
+            type="button"
+            onClick={() => packageImportRef.current?.click()}
+          >
+            {text.common.open}
           </button>
         </section>
       )}
@@ -13627,7 +13781,25 @@ function AndroidContentKit() {
         <section
           className={clsx(styles["section"], styles["content-kit-form"])}
         >
-          <div className={styles["content-kit-fields"]}>
+          <div
+            className={styles["content-kit-steps"]}
+            aria-label="content-kit-steps"
+          >
+            {[1, 2, 3].map((step) => (
+              <button
+                key={step}
+                type="button"
+                className={clsx({ [styles["active"]]: composerStep === step })}
+                onClick={() => setComposerStep(step as 1 | 2 | 3)}
+              >
+                {step}
+              </button>
+            ))}
+          </div>
+          <div
+            className={styles["content-kit-fields"]}
+            hidden={composerStep !== 1}
+          >
             <label>
               <span>{text.platform.contentKit.projectName}</span>
               <input
@@ -13670,10 +13842,13 @@ function AndroidContentKit() {
                   </option>
                 ))}
               </select>
-              {selectedModel && <small>{modelValue(selectedModel)}</small>}
+              {selectedModel && <small>{modelLabel(selectedModel)}</small>}
             </label>
           </div>
-          <div className={styles["content-kit-plan-picker"]}>
+          <div
+            className={styles["content-kit-plan-picker"]}
+            hidden={composerStep !== 2}
+          >
             <span>{text.platform.contentKit.outputPlan}</span>
             <div>
               {presetOptions.map((preset) => {
@@ -13704,6 +13879,7 @@ function AndroidContentKit() {
           <button
             type="button"
             className={styles["content-kit-more-settings"]}
+            hidden={composerStep !== 2}
             aria-expanded={showPlanEditor}
             onClick={() => setShowPlanEditor((value) => !value)}
           >
@@ -13711,7 +13887,7 @@ function AndroidContentKit() {
               ? text.platform.contentKit.hidePlanEditor
               : text.platform.contentKit.editPlan}
           </button>
-          {showPlanEditor && (
+          {composerStep === 2 && showPlanEditor && (
             <div className={styles["content-kit-custom-plan"]}>
               {selectedPlanShots.map((shot) => (
                 <div
@@ -13844,6 +14020,25 @@ function AndroidContentKit() {
                       }
                     />
                   </label>
+                  <label>
+                    <span>{text.platform.contentKit.shotPurpose}</span>
+                    <textarea
+                      aria-label={`${shot.label} prompt`}
+                      value={shot.promptTemplate}
+                      onChange={(event) =>
+                        updateSelectedPlan((items) =>
+                          items.map((item) =>
+                            item.id === shot.id
+                              ? {
+                                  ...item,
+                                  promptTemplate: event.currentTarget.value,
+                                }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
                 </div>
               ))}
               <div className={styles["content-kit-add-shots"]}>
@@ -13886,6 +14081,7 @@ function AndroidContentKit() {
           <button
             type="button"
             className={styles["content-kit-more-settings"]}
+            hidden={composerStep !== 2}
             aria-expanded={showAdvancedFields}
             onClick={() => setShowAdvancedFields((value) => !value)}
           >
@@ -13893,7 +14089,7 @@ function AndroidContentKit() {
               ? text.platform.contentKit.hideMoreSettings
               : text.platform.contentKit.moreSettings}
           </button>
-          {showAdvancedFields && (
+          {composerStep === 2 && showAdvancedFields && (
             <>
               <div className={styles["content-kit-fields"]}>
                 <label>
@@ -14026,6 +14222,7 @@ function AndroidContentKit() {
           <button
             type="button"
             aria-label="content-kit-add-reference"
+            hidden={composerStep !== 1}
             disabled={!referenceLimit}
             onClick={() => fileRef.current?.click()}
           >
@@ -14033,36 +14230,43 @@ function AndroidContentKit() {
             {references.length ? ` (${references.length})` : ""}
           </button>
           {references.length > 0 && (
-            <div className={styles["content-kit-references"]}>
+            <div
+              className={styles["content-kit-references"]}
+              hidden={composerStep !== 1}
+            >
               {references.map((image, index) => (
                 <img key={`${index}-${image.slice(-12)}`} src={image} alt="" />
               ))}
             </div>
           )}
           {error && <div className={styles["form-error"]}>{error}</div>}
-          <div className={styles["content-kit-preflight"]}>
+          <button
+            type="button"
+            hidden={composerStep !== 1}
+            onClick={() => setCanvasPromptSheetOpen(true)}
+          >
+            Canvas
+          </button>
+          <div
+            className={styles["content-kit-preflight"]}
+            hidden={composerStep !== 3}
+          >
             <div>
               <span>
                 {text.platform.contentKit.plannedImages(selectedPlanCount)}
               </span>
-              <small>{model || text.platform.contentKit.noImageModel}</small>
+              <small>
+                {selectedModel
+                  ? modelLabel(selectedModel)
+                  : text.platform.contentKit.noImageModel}
+              </small>
             </div>
-            {estimateLoading ? (
-              <small>{text.platform.contentKit.estimateLoading}</small>
-            ) : batchEstimate ? (
-              <small
-                className={clsx({
-                  [styles["insufficient"]]: !batchEstimate.sufficient,
-                })}
-              >{`${text.platform.contentKit.estimatedCost} ${batchEstimate.estimated_cost} · ${text.platform.contentKit.availableBalance} ${batchEstimate.balance}`}</small>
-            ) : estimateUnavailable ? (
-              <small>{text.platform.contentKit.estimateUnavailable}</small>
-            ) : (
-              <small>{text.platform.contentKit.estimateLoading}</small>
-            )}
           </div>
           {referenceLimit > 0 && (
-            <small className={styles["content-kit-reference-limit"]}>
+            <small
+              className={styles["content-kit-reference-limit"]}
+              hidden={composerStep !== 1}
+            >
               {text.platform.contentKit.referenceLimit(referenceLimit)}
             </small>
           )}
@@ -14070,14 +14274,29 @@ function AndroidContentKit() {
             type="button"
             className={styles["primary-action"]}
             aria-label="content-kit-generate"
-            disabled={
-              estimateLoading ||
-              (batchEstimate ? !batchEstimate.sufficient : false)
-            }
+            hidden={composerStep !== 3}
             onClick={() => void createProject()}
           >
             {text.platform.contentKit.create}
           </button>
+          <div className={styles["content-kit-actions"]}>
+            {composerStep > 1 && (
+              <button
+                type="button"
+                onClick={() => setComposerStep((composerStep - 1) as 1 | 2 | 3)}
+              >
+                {text.common.back}
+              </button>
+            )}
+            {composerStep < 3 && (
+              <button
+                type="button"
+                onClick={() => setComposerStep((composerStep + 1) as 1 | 2 | 3)}
+              >
+                {text.common.confirm}
+              </button>
+            )}
+          </div>
         </section>
       )}
       <section className={styles["section"]}>
@@ -14126,6 +14345,18 @@ function AndroidContentKit() {
           })}
         </div>
       </section>
+      <ImagePromptLibrarySheet
+        open={canvasPromptSheetOpen}
+        text={text}
+        currentModel={model}
+        accountId={activeAccountId}
+        backendBaseUrl={managed.backendBaseUrl}
+        accessToken={managed.accessToken}
+        onClose={() => setCanvasPromptSheetOpen(false)}
+        onApply={addCanvasPromptToPlan}
+        onAdapt={addCanvasPromptToPlan}
+        onCopy={() => undefined}
+      />
     </AndroidAppShell>
   );
 }
@@ -14145,6 +14376,132 @@ const DEFAULT_VIDEO_STUDIO_PREFERENCES = {
   generateAudio: false,
   watermark: false,
 };
+
+type VideoStudioPreferences = typeof DEFAULT_VIDEO_STUDIO_PREFERENCES;
+
+type ResolvedVideoStudioSelection = {
+  preferences: VideoStudioPreferences;
+  group?: ManagedWorkspaceGroup;
+  model?: ManagedWorkspaceModel;
+  capabilities?: ReturnType<typeof managedVideoCapabilities>;
+  models: ManagedWorkspaceModel[];
+  resolutions: string[];
+  ratios: string[];
+  durations: number[];
+};
+
+function resolveVideoStudioSelection(
+  groups: ManagedWorkspaceGroup[],
+  preferences: VideoStudioPreferences,
+): ResolvedVideoStudioSelection {
+  const group =
+    groups.find((item) => item.id === Number(preferences.groupId)) || groups[0];
+  const models = managedVideoModels(group);
+  const model =
+    models.find((item) => modelMatches(item, preferences.model)) || models[0];
+  const capabilities = managedVideoCapabilities(model, group);
+  const resolutions =
+    capabilities?.resolutions ||
+    capabilities?.supported_resolutions ||
+    DEFAULT_VIDEO_RESOLUTIONS;
+  const ratios =
+    capabilities?.ratios ||
+    capabilities?.supported_ratios ||
+    DEFAULT_VIDEO_RATIOS;
+  const durations =
+    capabilities?.durations ||
+    capabilities?.supported_durations ||
+    DEFAULT_VIDEO_DURATIONS;
+  return {
+    preferences: {
+      ...preferences,
+      groupId: group?.id || 0,
+      model: modelValue(model),
+      resolution: resolutions.includes(preferences.resolution)
+        ? preferences.resolution
+        : resolutions[0] || DEFAULT_VIDEO_RESOLUTIONS[0],
+      ratio: ratios.includes(preferences.ratio)
+        ? preferences.ratio
+        : ratios[0] || DEFAULT_VIDEO_RATIOS[0],
+      duration: durations.includes(Number(preferences.duration))
+        ? Number(preferences.duration)
+        : durations[0] || DEFAULT_VIDEO_DURATIONS[0],
+      generateAudio: Boolean(
+        capabilities?.generate_audio && preferences.generateAudio,
+      ),
+      watermark: Boolean(capabilities?.watermark && preferences.watermark),
+    },
+    group,
+    model,
+    capabilities,
+    models,
+    resolutions,
+    ratios,
+    durations,
+  };
+}
+
+type MobileVideoWorkbenchBoundaryProps = {
+  children: ReactNode;
+  title: string;
+  retry: string;
+  diagnostic: {
+    groupIds: number[];
+    modelIds: string[];
+    selectedGroupId: number;
+    selectedModel: string;
+    hasCapabilities: boolean;
+    lastAction: string;
+  };
+  onRecover: () => void;
+};
+
+class MobileVideoWorkbenchBoundary extends Component<
+  MobileVideoWorkbenchBoundaryProps,
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  componentDidCatch(error: Error, _info: ErrorInfo) {
+    try {
+      const safeDiagnostic = JSON.stringify({
+        at: new Date().toISOString(),
+        type: "mobile_video_workbench",
+        error: error.name || "Error",
+        ...this.props.diagnostic,
+      });
+      const key = accountStorageKey(CRASH_LOG_STORAGE_KEY);
+      const previous = localStorage.getItem(key) || "";
+      localStorage.setItem(
+        key,
+        [safeDiagnostic, previous].filter(Boolean).join("\n").slice(0, 6000),
+      );
+    } catch {
+      // Diagnostic persistence must never make an already recoverable view fail.
+    }
+    this.setState({ failed: true });
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className={styles["image-routing-hint"]} role="alert">
+        <div>
+          <strong>{this.props.title}</strong>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            this.setState({ failed: false });
+            this.props.onRecover();
+          }}
+        >
+          {this.props.retry}
+        </button>
+      </div>
+    );
+  }
+}
 
 function videoStudioCopy() {
   const locale = getManagedMobileLocale();
@@ -14621,6 +14978,10 @@ function localPromptCatalogItemToVideoPrompt(
   };
 }
 
+const DEFAULT_VIDEO_RESOLUTIONS = ["720p"];
+const DEFAULT_VIDEO_RATIOS = ["16:9"];
+const DEFAULT_VIDEO_DURATIONS = [8];
+
 function AndroidVideoStudio() {
   const managed = useManagedNextChatStore();
   const mobileStore = useManagedMobileAppStore();
@@ -14642,6 +15003,8 @@ function AndroidVideoStudio() {
   >("idle");
   const [serverBootstrapFailure, setServerBootstrapFailure] =
     useState<MobileVideoBootstrapFailure | null>(null);
+  const [lastVideoSelectionAction, setLastVideoSelectionAction] =
+    useState("initial");
   const serverBootstrapLoaded = serverBootstrapState === "ready";
   const serverBootstrapLoading = serverBootstrapState === "loading";
   const loadServerCapabilities = useCallback(async () => {
@@ -14709,25 +15072,42 @@ function AndroidVideoStudio() {
         unavailableVideoDiagnostic.code,
       )}`
     : copy.groupHint;
-  const preferredGroup = groups.find(
-    (group) => group.id === Number(preferences.groupId),
+  const videoSelection = useMemo(
+    () => resolveVideoStudioSelection(groups, preferences),
+    [groups, preferences],
   );
-  const selectedGroup = preferredGroup || groups[0];
-  const videoModels = managedVideoModels(selectedGroup);
-  const fallbackModel = videoModels[0];
-  const selectedModel =
-    videoModels.find((model) => modelMatches(model, preferences.model)) ||
-    fallbackModel;
-  const capabilities = managedVideoCapabilities(selectedModel, selectedGroup);
-  const resolutions: string[] =
-    capabilities?.resolutions || capabilities?.supported_resolutions || [];
-  const ratios: string[] =
-    capabilities?.ratios || capabilities?.supported_ratios || [];
-  const durations: number[] =
-    capabilities?.durations || capabilities?.supported_durations || [];
-  const resolutionOptionsKey = resolutions.join(",");
-  const ratioOptionsKey = ratios.join(",");
-  const durationOptionsKey = durations.join(",");
+  const selectedPreferences = videoSelection.preferences;
+  const selectedGroup = videoSelection.group;
+  const videoModels = videoSelection.models;
+  const selectedModel = videoSelection.model;
+  const capabilities = videoSelection.capabilities;
+  const resolutions = videoSelection.resolutions;
+  const ratios = videoSelection.ratios;
+  const durations = videoSelection.durations;
+  const selectionOptionsKey = [
+    selectedGroup?.id || 0,
+    modelValue(selectedModel),
+    resolutions.join(","),
+    ratios.join(","),
+    durations.join(","),
+  ].join("|");
+
+  function updateVideoSelection(
+    patch: Partial<VideoStudioPreferences>,
+    resetModel = false,
+  ) {
+    setLastVideoSelectionAction(
+      Object.keys(patch).sort().join(",") || "selection",
+    );
+    setPreferences(
+      (current) =>
+        resolveVideoStudioSelection(groups, {
+          ...current,
+          ...patch,
+          ...(resetModel ? { model: "" } : {}),
+        }).preferences,
+    );
+  }
   const [prompt, setPrompt] = useState("");
   const [scriptRunning, setScriptRunning] = useState(false);
   const [references, setReferences] = useState<string[]>([]);
@@ -15006,30 +15386,12 @@ function AndroidVideoStudio() {
   }, [videoPromptCategory, videoPromptQuery, videoPrompts]);
 
   useEffect(() => {
-    const next = {
-      ...preferences,
-      groupId: selectedGroup?.id || 0,
-      model: modelValue(selectedModel),
-      resolution: resolutions.includes(preferences.resolution)
-        ? preferences.resolution
-        : resolutions[0],
-      ratio: ratios.includes(preferences.ratio) ? preferences.ratio : ratios[0],
-      duration: durations.includes(Number(preferences.duration))
-        ? Number(preferences.duration)
-        : durations[0],
-    };
-    setPreferences(next);
+    const next = selectedPreferences;
+    if (JSON.stringify(next) !== JSON.stringify(preferences)) {
+      setPreferences(next);
+    }
     writeStoredJSON(preferenceKey, next);
-    // The dependency list intentionally follows server capability changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    preferenceKey,
-    selectedGroup?.id,
-    selectedModel?.id,
-    resolutionOptionsKey,
-    ratioOptionsKey,
-    durationOptionsKey,
-  ]);
+  }, [preferenceKey, preferences, selectedPreferences, selectionOptionsKey]);
 
   function clearSelectedReferences() {
     referenceObjectURLsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -15323,7 +15685,12 @@ function AndroidVideoStudio() {
   }
 
   async function runVideo() {
-    if (!selectedGroup || !selectedModel || !capabilities) {
+    const submission = resolveVideoStudioSelection(groups, preferences);
+    const submissionGroup = submission.group;
+    const submissionModel = submission.model;
+    const submissionPreferences = submission.preferences;
+    const submissionCapabilities = submission.capabilities;
+    if (!submissionGroup || !submissionModel) {
       setError(
         videoGroupSource === "unavailable"
           ? serverBootstrapLoading
@@ -15350,32 +15717,6 @@ function AndroidVideoStudio() {
       return;
     }
 
-    const referenceCounts = Object.values(referenceAssetKinds).reduce(
-      (counts, kind) => {
-        counts[kind] = (counts[kind] || 0) + 1;
-        return counts;
-      },
-      {} as Record<LocalMaterialKind, number>,
-    );
-    const videoValidation = validateManagedVideoRequest({
-      model: selectedModel,
-      models:
-        videoGroupSource === "workspace"
-          ? managed.workspace?.workspaces?.video?.models
-          : undefined,
-      resolution: preferences.resolution,
-      ratio: preferences.ratio,
-      duration: Number(preferences.duration),
-      referenceAssetCount: referenceAssetIDs.length,
-      referenceImageCount: referenceCounts.image || 0,
-      referenceVideoCount: referenceCounts.video || 0,
-      referenceAudioCount: referenceCounts.audio || 0,
-    });
-    if (!videoValidation.valid) {
-      setError(copy.unsupported);
-      return;
-    }
-
     try {
       let activeManaged = useManagedNextChatStore.getState();
       if (shouldRefreshManagedSession(activeManaged.videoSession)) {
@@ -15389,10 +15730,10 @@ function AndroidVideoStudio() {
         throw new Error(copy.capabilitiesUnavailable);
       }
       if (
-        activeVideoSession.group_id !== selectedGroup.id ||
-        currentVideoGroupID(activeManaged.workspace) !== selectedGroup.id
+        activeVideoSession.group_id !== submissionGroup.id ||
+        currentVideoGroupID(activeManaged.workspace) !== submissionGroup.id
       ) {
-        await managed.switchVideoGroup(selectedGroup.id);
+        await managed.switchVideoGroup(submissionGroup.id);
         activeManaged = useManagedNextChatStore.getState();
       }
       if (
@@ -15400,7 +15741,7 @@ function AndroidVideoStudio() {
           {
             video: activeManaged.videoSession || undefined,
           },
-          selectedGroup.id,
+          submissionGroup.id,
         )
       ) {
         throw new Error(copy.capabilitiesUnavailable);
@@ -15430,18 +15771,22 @@ function AndroidVideoStudio() {
           "X-Request-ID": requestID,
         },
         body: JSON.stringify({
-          group_id: Number(selectedGroup.id),
-          model: modelValue(selectedModel),
+          group_id: Number(submissionGroup.id),
+          model: modelValue(submissionModel),
           purpose: "video",
           prompt: prompt.trim(),
-          resolution: preferences.resolution,
-          ratio: preferences.ratio,
-          duration_seconds: Number(preferences.duration),
+          resolution: submissionPreferences.resolution,
+          ratio: submissionPreferences.ratio,
+          duration_seconds: Number(submissionPreferences.duration),
           reference_asset_ids: referenceAssetIDs,
           generate_audio: Boolean(
-            capabilities.generate_audio && preferences.generateAudio,
+            submissionCapabilities?.generate_audio &&
+              submissionPreferences.generateAudio,
           ),
-          watermark: Boolean(capabilities.watermark && preferences.watermark),
+          watermark: Boolean(
+            submissionCapabilities?.watermark &&
+              submissionPreferences.watermark,
+          ),
           client_request_id: requestID,
         }),
         signal: controller.signal,
@@ -15613,474 +15958,481 @@ function AndroidVideoStudio() {
   const noCapability =
     !selectedGroup ||
     !selectedModel ||
-    !capabilities ||
     resolutions.length === 0 ||
     ratios.length === 0 ||
     durations.length === 0;
   return (
-    <AndroidAppShell active="create" text={text}>
-      <header className={styles["app-header"]}>
-        <div>
-          <span>{selectedGroup?.name || copy.video}</span>
-          <h1>{copy.title}</h1>
-        </div>
-        <IconButton
-          label={copy.refresh}
-          disabled={serverBootstrapLoading}
-          onClick={() => {
-            void Promise.all([managed.bootstrap(), loadServerCapabilities()]);
-          }}
-        >
-          <ReloadIcon />
-        </IconButton>
-      </header>
-      <section className={styles["image-panel"]}>
-        {videoGroupSource === "workspace" && (
-          <div className={styles["image-routing-hint"]}>
-            <div>
-              <strong>{copy.compatibilityTitle}</strong>
-              <span>
-                {serverBootstrapFailure
-                  ? bootstrapFailureCopy.hint
-                  : copy.compatibilityHint}
-              </span>
-            </div>
+    <MobileVideoWorkbenchBoundary
+      title={copy.capabilitiesUnavailable}
+      retry={copy.retryCapabilities}
+      diagnostic={{
+        groupIds: groups.map((group) => Number(group.id)),
+        modelIds: groups.flatMap((group) =>
+          managedVideoModels(group).map((model) => modelValue(model)),
+        ),
+        selectedGroupId: Number(selectedGroup?.id || 0),
+        selectedModel: modelValue(selectedModel),
+        hasCapabilities: Boolean(capabilities),
+        lastAction: lastVideoSelectionAction,
+      }}
+      onRecover={() => {
+        void Promise.all([managed.bootstrap(), loadServerCapabilities()]);
+      }}
+    >
+      <AndroidAppShell active="create" text={text}>
+        <header className={styles["app-header"]}>
+          <div>
+            <span>{selectedGroup?.name || copy.video}</span>
+            <h1>{copy.title}</h1>
           </div>
-        )}
-        {videoGroupSource === "unavailable" && (
-          <div className={styles["image-routing-hint"]}>
-            <div>
-              <strong>
-                {serverBootstrapLoading
-                  ? copy.loadingCapabilities
-                  : serverBootstrapFailure
-                  ? bootstrapFailureCopy.title
-                  : copy.capabilitiesUnavailable}
-              </strong>
-              <span>
-                {serverBootstrapFailure
-                  ? bootstrapFailureCopy.hint
-                  : copy.capabilitiesUnavailableHint}
-              </span>
-            </div>
-            {!serverBootstrapLoading && (
-              <button
-                type="button"
-                onClick={() => void loadServerCapabilities()}
-              >
-                {copy.retryCapabilities}
-              </button>
-            )}
-          </div>
-        )}
-        {serverCheckedWithoutVideo && (
-          <div className={styles["image-routing-hint"]}>
-            <div>
-              <strong>{copy.serverCheckedNoVideo}</strong>
-              <span>{serverUnavailableHint}</span>
-            </div>
-          </div>
-        )}
-        {noCapability &&
-          videoGroupSource !== "unavailable" &&
-          !serverCheckedWithoutVideo && (
+          <IconButton
+            label={copy.refresh}
+            disabled={serverBootstrapLoading}
+            onClick={() => {
+              void Promise.all([managed.bootstrap(), loadServerCapabilities()]);
+            }}
+          >
+            <ReloadIcon />
+          </IconButton>
+        </header>
+        <section className={styles["image-panel"]}>
+          {videoGroupSource === "workspace" && (
             <div className={styles["image-routing-hint"]}>
               <div>
-                <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
-                <span>{copy.groupHint}</span>
+                <strong>{copy.compatibilityTitle}</strong>
+                <span>
+                  {serverBootstrapFailure
+                    ? bootstrapFailureCopy.hint
+                    : copy.compatibilityHint}
+                </span>
               </div>
             </div>
           )}
-        <div className={styles["form-grid"]}>
-          <label>
-            <span>{copy.group}</span>
-            <select
-              value={String(selectedGroup?.id || "")}
-              onChange={(event) => {
-                const group = groups.find(
-                  (item) => String(item.id) === event.currentTarget.value,
-                );
-                setPreferences((current) => ({
-                  ...current,
-                  groupId: group?.id || 0,
-                  model: "",
-                }));
-              }}
-              disabled={!groups.length}
-            >
-              {groups.length ? (
-                groups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name}
-                  </option>
-                ))
-              ) : (
-                <option value="">{copy.noGroup}</option>
+          {videoGroupSource === "unavailable" && (
+            <div className={styles["image-routing-hint"]}>
+              <div>
+                <strong>
+                  {serverBootstrapLoading
+                    ? copy.loadingCapabilities
+                    : serverBootstrapFailure
+                    ? bootstrapFailureCopy.title
+                    : copy.capabilitiesUnavailable}
+                </strong>
+                <span>
+                  {serverBootstrapFailure
+                    ? bootstrapFailureCopy.hint
+                    : copy.capabilitiesUnavailableHint}
+                </span>
+              </div>
+              {!serverBootstrapLoading && (
+                <button
+                  type="button"
+                  onClick={() => void loadServerCapabilities()}
+                >
+                  {copy.retryCapabilities}
+                </button>
               )}
-            </select>
-          </label>
-          <label>
-            <span>{copy.model}</span>
-            <select
-              value={modelValue(selectedModel)}
-              onChange={(event) =>
-                setPreferences((current) => ({
-                  ...current,
-                  model: event.currentTarget.value,
-                }))
-              }
-              disabled={!videoModels.length}
-            >
-              {videoModels.length ? (
-                videoModels.map((model) => (
-                  <option key={modelValue(model)} value={modelValue(model)}>
-                    {modelLabel(model)}
-                  </option>
-                ))
-              ) : (
-                <option value="">{copy.noModel}</option>
-              )}
-            </select>
-          </label>
-          <label>
-            <span>{copy.resolution}</span>
-            <select
-              value={String(preferences.resolution)}
-              onChange={(event) =>
-                setPreferences((current) => ({
-                  ...current,
-                  resolution: event.currentTarget.value,
-                }))
-              }
-              disabled={noCapability}
-            >
-              {resolutions.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>{copy.ratio}</span>
-            <select
-              value={String(preferences.ratio)}
-              onChange={(event) =>
-                setPreferences((current) => ({
-                  ...current,
-                  ratio: event.currentTarget.value,
-                }))
-              }
-              disabled={noCapability}
-            >
-              {ratios.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>{copy.duration}</span>
-            <select
-              value={String(preferences.duration)}
-              onChange={(event) =>
-                setPreferences((current) => ({
-                  ...current,
-                  duration: Number(event.currentTarget.value),
-                }))
-              }
-              disabled={noCapability}
-            >
-              {durations.map((value) => (
-                <option key={value} value={value}>
-                  {value === -1
-                    ? copy.smartDuration
-                    : `${value} ${copy.seconds}`}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <textarea
-          aria-label="video-prompt"
-          value={prompt}
-          onChange={(event) => setPrompt(event.currentTarget.value)}
-          onInput={(event) => setPrompt(event.currentTarget.value)}
-          placeholder={copy.placeholder}
-          disabled={noCapability}
-        />
-        <div className={styles["video-script-helper"]}>
-          <span>
-            <small>{copy.scriptModel}</small>
-            <strong>
-              {scriptSelection.model
-                ? `${groupNameByID(
-                    managed.workspace,
-                    scriptSelection.groupId,
-                    text,
-                  )} · ${scriptSelection.model}`
-                : copy.scriptNoModel}
-            </strong>
-            <em>{copy.scriptFollowing}</em>
-          </span>
-          <button
-            type="button"
-            onClick={() => void writeVideoPromptWithChatModel()}
-            disabled={!prompt.trim() || !scriptSelection.model || scriptRunning}
-          >
-            <PromptIcon />
-            {scriptRunning ? copy.scripting : copy.script}
-          </button>
-        </div>
-        {videoPrompts.length > 0 && (
-          <div
-            className={styles["video-prompt-library"]}
-            aria-label={copy.selectPrompt}
-          >
-            <span>{copy.selectPrompt}</span>
-            <div className={styles["video-prompt-filters"]}>
+            </div>
+          )}
+          {serverCheckedWithoutVideo && (
+            <div className={styles["image-routing-hint"]}>
+              <div>
+                <strong>{copy.serverCheckedNoVideo}</strong>
+                <span>{serverUnavailableHint}</span>
+              </div>
+            </div>
+          )}
+          {noCapability &&
+            videoGroupSource !== "unavailable" &&
+            !serverCheckedWithoutVideo && (
+              <div className={styles["image-routing-hint"]}>
+                <div>
+                  <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
+                  <span>{copy.groupHint}</span>
+                </div>
+              </div>
+            )}
+          <div className={styles["form-grid"]}>
+            <label>
+              <span>{copy.group}</span>
               <select
-                aria-label={copy.selectPrompt}
-                value={videoPromptCategory}
+                value={String(selectedGroup?.id || "")}
                 onChange={(event) =>
-                  setVideoPromptCategory(event.currentTarget.value)
+                  updateVideoSelection(
+                    { groupId: Number(event.currentTarget.value) || 0 },
+                    true,
+                  )
                 }
+                disabled={!groups.length}
               >
-                {(videoPromptCategories.length
-                  ? videoPromptCategories
-                  : [{ id: "all", label: text.common.all }]
-                ).map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.id === "all" ? text.common.all : category.label}
+                {groups.length ? (
+                  groups.map((group) => (
+                    <option key={group.id} value={group.id}>
+                      {group.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">{copy.noGroup}</option>
+                )}
+              </select>
+            </label>
+            <label>
+              <span>{copy.model}</span>
+              <select
+                value={modelValue(selectedModel)}
+                onChange={(event) =>
+                  updateVideoSelection({ model: event.currentTarget.value })
+                }
+                disabled={!videoModels.length}
+              >
+                {videoModels.length ? (
+                  videoModels.map((model) => (
+                    <option key={modelValue(model)} value={modelValue(model)}>
+                      {modelLabel(model)}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">{copy.noModel}</option>
+                )}
+              </select>
+            </label>
+            <label>
+              <span>{copy.resolution}</span>
+              <select
+                value={String(selectedPreferences.resolution)}
+                onChange={(event) =>
+                  updateVideoSelection({
+                    resolution: event.currentTarget.value,
+                  })
+                }
+                disabled={noCapability}
+              >
+                {resolutions.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
                   </option>
                 ))}
               </select>
-              <input
-                type="search"
-                aria-label={copy.selectPrompt}
-                value={videoPromptQuery}
+            </label>
+            <label>
+              <span>{copy.ratio}</span>
+              <select
+                value={String(selectedPreferences.ratio)}
                 onChange={(event) =>
-                  setVideoPromptQuery(event.currentTarget.value)
+                  updateVideoSelection({ ratio: event.currentTarget.value })
                 }
-                placeholder={copy.selectPrompt}
-              />
-            </div>
-            <div className={styles["video-prompt-scroller"]}>
-              {visibleVideoPrompts.map((item) => {
-                return (
-                  <button
-                    type="button"
-                    key={String(item.id)}
-                    onClick={() => setPrompt(item.prompt_text || item.title)}
-                    disabled={noCapability}
-                  >
-                    {item.coverUrl && (
-                      <img src={item.coverUrl} alt="" loading="lazy" />
-                    )}
-                    <strong>{item.title}</strong>
-                    <small>{item.prompt_text || item.description}</small>
-                  </button>
-                );
-              })}
-              {!visibleVideoPrompts.length && <span>{text.common.empty}</span>}
-            </div>
+                disabled={noCapability}
+              >
+                {ratios.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>{copy.duration}</span>
+              <select
+                value={String(selectedPreferences.duration)}
+                onChange={(event) =>
+                  updateVideoSelection({
+                    duration: Number(event.currentTarget.value),
+                  })
+                }
+                disabled={noCapability}
+              >
+                {durations.map((value) => (
+                  <option key={value} value={value}>
+                    {value === -1
+                      ? copy.smartDuration
+                      : `${value} ${copy.seconds}`}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
-        )}
-        <div className={styles["library-action-row"]}>
-          <button
-            type="button"
-            onClick={() => referenceInputRef.current?.click()}
+          <textarea
+            aria-label="video-prompt"
+            value={prompt}
+            onChange={(event) => setPrompt(event.currentTarget.value)}
+            onInput={(event) => setPrompt(event.currentTarget.value)}
+            placeholder={copy.placeholder}
             disabled={noCapability}
-          >
-            <UploadIcon />
-            <span>{copy.reference}</span>
-            <strong>
-              {referenceAssetIDs.length
-                ? `${referenceAssetIDs.length}`
-                : copy.choose}
-            </strong>
-          </button>
-          <button
-            type="button"
-            onClick={() => setReferenceLibraryOpen((open) => !open)}
-            disabled={noCapability || referenceMaterialsLoading}
-            aria-expanded={referenceLibraryOpen}
-          >
-            <UploadIcon />
-            <span>{copy.materialLibrary}</span>
-            <strong>
-              {referenceMaterialsLoading
-                ? copy.materialLoading
-                : selectableReferenceMaterials.length}
-            </strong>
-          </button>
-          <button
-            type="button"
-            onClick={clearSelectedReferences}
-            disabled={!referenceAssetIDs.length}
-          >
-            <DeleteIcon />
-            <span>{copy.clearReferences}</span>
-            <strong>{referenceAssetIDs.length || ""}</strong>
-          </button>
-          <input
-            ref={referenceInputRef}
-            type="file"
-            accept="image/*,video/*,audio/*"
-            multiple
-            hidden
-            onChange={(event) => void chooseReferences(event)}
           />
-        </div>
-        {referenceLibraryOpen && (
-          <div
-            className={styles["video-reference-library"]}
-            aria-label={copy.materialLibrary}
-          >
-            {referenceMaterialsLoading ? (
-              <span>{copy.materialLoading}</span>
-            ) : selectableReferenceMaterials.length ? (
-              selectableReferenceMaterials.map((material) => {
-                const id = String(material.remoteId || "");
-                const selected = referenceAssetIDs.includes(id);
-                const kind = material.kind as "image" | "video" | "audio";
-                return (
-                  <button
-                    key={material.id}
-                    type="button"
-                    aria-pressed={selected}
-                    className={clsx({
-                      [styles["reference-selected"]]: selected,
-                    })}
-                    onClick={() => toggleReferenceMaterial(material)}
-                  >
-                    <UploadIcon />
-                    <span>
-                      <strong>{material.name}</strong>
-                      <small>{copy.materialKinds[kind]}</small>
-                    </span>
-                    <b>{selected ? "-" : "+"}</b>
-                  </button>
-                );
-              })
-            ) : (
-              <span>{copy.materialEmpty}</span>
-            )}
-          </div>
-        )}
-        <div className={styles["form-grid"]}>
-          <label className={styles["checkbox-row"]}>
-            <input
-              type="checkbox"
-              checked={Boolean(preferences.generateAudio)}
-              onChange={(event) =>
-                setPreferences((current) => ({
-                  ...current,
-                  generateAudio: event.currentTarget.checked,
-                }))
-              }
-              disabled={!capabilities?.generate_audio}
-            />
-            <span>{copy.audio}</span>
-          </label>
-          <label className={styles["checkbox-row"]}>
-            <input
-              type="checkbox"
-              checked={Boolean(preferences.watermark)}
-              onChange={(event) =>
-                setPreferences((current) => ({
-                  ...current,
-                  watermark: event.currentTarget.checked,
-                }))
-              }
-              disabled={!capabilities?.watermark}
-            />
-            <span>{copy.watermark}</span>
-          </label>
-        </div>
-        {error && <div className={styles["form-error"]}>{error}</div>}
-        {status === "running" && (
-          <div className={styles["content-kit-preflight"]}>
+          <div className={styles["video-script-helper"]}>
             <span>
-              {copy.generating} · {progress}%
+              <small>{copy.scriptModel}</small>
+              <strong>
+                {scriptSelection.model
+                  ? `${groupNameByID(
+                      managed.workspace,
+                      scriptSelection.groupId,
+                      text,
+                    )} · ${scriptSelection.model}`
+                  : copy.scriptNoModel}
+              </strong>
+              <em>{copy.scriptFollowing}</em>
             </span>
-            <button type="button" onClick={cancelVideo}>
-              {copy.cancel}
+            <button
+              type="button"
+              onClick={() => void writeVideoPromptWithChatModel()}
+              disabled={
+                !prompt.trim() || !scriptSelection.model || scriptRunning
+              }
+            >
+              <PromptIcon />
+              {scriptRunning ? copy.scripting : copy.script}
             </button>
           </div>
-        )}
-        {(status === "failed" || status === "cancelled") && taskID && (
-          <div className={styles["content-kit-preflight"]}>
-            <span>{error || copy.failed}</span>
-            <button type="button" onClick={() => void retryVideo()}>
-              {copy.retry}
-            </button>
-          </div>
-        )}
-        <button
-          type="button"
-          className={styles["primary-action"]}
-          disabled={noCapability || status === "running"}
-          onClick={() => void runVideo()}
-        >
-          <PlayIcon />
-          {status === "running" ? copy.generating : copy.generate}
-        </button>
-        {resultUrl && status === "completed" && (
-          <div className={styles["video-result-card"]}>
-            <video controls playsInline src={resultUrl} />
-            <div>
-              <strong>{copy.ready}</strong>
-              <button
-                type="button"
-                onClick={() => void downloadVideo(resultUrl, taskID)}
-              >
-                <DownloadIcon />
-                {copy.download}
-              </button>
-              <button type="button" onClick={() => void saveVideoAsAsset()}>
-                <UploadIcon />
-                {copy.saveAsset}
-              </button>
+          {videoPrompts.length > 0 && (
+            <div
+              className={styles["video-prompt-library"]}
+              aria-label={copy.selectPrompt}
+            >
+              <span>{copy.selectPrompt}</span>
+              <div className={styles["video-prompt-filters"]}>
+                <select
+                  aria-label={copy.selectPrompt}
+                  value={videoPromptCategory}
+                  onChange={(event) =>
+                    setVideoPromptCategory(event.currentTarget.value)
+                  }
+                >
+                  {(videoPromptCategories.length
+                    ? videoPromptCategories
+                    : [{ id: "all", label: text.common.all }]
+                  ).map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.id === "all" ? text.common.all : category.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="search"
+                  aria-label={copy.selectPrompt}
+                  value={videoPromptQuery}
+                  onChange={(event) =>
+                    setVideoPromptQuery(event.currentTarget.value)
+                  }
+                  placeholder={copy.selectPrompt}
+                />
+              </div>
+              <div className={styles["video-prompt-scroller"]}>
+                {visibleVideoPrompts.map((item) => {
+                  return (
+                    <button
+                      type="button"
+                      key={String(item.id)}
+                      onClick={() => setPrompt(item.prompt_text || item.title)}
+                      disabled={noCapability}
+                    >
+                      {item.coverUrl && (
+                        <img src={item.coverUrl} alt="" loading="lazy" />
+                      )}
+                      <strong>{item.title}</strong>
+                      <small>{item.prompt_text || item.description}</small>
+                    </button>
+                  );
+                })}
+                {!visibleVideoPrompts.length && (
+                  <span>{text.common.empty}</span>
+                )}
+              </div>
             </div>
+          )}
+          <div className={styles["library-action-row"]}>
+            <button
+              type="button"
+              onClick={() => referenceInputRef.current?.click()}
+              disabled={noCapability}
+            >
+              <UploadIcon />
+              <span>{copy.reference}</span>
+              <strong>
+                {referenceAssetIDs.length
+                  ? `${referenceAssetIDs.length}`
+                  : copy.choose}
+              </strong>
+            </button>
+            <button
+              type="button"
+              onClick={() => setReferenceLibraryOpen((open) => !open)}
+              disabled={noCapability || referenceMaterialsLoading}
+              aria-expanded={referenceLibraryOpen}
+            >
+              <UploadIcon />
+              <span>{copy.materialLibrary}</span>
+              <strong>
+                {referenceMaterialsLoading
+                  ? copy.materialLoading
+                  : selectableReferenceMaterials.length}
+              </strong>
+            </button>
+            <button
+              type="button"
+              onClick={clearSelectedReferences}
+              disabled={!referenceAssetIDs.length}
+            >
+              <DeleteIcon />
+              <span>{copy.clearReferences}</span>
+              <strong>{referenceAssetIDs.length || ""}</strong>
+            </button>
+            <input
+              ref={referenceInputRef}
+              type="file"
+              accept="image/*,video/*,audio/*"
+              multiple
+              hidden
+              onChange={(event) => void chooseReferences(event)}
+            />
           </div>
-        )}
-      </section>
-      <section className={styles["section"]}>
-        <div className={styles["section-head"]}>
-          <h2>{copy.history}</h2>
-          <span>{history.length}</span>
-        </div>
-        {history.length === 0 && (
-          <p className={styles["empty-copy"]}>{copy.emptyHistory}</p>
-        )}
-        <div className={styles["content-kit-project-list"]}>
-          {history.map((item) => (
-            <div className={styles["content-kit-project"]} key={item.id}>
-              <video muted playsInline src={item.url} />
+          {referenceLibraryOpen && (
+            <div
+              className={styles["video-reference-library"]}
+              aria-label={copy.materialLibrary}
+            >
+              {referenceMaterialsLoading ? (
+                <span>{copy.materialLoading}</span>
+              ) : selectableReferenceMaterials.length ? (
+                selectableReferenceMaterials.map((material) => {
+                  const id = String(material.remoteId || "");
+                  const selected = referenceAssetIDs.includes(id);
+                  const kind = material.kind as "image" | "video" | "audio";
+                  return (
+                    <button
+                      key={material.id}
+                      type="button"
+                      aria-pressed={selected}
+                      className={clsx({
+                        [styles["reference-selected"]]: selected,
+                      })}
+                      onClick={() => toggleReferenceMaterial(material)}
+                    >
+                      <UploadIcon />
+                      <span>
+                        <strong>{material.name}</strong>
+                        <small>{copy.materialKinds[kind]}</small>
+                      </span>
+                      <b>{selected ? "-" : "+"}</b>
+                    </button>
+                  );
+                })
+              ) : (
+                <span>{copy.materialEmpty}</span>
+              )}
+            </div>
+          )}
+          <div className={styles["form-grid"]}>
+            <label className={styles["checkbox-row"]}>
+              <input
+                type="checkbox"
+                checked={Boolean(selectedPreferences.generateAudio)}
+                onChange={(event) =>
+                  updateVideoSelection({
+                    generateAudio: event.currentTarget.checked,
+                  })
+                }
+                disabled={!capabilities?.generate_audio}
+              />
+              <span>{copy.audio}</span>
+            </label>
+            <label className={styles["checkbox-row"]}>
+              <input
+                type="checkbox"
+                checked={Boolean(selectedPreferences.watermark)}
+                onChange={(event) =>
+                  updateVideoSelection({
+                    watermark: event.currentTarget.checked,
+                  })
+                }
+                disabled={!capabilities?.watermark}
+              />
+              <span>{copy.watermark}</span>
+            </label>
+          </div>
+          {error && <div className={styles["form-error"]}>{error}</div>}
+          {status === "running" && (
+            <div className={styles["content-kit-preflight"]}>
               <span>
-                <strong>{item.prompt.slice(0, 50) || item.taskId}</strong>
-                <small>{new Date(item.createdAt).toLocaleString()}</small>
+                {copy.generating} · {progress}%
               </span>
-              <button
-                type="button"
-                onClick={() => void downloadVideo(item.url, item.taskId)}
-              >
-                <DownloadIcon />
-              </button>
-              <button
-                type="button"
-                aria-label={text.common.delete}
-                onClick={() => void removeHistoryItem(item)}
-              >
-                <DeleteIcon />
+              <button type="button" onClick={cancelVideo}>
+                {copy.cancel}
               </button>
             </div>
-          ))}
-        </div>
-      </section>
-    </AndroidAppShell>
+          )}
+          {(status === "failed" || status === "cancelled") && taskID && (
+            <div className={styles["content-kit-preflight"]}>
+              <span>{error || copy.failed}</span>
+              <button type="button" onClick={() => void retryVideo()}>
+                {copy.retry}
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            className={styles["primary-action"]}
+            disabled={noCapability || status === "running"}
+            onClick={() => void runVideo()}
+          >
+            <PlayIcon />
+            {status === "running" ? copy.generating : copy.generate}
+          </button>
+          {resultUrl && status === "completed" && (
+            <div className={styles["video-result-card"]}>
+              <video controls playsInline src={resultUrl} />
+              <div>
+                <strong>{copy.ready}</strong>
+                <button
+                  type="button"
+                  onClick={() => void downloadVideo(resultUrl, taskID)}
+                >
+                  <DownloadIcon />
+                  {copy.download}
+                </button>
+                <button type="button" onClick={() => void saveVideoAsAsset()}>
+                  <UploadIcon />
+                  {copy.saveAsset}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+        <section className={styles["section"]}>
+          <div className={styles["section-head"]}>
+            <h2>{copy.history}</h2>
+            <span>{history.length}</span>
+          </div>
+          {history.length === 0 && (
+            <p className={styles["empty-copy"]}>{copy.emptyHistory}</p>
+          )}
+          <div className={styles["content-kit-project-list"]}>
+            {history.map((item) => (
+              <div className={styles["content-kit-project"]} key={item.id}>
+                <video muted playsInline src={item.url} />
+                <span>
+                  <strong>{item.prompt.slice(0, 50) || item.taskId}</strong>
+                  <small>{new Date(item.createdAt).toLocaleString()}</small>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void downloadVideo(item.url, item.taskId)}
+                >
+                  <DownloadIcon />
+                </button>
+                <button
+                  type="button"
+                  aria-label={text.common.delete}
+                  onClick={() => void removeHistoryItem(item)}
+                >
+                  <DeleteIcon />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      </AndroidAppShell>
+    </MobileVideoWorkbenchBoundary>
   );
 }
 
@@ -16130,17 +16482,11 @@ function AndroidImageStudio() {
   const selectedImageModelInfo =
     imageModelOptions.find((model) => modelMatches(model, selectedModel)) ||
     fallbackModel;
-  const selectedReferenceLimit =
-    selectedImageModelInfo &&
-    imageModelSupportsReferences(selectedImageModelInfo)
-      ? managedImageReferenceLimit(selectedImageModelInfo)
-      : 0;
-  const imageOutputLimit = Math.max(
-    1,
-    Number(
-      selectedImageModelInfo?.image_capabilities?.max_outputs_per_job || 4,
-    ),
-  );
+  const selectedReferenceLimit = imageReferenceLimit(selectedImageModelInfo);
+  // The platform validates model-specific output counts. Keep one predictable
+  // mobile guard for accidental large batches instead of collapsing a valid
+  // user choice because optional model metadata is absent or stale.
+  const imageOutputLimit = 16;
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState(String(imagePrefs.size || "1024x1024"));
   const [quality, setQuality] = useState(String(imagePrefs.quality || "auto"));
@@ -16166,12 +16512,27 @@ function AndroidImageStudio() {
   const platformTaskRunIdRef = useRef("");
   const platformTaskPollRef = useRef<number | null>(null);
   const progressTimerRef = useRef<number | null>(null);
+  const queuedImageRunsRef = useRef(new Set<string>());
   const gallery = sdStore.draw.filter(
     (item: any) => item.status === "success" && imageResults(item).length > 0,
   );
   const activeTask = sdStore.draw.find(
-    (item: any) => item.status === "running",
+    (item: any) => item.status === "running" || item.status === "submitting",
   );
+  const queuedTasks = useMemo(
+    () =>
+      sdStore.draw.filter(
+        (item: any) =>
+          item?.queue_schema === 1 &&
+          ["queued", "submitting", "running", "reconciling"].includes(
+            String(item.status || ""),
+          ),
+      ),
+    [sdStore.draw],
+  );
+  const queuedTaskCount = queuedTasks.filter(
+    (item: any) => item.status === "queued",
+  ).length;
   const failedImageTaskIds = useMemo(
     () =>
       sdStore.draw
@@ -16456,29 +16817,62 @@ function AndroidImageStudio() {
   }
 
   async function runImageTask(overrides?: Partial<any>) {
+    const queuedTaskID = String(overrides?.queueTaskId || "").trim();
+    const persistedTask = queuedTaskID
+      ? useSdStore
+          .getState()
+          .draw.find((item: any) => String(item?.id) === queuedTaskID)
+      : undefined;
+    const persistedParams = persistedTask?.params || {};
     const promptText = String(
-      overrides?.prompt ?? promptRef.current?.value ?? prompt,
+      overrides?.prompt ??
+        persistedParams.prompt ??
+        promptRef.current?.value ??
+        prompt,
     ).trim();
-    let model = overrides?.model || selectedModel || modelValue(fallbackModel);
-    const taskGroupId = effectiveImageGroupId;
-    const taskSize = overrides?.size || size;
-    const taskQuality = overrides?.quality || quality;
-    const taskStyle = overrides?.style || style;
+    let model =
+      overrides?.model ||
+      persistedTask?.model ||
+      selectedModel ||
+      modelValue(fallbackModel);
+    const taskGroupId = Number(
+      overrides?.groupId ??
+        persistedTask?.group_id ??
+        effectiveImageGroupId ??
+        0,
+    );
+    const taskSize = overrides?.size || persistedParams.size || size;
+    const taskQuality =
+      overrides?.quality || persistedParams.quality || quality;
+    const taskStyle = overrides?.style || persistedParams.style || style;
     const taskCount = Math.max(
       1,
-      Math.min(imageOutputLimit, Number(overrides?.n || count || 1)),
+      Math.min(
+        imageOutputLimit,
+        Number(overrides?.n ?? persistedParams.n ?? count ?? 1),
+      ),
     );
     // Snapshot inputs once. A batch must not change from edit to generation if
     // the composer state is refreshed while one of its individual requests runs.
     const taskReferences = Array.isArray(
-      overrides?.referenceImages || references,
+      overrides?.referenceImages ??
+        persistedParams.referenceImages ??
+        references,
     )
-      ? [...(overrides?.referenceImages || references)]
+      ? [
+          ...(overrides?.referenceImages ??
+            persistedParams.referenceImages ??
+            references),
+        ]
       : [];
     const imageOperation = taskReferences.length
       ? "images.edits"
       : "images.generations";
 
+    if (!activeAccountId) {
+      setError(text.errors.loginRequired);
+      return;
+    }
     if (!promptText) {
       setError(text.errors.emptyPrompt);
       return;
@@ -16491,20 +16885,21 @@ function AndroidImageStudio() {
       setError(text.errors.loginRequired);
       return;
     }
-    if (imageModelOptions.length === 0) {
+    const taskImageModelOptions = imageModelsForGroup(workspace, taskGroupId);
+    if (taskImageModelOptions.length === 0) {
       setError(
         describeImageError("", {
           text,
           selectedModel: model,
-          imageModelCount: imageModelOptions.length,
-          hasImageGroup,
+          imageModelCount: taskImageModelOptions.length,
+          hasImageGroup: Boolean(taskGroupId),
         }),
       );
       return;
     }
 
     const requestedModel = model;
-    const modelInfo = imageModelOptions.find((item) =>
+    const modelInfo = taskImageModelOptions.find((item) =>
       modelMatches(item, requestedModel),
     );
     model = modelValue(modelInfo);
@@ -16513,37 +16908,28 @@ function AndroidImageStudio() {
         describeImageError("", {
           text,
           selectedModel: requestedModel,
-          imageModelCount: imageModelOptions.length,
-          hasImageGroup,
+          imageModelCount: taskImageModelOptions.length,
+          hasImageGroup: Boolean(taskGroupId),
         }),
       );
       return;
     }
-    const imageValidation = validateManagedImageRequest({
-      model: modelInfo,
-      models: workspace?.models,
-      operation: taskReferences.length ? "edit" : "create",
-      size: taskSize,
-      referenceCount: taskReferences.length,
-    });
-    if (!imageValidation.valid) {
-      setError(
-        describeManagedImageValidation(imageValidation.code, model, text),
-      );
-      return;
-    }
-
     const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
       image502ThenSuccess: false,
     }));
     const useLocalImageFixture = e2eFixture.image502ThenSuccess === true;
 
-    const id = `image-${Date.now()}`;
+    const id = queuedTaskID || `image-${Date.now()}`;
+    if (queuedImageRunsRef.current.has(id)) return;
     const createdAt = new Date().toLocaleString(text.dateLocale);
     const draft = {
       id,
       status: "queued",
       progress: 4,
+      queue_schema: 1,
+      account_id: activeAccountId,
+      group_id: taskGroupId,
+      client_request_id: id,
       model,
       model_name: modelInfo?.display_name || modelInfo?.name || model,
       params: {
@@ -16561,468 +16947,581 @@ function AndroidImageStudio() {
       created_at: createdAt,
     };
 
-    setError("");
-    sdStore.update((state) => {
-      state.draw = [draft, ...state.draw];
-      state.currentId += 1;
-    });
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    updateTask(id, { status: "running", progress: 12 });
-    startProgress(id);
-    const performanceTraceId = await startNativePerformanceTrace(
-      "image_generation",
-      {
-        operation: imageOperation === "images.edits" ? "edit" : "generate",
-        batch: taskCount,
-        references: Boolean(taskReferences.length),
-      },
-    ).catch(() => "");
-    let performanceOutcome = "success";
-
-    // Project the local image batch into the mobile task history. This is
-    // deliberately best-effort: the image gateway remains the source of
-    // truth for generation and billing, while the projection enables the
-    // dashboard to show progress and lets the user cancel remotely.
-    let projectedTask: MobileTask | null = null;
-    const projectedTaskPromise = (async () => {
-      try {
-        const client = await mobilePlatformClient();
-        const task = await client.tasks.create({
-          kind: "image",
-          operation: imageOperation,
-          client_request_id: id,
-          title: promptText.slice(0, 80),
-          title_zh: promptText.slice(0, 80),
-          model,
-          group_id: taskGroupId,
-          parameters: {
-            size: taskSize,
-            quality: taskQuality,
-            style: taskStyle,
-            n: taskCount,
-            reference_count: taskReferences.length,
-            local_task_id: id,
-          },
-          locale: text.dateLocale,
-        });
-        // Authentication may delay the optional projection until after the
-        // local request has finished. Do not attach a late task to a newer run.
-        if (abortRef.current !== controller) return task;
-        projectedTask = task;
-        platformTaskRef.current = task;
-        platformTaskRunIdRef.current = id;
-        updateTask(id, { platform_task_id: task.id });
-        await client.tasks.status(task.id, { status: "running", progress: 12 });
-        if (abortRef.current !== controller) return task;
-        platformTaskPollRef.current = window.setInterval(() => {
-          void mobilePlatformClient()
-            .then((nextClient) => nextClient.tasks.detail(task.id))
-            .then((remoteTask) => {
-              if (
-                remoteTask.status === "cancelled" &&
-                abortRef.current === controller
-              ) {
-                controller.abort();
-              }
-            })
-            .catch(() => undefined);
-        }, 2500);
-        return task;
-      } catch {
-        return null;
+    if (queuedTaskID) {
+      if (
+        !persistedTask ||
+        !["queued", "reconciling"].includes(String(persistedTask.status || ""))
+      ) {
+        return;
       }
-    })();
-
-    const endpoint =
-      imageOperation === "images.edits"
-        ? "/images/edits"
-        : "/images/generations";
-    const taskBackendBaseUrl = managed.backendBaseUrl;
-    const basePayload: Record<string, any> = {
-      model,
-      prompt: promptText,
-      size: taskSize,
-      response_format: "b64_json",
-    };
-    if (taskQuality !== "auto") basePayload.quality = taskQuality;
-    if (taskStyle !== "auto" && imageModelSupportsStyle(model)) {
-      basePayload.style = taskStyle;
-    }
-    if (mustDisableSenseNovaWatermark(model)) {
-      basePayload.watermark = false;
-    }
-    if (taskReferences.length) basePayload.input_fidelity = "high";
-
-    function buildImageRequest(requestIndex: number, imageApiKey: string) {
-      const payload: Record<string, any> = { ...basePayload, n: 1 };
-      const headers: Record<string, string> = {
-        Accept: "application/json",
-        Authorization: `Bearer ${imageApiKey}`,
-        "Idempotency-Key": `android-image-${id}-${requestIndex + 1}`,
-        "X-Request-ID": `android-image-${id}-${requestIndex + 1}`,
-      };
-      let body: BodyInit;
-      if (taskReferences.length) {
-        const formData = new FormData();
-        Object.entries(payload).forEach(([key, value]) => {
-          formData.append(key, String(value));
-        });
-        taskReferences.forEach((url: string, index: number) => {
-          formData.append(
-            "image",
-            dataUrlToBlob(url),
-            `reference-${index + 1}.png`,
-          );
-        });
-        body = formData;
-      } else {
-        headers["Content-Type"] = "application/json";
-        body = JSON.stringify(payload);
-      }
-      return { headers, body };
+    } else {
+      setError("");
+      sdStore.update((state) => {
+        state.draw = [draft, ...state.draw];
+        state.currentId += 1;
+      });
     }
 
-    const requestImageText = async (requestIndex: number) => {
-      let authAttempt = 0;
-      let lastError: unknown = null;
-      while (authAttempt <= 1) {
-        const latestManaged = useManagedNextChatStore.getState();
-        const imageSession = selectManagedImageSessionForGroup(
-          { image: latestManaged.imageSession || undefined },
-          taskGroupId || 0,
-        );
-        if (!imageSession) {
-          throw new Error(text.errors.switchGroupFailed);
-        }
-        const request = buildImageRequest(requestIndex, imageSession.api_key);
-        try {
-          const response = await managedGatewayRequestText(
-            taskBackendBaseUrl,
-            `/v1${endpoint}`,
-            {
-              method: "POST",
-              headers: request.headers,
-              body: request.body,
-              signal: controller.signal,
-            },
-            imageSession.api_key,
-            text,
-          );
-          if (
-            (response.status === 401 || response.status === 403) &&
-            authAttempt < 1
-          ) {
-            authAttempt += 1;
-            await managed.bootstrap({ silent: true }).catch(() => undefined);
-            continue;
-          }
-          return response;
-        } catch (error) {
-          lastError = error;
-          throw error;
-        }
-      }
-      throw lastError;
-    };
-
-    const savedResults: string[] = [];
-    const localFiles: string[] = [];
-    const failures: string[] = [];
-    const resultItems = Array.from({ length: taskCount }, (_, index) => ({
-      index,
-      status: "queued",
-      url: "",
-      fileName: "",
-      error: "",
-    }));
+    queuedImageRunsRef.current.add(id);
     try {
-      let activeManaged = useManagedNextChatStore.getState();
-      const activeImageSession = selectManagedImageSessionForGroup(
-        { image: activeManaged.imageSession || undefined },
-        taskGroupId || 0,
-      );
-      const activeImageGroupID =
-        activeImageSession?.group_id ??
-        currentImageGroupID(activeManaged.workspace);
-      if (
-        !useLocalImageFixture &&
-        taskGroupId &&
-        (!activeImageSession || activeImageGroupID !== taskGroupId)
-      ) {
-        await managed.switchImageGroup(taskGroupId);
-        activeManaged = useManagedNextChatStore.getState();
-      }
-      if (
-        !useLocalImageFixture &&
-        !selectManagedImageSessionForGroup(
-          { image: activeManaged.imageSession || undefined },
-          taskGroupId || 0,
-        )
-      ) {
-        throw new Error(text.errors.switchGroupFailed);
-      }
-      for (let requestIndex = 0; requestIndex < taskCount; requestIndex += 1) {
-        if (controller.signal.aborted)
-          throw new Error(text.errors.requestCancelled);
-        resultItems[requestIndex] = {
-          ...resultItems[requestIndex],
-          status: "running",
+      await withMobileImageGenerationLock(activeAccountId, async () => {
+        const currentState = useSdStore.getState();
+        const currentTask = currentState.draw.find(
+          (item: any) => String(item?.id) === id,
+        );
+        // A waiting task may have been deleted, cancelled, or replaced after
+        // it entered the local queue. Never submit that stale snapshot.
+        const latestAccountId = String(
+          useManagedNextChatStore.getState().user?.id ||
+            useManagedNextChatStore.getState().session?.user_id ||
+            useManagedNextChatStore.getState().workspace?.user?.id ||
+            "",
+        );
+        if (
+          latestAccountId !== activeAccountId ||
+          !canRunMobileImageQueueTask(
+            currentTask
+              ? {
+                  accountId: String(currentTask.account_id || ""),
+                  status: currentTask.status,
+                }
+              : undefined,
+            activeAccountId,
+          )
+        ) {
+          return;
+        }
+
+        const controller = new AbortController();
+        abortRef.current = controller;
+        updateTask(id, { status: "submitting", progress: 8 });
+        updateTask(id, { status: "running", progress: 12 });
+        startProgress(id);
+        const performanceTraceId = await startNativePerformanceTrace(
+          "image_generation",
+          {
+            operation: imageOperation === "images.edits" ? "edit" : "generate",
+            batch: taskCount,
+            references: Boolean(taskReferences.length),
+          },
+        ).catch(() => "");
+        let performanceOutcome = "success";
+
+        // Project the local image batch into the mobile task history. This is
+        // deliberately best-effort: the image gateway remains the source of
+        // truth for generation and billing, while the projection enables the
+        // dashboard to show progress and lets the user cancel remotely.
+        let projectedTask: MobileTask | null = null;
+        const projectedTaskPromise = (async () => {
+          try {
+            const client = await mobilePlatformClient();
+            const task = await client.tasks.create({
+              kind: "image",
+              operation: imageOperation,
+              client_request_id: id,
+              title: promptText.slice(0, 80),
+              title_zh: promptText.slice(0, 80),
+              model,
+              group_id: taskGroupId,
+              parameters: {
+                size: taskSize,
+                quality: taskQuality,
+                style: taskStyle,
+                n: taskCount,
+                reference_count: taskReferences.length,
+                local_task_id: id,
+              },
+              locale: text.dateLocale,
+            });
+            // Authentication may delay the optional projection until after the
+            // local request has finished. Do not attach a late task to a newer run.
+            if (abortRef.current !== controller) return task;
+            projectedTask = task;
+            platformTaskRef.current = task;
+            platformTaskRunIdRef.current = id;
+            updateTask(id, { platform_task_id: task.id });
+            await client.tasks.status(task.id, {
+              status: "running",
+              progress: 12,
+            });
+            if (abortRef.current !== controller) return task;
+            platformTaskPollRef.current = window.setInterval(() => {
+              void mobilePlatformClient()
+                .then((nextClient) => nextClient.tasks.detail(task.id))
+                .then((remoteTask) => {
+                  if (
+                    remoteTask.status === "cancelled" &&
+                    abortRef.current === controller
+                  ) {
+                    controller.abort();
+                  }
+                })
+                .catch(() => undefined);
+            }, 2500);
+            return task;
+          } catch {
+            return null;
+          }
+        })();
+
+        const endpoint =
+          imageOperation === "images.edits"
+            ? "/images/edits"
+            : "/images/generations";
+        const taskBackendBaseUrl = managed.backendBaseUrl;
+        const basePayload: Record<string, any> = {
+          model,
+          prompt: promptText,
+          size: taskSize,
+          response_format: "b64_json",
         };
-        updateTask(id, {
-          status: "running",
-          progress: Math.min(
-            94,
-            12 + Math.floor((requestIndex / taskCount) * 78),
-          ),
-          result_items: [...resultItems],
-        });
-        void projectedTaskPromise.then(async (task) => {
-          if (!task) return;
-          const client = await mobilePlatformClient().catch(() => null);
-          await client?.tasks
-            .status(task.id, {
+        if (taskQuality !== "auto") basePayload.quality = taskQuality;
+        if (taskStyle !== "auto" && imageModelSupportsStyle(model)) {
+          basePayload.style = taskStyle;
+        }
+        if (mustDisableSenseNovaWatermark(model)) {
+          basePayload.watermark = false;
+        }
+        if (taskReferences.length) basePayload.input_fidelity = "high";
+
+        function buildImageRequest(requestIndex: number, imageApiKey: string) {
+          const payload: Record<string, any> = { ...basePayload, n: 1 };
+          const headers: Record<string, string> = {
+            Accept: "application/json",
+            Authorization: `Bearer ${imageApiKey}`,
+            "Idempotency-Key": `android-image-${id}-${requestIndex + 1}`,
+            "X-Request-ID": `android-image-${id}-${requestIndex + 1}`,
+          };
+          let body: BodyInit;
+          if (taskReferences.length) {
+            const formData = new FormData();
+            Object.entries(payload).forEach(([key, value]) => {
+              formData.append(key, String(value));
+            });
+            taskReferences.forEach((url: string, index: number) => {
+              formData.append(
+                "image",
+                dataUrlToBlob(url),
+                `reference-${index + 1}.png`,
+              );
+            });
+            body = formData;
+          } else {
+            headers["Content-Type"] = "application/json";
+            body = JSON.stringify(payload);
+          }
+          return { headers, body };
+        }
+
+        const requestImageText = async (requestIndex: number) => {
+          let authAttempt = 0;
+          let lastError: unknown = null;
+          while (authAttempt <= 1) {
+            const latestManaged = useManagedNextChatStore.getState();
+            const imageSession = selectManagedImageSessionForGroup(
+              { image: latestManaged.imageSession || undefined },
+              taskGroupId || 0,
+            );
+            if (!imageSession) {
+              throw new Error(text.errors.switchGroupFailed);
+            }
+            const request = buildImageRequest(
+              requestIndex,
+              imageSession.api_key,
+            );
+            try {
+              const response = await managedGatewayRequestText(
+                taskBackendBaseUrl,
+                `/v1${endpoint}`,
+                {
+                  method: "POST",
+                  headers: request.headers,
+                  body: request.body,
+                  signal: controller.signal,
+                },
+                imageSession.api_key,
+                text,
+              );
+              if (
+                (response.status === 401 || response.status === 403) &&
+                authAttempt < 1
+              ) {
+                authAttempt += 1;
+                await managed
+                  .bootstrap({ silent: true })
+                  .catch(() => undefined);
+                continue;
+              }
+              return response;
+            } catch (error) {
+              lastError = error;
+              throw error;
+            }
+          }
+          throw lastError;
+        };
+
+        const savedResults: string[] = [];
+        const localFiles: string[] = [];
+        const failures: string[] = [];
+        const resultItems = Array.from({ length: taskCount }, (_, index) => ({
+          index,
+          status: "queued",
+          url: "",
+          fileName: "",
+          error: "",
+        }));
+        try {
+          let activeManaged = useManagedNextChatStore.getState();
+          const activeImageSession = selectManagedImageSessionForGroup(
+            { image: activeManaged.imageSession || undefined },
+            taskGroupId || 0,
+          );
+          const activeImageGroupID =
+            activeImageSession?.group_id ??
+            currentImageGroupID(activeManaged.workspace);
+          if (
+            !useLocalImageFixture &&
+            taskGroupId &&
+            (!activeImageSession || activeImageGroupID !== taskGroupId)
+          ) {
+            await managed.switchImageGroup(taskGroupId);
+            activeManaged = useManagedNextChatStore.getState();
+          }
+          if (
+            !useLocalImageFixture &&
+            !selectManagedImageSessionForGroup(
+              { image: activeManaged.imageSession || undefined },
+              taskGroupId || 0,
+            )
+          ) {
+            throw new Error(text.errors.switchGroupFailed);
+          }
+          for (
+            let requestIndex = 0;
+            requestIndex < taskCount;
+            requestIndex += 1
+          ) {
+            if (controller.signal.aborted)
+              throw new Error(text.errors.requestCancelled);
+            resultItems[requestIndex] = {
+              ...resultItems[requestIndex],
+              status: "running",
+            };
+            updateTask(id, {
               status: "running",
               progress: Math.min(
-                96,
+                94,
                 12 + Math.floor((requestIndex / taskCount) * 78),
               ),
-            })
-            .catch(() => {});
-        });
-        try {
-          const response = await requestImageText(requestIndex);
-          if (controller.signal.aborted) {
-            throw new DOMException("Aborted", "AbortError");
-          }
-          const res = {
-            ok: response.ok,
-            status: response.status,
-          };
-          const responseText = response.text;
-          let json: any = null;
-          try {
-            json = responseText ? JSON.parse(responseText) : null;
-          } catch {
-            json = null;
-          }
-          if (!res.ok || json?.error) {
-            const raw =
-              json?.error?.message ||
-              json?.message ||
-              json?.error ||
-              responseText;
-            const localized = parseOpenAIError(
-              responseText,
-              res.status,
-              `/v1${endpoint}`,
-              response.requestId || `android-image-${id}-${requestIndex + 1}`,
-            );
-            const described = describeImageError(raw || localized, {
-              text,
-              selectedModel: model,
-              imageModelCount: imageModelOptions.length,
-              hasImageGroup,
-              status: res.status,
+              result_items: [...resultItems],
             });
-            const diagnostics = localized.match(/\(HTTP [^)]+\)$/)?.[0] || "";
-            const message =
-              diagnostics && !described.includes(diagnostics)
-                ? `${described} ${diagnostics}`
-                : described;
-            if (
-              res.status === 401 ||
-              res.status === 402 ||
-              res.status === 403
-            ) {
-              throw new Error(message);
-            }
-            failures.push(message);
-            resultItems[requestIndex] = {
-              ...resultItems[requestIndex],
-              status: "failed",
-              error: message,
-            };
-            updateTask(id, { result_items: [...resultItems] });
-            continue;
-          }
-          const images = openAIImageData(json);
-          if (!images.length) {
-            failures.push(text.image.emptyResult);
-            resultItems[requestIndex] = {
-              ...resultItems[requestIndex],
-              status: "failed",
-              error: text.image.emptyResult,
-            };
-            updateTask(id, { result_items: [...resultItems] });
-            continue;
-          }
-          for (const item of images) {
-            if (controller.signal.aborted) {
-              throw new DOMException("Aborted", "AbortError");
-            }
-            if (savedResults.length >= taskCount) break;
-            const saved = await persistImageFromResult(item, {
-              taskId: id,
-              index: savedResults.length,
-              prompt: promptText,
-              model,
-              signal: controller.signal,
+            void projectedTaskPromise.then(async (task) => {
+              if (!task) return;
+              const client = await mobilePlatformClient().catch(() => null);
+              await client?.tasks
+                .status(task.id, {
+                  status: "running",
+                  progress: Math.min(
+                    96,
+                    12 + Math.floor((requestIndex / taskCount) * 78),
+                  ),
+                })
+                .catch(() => {});
             });
-            savedResults.push(saved.url);
-            if (saved.fileName) localFiles.push(saved.fileName);
-            resultItems[requestIndex] = {
-              ...resultItems[requestIndex],
-              status: "success",
-              url: saved.url,
-              fileName: saved.fileName || "",
-              error: "",
-            };
+            try {
+              const response = await requestImageText(requestIndex);
+              if (controller.signal.aborted) {
+                throw new DOMException("Aborted", "AbortError");
+              }
+              const res = {
+                ok: response.ok,
+                status: response.status,
+              };
+              const responseText = response.text;
+              let json: any = null;
+              try {
+                json = responseText ? JSON.parse(responseText) : null;
+              } catch {
+                json = null;
+              }
+              if (!res.ok || json?.error) {
+                const raw =
+                  json?.error?.message ||
+                  json?.message ||
+                  json?.error ||
+                  responseText;
+                const localized = parseOpenAIError(
+                  responseText,
+                  res.status,
+                  `/v1${endpoint}`,
+                  response.requestId ||
+                    `android-image-${id}-${requestIndex + 1}`,
+                );
+                const described = describeImageError(raw || localized, {
+                  text,
+                  selectedModel: model,
+                  imageModelCount: taskImageModelOptions.length,
+                  hasImageGroup: Boolean(taskGroupId),
+                  status: res.status,
+                });
+                const diagnostics =
+                  localized.match(/\(HTTP [^)]+\)$/)?.[0] || "";
+                const message =
+                  diagnostics && !described.includes(diagnostics)
+                    ? `${described} ${diagnostics}`
+                    : described;
+                if (
+                  res.status === 401 ||
+                  res.status === 402 ||
+                  res.status === 403
+                ) {
+                  throw new Error(message);
+                }
+                failures.push(message);
+                resultItems[requestIndex] = {
+                  ...resultItems[requestIndex],
+                  status: "failed",
+                  error: message,
+                };
+                updateTask(id, { result_items: [...resultItems] });
+                continue;
+              }
+              const images = openAIImageData(json);
+              if (!images.length) {
+                failures.push(text.image.emptyResult);
+                resultItems[requestIndex] = {
+                  ...resultItems[requestIndex],
+                  status: "failed",
+                  error: text.image.emptyResult,
+                };
+                updateTask(id, { result_items: [...resultItems] });
+                continue;
+              }
+              for (const item of images) {
+                if (controller.signal.aborted) {
+                  throw new DOMException("Aborted", "AbortError");
+                }
+                if (savedResults.length >= taskCount) break;
+                const saved = await persistImageFromResult(item, {
+                  taskId: id,
+                  index: savedResults.length,
+                  prompt: promptText,
+                  model,
+                  signal: controller.signal,
+                });
+                savedResults.push(saved.url);
+                if (saved.fileName) localFiles.push(saved.fileName);
+                resultItems[requestIndex] = {
+                  ...resultItems[requestIndex],
+                  status: "success",
+                  url: saved.url,
+                  fileName: saved.fileName || "",
+                  error: "",
+                };
+              }
+              updateTask(id, {
+                status: "running",
+                progress: Math.min(
+                  96,
+                  12 + Math.floor(((requestIndex + 1) / taskCount) * 78),
+                ),
+                img_data: savedResults[0],
+                results: [...savedResults],
+                local_files: [...localFiles],
+                result_items: [...resultItems],
+              });
+            } catch (singleErr) {
+              if (controller.signal.aborted) throw singleErr;
+              const message =
+                singleErr instanceof Error && singleErr.message
+                  ? singleErr.message
+                  : text.image.generateFailed;
+              failures.push(message);
+              resultItems[requestIndex] = {
+                ...resultItems[requestIndex],
+                status: "failed",
+                error: message,
+              };
+              updateTask(id, { result_items: [...resultItems] });
+              if (
+                /权限|余额|登录|unauthorized|permission|balance|insufficient/.test(
+                  message.toLowerCase(),
+                )
+              ) {
+                break;
+              }
+            }
           }
+          if (!savedResults.length) {
+            throw new Error(failures[0] || text.image.emptyResult);
+          }
+          const partialMessage =
+            failures.length || savedResults.length < taskCount
+              ? text.image.partialSuccess(
+                  savedResults.length,
+                  taskCount,
+                  failures[0] || text.image.generateFailed,
+                )
+              : "";
           updateTask(id, {
-            status: "running",
-            progress: Math.min(
-              96,
-              12 + Math.floor(((requestIndex + 1) / taskCount) * 78),
-            ),
+            status: partialMessage ? "partial" : "success",
+            progress: 100,
             img_data: savedResults[0],
-            results: [...savedResults],
-            local_files: [...localFiles],
-            result_items: [...resultItems],
+            results: savedResults,
+            local_files: localFiles,
+            result_items: resultItems.map((item, index) =>
+              item.status === "queued"
+                ? {
+                    ...item,
+                    status: savedResults[index] ? "success" : "failed",
+                    url: savedResults[index] || item.url,
+                    fileName: localFiles[index] || item.fileName,
+                    error:
+                      savedResults[index] || item.error
+                        ? item.error
+                        : text.image.generateFailed,
+                  }
+                : item,
+            ),
+            error: partialMessage,
           });
-        } catch (singleErr) {
-          if (controller.signal.aborted) throw singleErr;
-          const message =
-            singleErr instanceof Error && singleErr.message
-              ? singleErr.message
-              : text.image.generateFailed;
-          failures.push(message);
-          resultItems[requestIndex] = {
-            ...resultItems[requestIndex],
-            status: "failed",
+          void projectedTaskPromise.then(async (task) => {
+            if (!task) return;
+            const client = await mobilePlatformClient().catch(() => null);
+            await client?.tasks
+              .status(task.id, {
+                status: partialMessage ? "partial" : "completed",
+                progress: 100,
+                artifacts: savedResults.map((url, index) => ({
+                  type: "image",
+                  id: `${id}-${index + 1}`,
+                  url,
+                })),
+              })
+              .catch(() => {});
+          });
+          if (partialMessage) setError(partialMessage);
+          setReferences([]);
+          await showNativeNotification(
+            text.image.title,
+            text.image.savedToDevice,
+          );
+          await managed.bootstrap({ silent: true }).catch(() => {});
+        } catch (err) {
+          const aborted = controller.signal.aborted;
+          performanceOutcome = aborted ? "cancelled" : "error";
+          const message = aborted
+            ? text.errors.requestCancelled
+            : err instanceof ManagedTransportError
+            ? err.message
+            : err instanceof Error
+            ? describeImageError(
+                localizedMobileErrorMessage(err, err.message),
+                {
+                  text,
+                  selectedModel: model,
+                  imageModelCount: taskImageModelOptions.length,
+                  hasImageGroup: Boolean(taskGroupId),
+                },
+              )
+            : text.image.generateFailed;
+          updateTask(id, {
+            status: aborted ? "cancelled" : "error",
+            progress: aborted ? 0 : 100,
             error: message,
-          };
-          updateTask(id, { result_items: [...resultItems] });
-          if (
-            /权限|余额|登录|unauthorized|permission|balance|insufficient/.test(
-              message.toLowerCase(),
-            )
-          ) {
-            break;
+          });
+          void projectedTaskPromise.then(async (task) => {
+            if (!task) return;
+            const client = await mobilePlatformClient().catch(() => null);
+            await client?.tasks
+              .status(task.id, {
+                status: aborted ? "cancelled" : "failed",
+                error: aborted
+                  ? undefined
+                  : {
+                      code: "image_generation_failed",
+                      message,
+                      retryable: true,
+                    },
+              })
+              .catch(() => {});
+          });
+          if (abortRef.current === controller) setError(message);
+        } finally {
+          void stopNativePerformanceTrace(
+            performanceTraceId,
+            performanceOutcome,
+          ).catch(() => undefined);
+          if (platformTaskPollRef.current) {
+            window.clearInterval(platformTaskPollRef.current);
+            platformTaskPollRef.current = null;
+          }
+          if (platformTaskRunIdRef.current === id) {
+            platformTaskRef.current = null;
+            platformTaskRunIdRef.current = "";
+          }
+          if (abortRef.current === controller) {
+            stopProgress();
+            abortRef.current = null;
           }
         }
-      }
-      if (!savedResults.length) {
-        throw new Error(failures[0] || text.image.emptyResult);
-      }
-      const partialMessage =
-        failures.length || savedResults.length < taskCount
-          ? text.image.partialSuccess(
-              savedResults.length,
-              taskCount,
-              failures[0] || text.image.generateFailed,
-            )
-          : "";
-      updateTask(id, {
-        status: partialMessage ? "partial" : "success",
-        progress: 100,
-        img_data: savedResults[0],
-        results: savedResults,
-        local_files: localFiles,
-        result_items: resultItems.map((item, index) =>
-          item.status === "queued"
-            ? {
-                ...item,
-                status: savedResults[index] ? "success" : "failed",
-                url: savedResults[index] || item.url,
-                fileName: localFiles[index] || item.fileName,
-                error:
-                  savedResults[index] || item.error
-                    ? item.error
-                    : text.image.generateFailed,
-              }
-            : item,
-        ),
-        error: partialMessage,
       });
-      void projectedTaskPromise.then(async (task) => {
-        if (!task) return;
-        const client = await mobilePlatformClient().catch(() => null);
-        await client?.tasks
-          .status(task.id, {
-            status: partialMessage ? "partial" : "completed",
-            progress: 100,
-            artifacts: savedResults.map((url, index) => ({
-              type: "image",
-              id: `${id}-${index + 1}`,
-              url,
-            })),
-          })
-          .catch(() => {});
-      });
-      if (partialMessage) setError(partialMessage);
-      setReferences([]);
-      await showNativeNotification(text.image.title, text.image.savedToDevice);
-      await managed.bootstrap({ silent: true }).catch(() => {});
-    } catch (err) {
-      const aborted = controller.signal.aborted;
-      performanceOutcome = aborted ? "cancelled" : "error";
-      const message = aborted
-        ? text.errors.requestCancelled
-        : err instanceof ManagedTransportError
-        ? err.message
-        : err instanceof Error
-        ? describeImageError(localizedMobileErrorMessage(err, err.message), {
-            text,
-            selectedModel: model,
-            imageModelCount: imageModelOptions.length,
-            hasImageGroup,
-          })
-        : text.image.generateFailed;
-      updateTask(id, {
-        status: aborted ? "cancelled" : "error",
-        progress: aborted ? 0 : 100,
-        error: message,
-      });
-      void projectedTaskPromise.then(async (task) => {
-        if (!task) return;
-        const client = await mobilePlatformClient().catch(() => null);
-        await client?.tasks
-          .status(task.id, {
-            status: aborted ? "cancelled" : "failed",
-            error: aborted
-              ? undefined
-              : {
-                  code: "image_generation_failed",
-                  message,
-                  retryable: true,
-                },
-          })
-          .catch(() => {});
-      });
-      if (abortRef.current === controller) setError(message);
     } finally {
-      void stopNativePerformanceTrace(
-        performanceTraceId,
-        performanceOutcome,
-      ).catch(() => undefined);
-      if (platformTaskPollRef.current) {
-        window.clearInterval(platformTaskPollRef.current);
-        platformTaskPollRef.current = null;
-      }
-      if (platformTaskRunIdRef.current === id) {
-        platformTaskRef.current = null;
-        platformTaskRunIdRef.current = "";
-      }
-      if (abortRef.current === controller) {
-        stopProgress();
-        abortRef.current = null;
-      }
+      queuedImageRunsRef.current.delete(id);
     }
   }
 
-  function cancelTask() {
+  useEffect(() => {
+    if (!activeAccountId) return;
+    const staleTaskIDs = sdStore.draw
+      .filter(
+        (item: any) =>
+          item?.queue_schema === 1 &&
+          String(item?.account_id || "") === activeAccountId &&
+          ["submitting", "running"].includes(String(item.status || "")),
+      )
+      .map((item: any) => String(item.id));
+    if (staleTaskIDs.length) {
+      sdStore.update((state) => {
+        state.draw.forEach((item: any) => {
+          if (staleTaskIDs.includes(String(item.id))) {
+            item.status = recoverMobileImageQueueTask({
+              id: String(item.id || ""),
+              accountId: String(item.account_id || ""),
+              status: item.status,
+            }).status;
+            item.progress = Number(item.progress || 0);
+            item.error = text.image.generateFailed;
+            item.updated_at = Date.now();
+          }
+        });
+        state.currentId += 1;
+      });
+    }
+    if (!managed.imageSession || !managed.accessToken) return;
+    sdStore.draw
+      .filter(
+        (item: any) =>
+          item?.queue_schema === 1 &&
+          String(item?.account_id || "") === activeAccountId &&
+          item.status === "queued",
+      )
+      .forEach((item: any) => {
+        void runImageTask({ queueTaskId: String(item.id) });
+      });
+    // `currentId` is the persisted queue wake-up signal. The worker itself
+    // owns de-duplication so recovery cannot start two requests for one item.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeAccountId,
+    managed.accessToken,
+    managed.imageSession,
+    sdStore.currentId,
+  ]);
+
+  function cancelTask(task = activeTask) {
+    if (!task?.id || String(task.id) !== String(activeTask?.id || "")) return;
     abortRef.current?.abort();
     const platformTask = platformTaskRef.current;
     if (platformTask) {
@@ -17032,8 +17531,8 @@ function AndroidImageStudio() {
         )
         .catch(() => {});
     }
-    if (activeTask?.id) {
-      updateTask(activeTask.id, {
+    if (task.id) {
+      updateTask(task.id, {
         status: "cancelled",
         progress: 0,
         error: text.errors.requestCancelled,
@@ -17090,6 +17589,16 @@ function AndroidImageStudio() {
   async function deleteImageTasks(ids: string[], confirmMessage?: string) {
     const targetIds = ids.filter(Boolean);
     if (!targetIds.length) return false;
+    if (
+      sdStore.draw.some(
+        (item: any) =>
+          targetIds.includes(String(item.id)) &&
+          ["running", "submitting"].includes(String(item.status)),
+      )
+    ) {
+      setError(text.image.cancelTask);
+      return false;
+    }
     if (!window.confirm(confirmMessage || text.image.deleteTaskConfirm))
       return false;
     setError("");
@@ -17496,6 +18005,14 @@ function AndroidImageStudio() {
             <button onClick={cancelTask}>{text.image.cancelTask}</button>
           </div>
         )}
+        {!activeTask && queuedTaskCount > 0 && (
+          <div className={styles["task-progress"]}>
+            <div>
+              <span>{text.image.progress}</span>
+              <strong>{text.image.queueWaiting(queuedTaskCount)}</strong>
+            </div>
+          </div>
+        )}
 
         {error && <div className={styles["form-error"]}>{error}</div>}
         <button
@@ -17503,14 +18020,14 @@ function AndroidImageStudio() {
           aria-label="image-generate"
           onClick={() => runImageTask()}
           disabled={
-            Boolean(activeTask) ||
             !selectManagedImageSession({
               image: managed.imageSession || undefined,
-            }) ||
-            imageModelOptions.length === 0
+            }) || imageModelOptions.length === 0
           }
         >
-          {activeTask ? text.image.generating : text.image.generate}
+          {activeTask || queuedTaskCount > 0
+            ? text.image.queueGenerate
+            : text.image.generate}
         </button>
       </section>
 
@@ -17570,6 +18087,20 @@ function AndroidImageStudio() {
                     <button type="button" onClick={() => retryTask(item)}>
                       {text.image.retryTask}
                     </button>
+                  )}
+                  {item.status === "queued" && (
+                    <IconButton
+                      label={text.image.deleteTask}
+                      onClick={() => {
+                        void deleteImageTasks([String(item.id)]).then(
+                          (deleted) => {
+                            if (deleted) setImageActionTarget(null);
+                          },
+                        );
+                      }}
+                    >
+                      <DeleteIcon />
+                    </IconButton>
                   )}
                   <IconButton
                     label={text.image.details}
@@ -17680,6 +18211,11 @@ function AndroidImageStudio() {
           retryTask(imageActionTarget);
           setImageActionTarget(null);
         }}
+        onCancel={() => {
+          if (!imageActionTarget) return;
+          cancelTask(imageActionTarget);
+          setImageActionTarget(null);
+        }}
         onReport={() => reportImageTask(imageActionTarget)}
         onDelete={() => {
           if (!imageActionTarget) return;
@@ -17711,17 +18247,12 @@ function AndroidImageStudio() {
         open={modelSheetOpen}
         title={text.image.model}
         text={text}
-        items={imageModelOptions
-          .filter(
-            (model) =>
-              !references.length || imageModelSupportsReferences(model, []),
-          )
-          .map((model) => ({
-            id: modelValue(model),
-            title: modelLabel(model),
-            detail: model.use_case || text.image.title,
-            active: modelValue(model) === selectedModel,
-          }))}
+        items={imageModelOptions.map((model) => ({
+          id: modelValue(model),
+          title: modelLabel(model),
+          detail: model.use_case || text.image.title,
+          active: modelValue(model) === selectedModel,
+        }))}
         onClose={() => setModelSheetOpen(false)}
         onSelect={(id) => {
           setModelSheetOpen(false);
@@ -26382,7 +26913,7 @@ function useMobileCrashLog() {
   }, []);
 }
 
-function AndroidGlobalUpdatePrompt() {
+function AndroidGlobalUpdatePrompt(props: { ready: boolean }) {
   const text = useMobileText();
   const clientConfig = useMemo(() => getClientConfig(), []);
   const installedRelease = useInstalledAndroidReleaseVersion();
@@ -26408,6 +26939,7 @@ function AndroidGlobalUpdatePrompt() {
   );
 
   useEffect(() => {
+    if (!props.ready) return;
     const check = async () => {
       const now = Date.now();
       const checkedAt = Number(
@@ -26461,7 +26993,7 @@ function AndroidGlobalUpdatePrompt() {
       document.removeEventListener("visibilitychange", onResume);
       window.removeEventListener("jisudeng-native-resume", onResume);
     };
-  }, [clientConfig, installedRelease, playDistribution]);
+  }, [clientConfig, installedRelease, playDistribution, props.ready]);
 
   useEffect(
     () => () => {
@@ -26599,7 +27131,9 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   const text = useMobileText();
   const installedRelease = useInstalledAndroidReleaseVersion();
   const [secureRestoreDone, setSecureRestoreDone] = useState(false);
+  const [firstPaintReady, setFirstPaintReady] = useState(false);
   const secureRestoreStartedRef = useRef(false);
+  const startupInteractiveReportedRef = useRef(false);
   const billingRefreshRef = useRef(new Set<string>());
   const clientConfig = useMemo(() => getClientConfig(), []);
   const backendBaseUrl = useMemo(
@@ -26609,11 +27143,34 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
 
   useMobileCrashLog();
 
+  useEffect(() => {
+    if (!secureRestoreDone) return;
+    let secondFrame = 0;
+    let timer = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        timer = window.setTimeout(() => setFirstPaintReady(true), 120);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [secureRestoreDone]);
+
+  useEffect(() => {
+    if (!firstPaintReady || startupInteractiveReportedRef.current) return;
+    startupInteractiveReportedRef.current = true;
+    void reportNativeStartupInteractive().catch(() => undefined);
+  }, [firstPaintReady]);
+
   // Warm the account-scoped material cache when the app becomes active. The
   // sync endpoint returns only metadata deltas and a 304 when nothing changed;
   // binary files are therefore downloaded once per device/account and only
   // revalidated after an app restart or resume.
   useEffect(() => {
+    if (!firstPaintReady) return;
     const accountID = String(
       managed.user?.id || managed.session?.user_id || "",
     ).trim();
@@ -26645,12 +27202,14 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     managed.accessToken,
     managed.session?.user_id,
     managed.user?.id,
+    firstPaintReady,
   ]);
 
   // Prompt covers and text follow the same account-scoped local-cache policy
   // as user materials. Warm both catalogs after login; subsequent resumes only
   // perform the small manifest/ETag probe and fetch changed entries.
   useEffect(() => {
+    if (!firstPaintReady) return;
     const accountID = String(
       managed.user?.id || managed.session?.user_id || "",
     ).trim();
@@ -26690,7 +27249,13 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       window.removeEventListener("jisudeng-native-resume", sync);
       document.removeEventListener("visibilitychange", sync);
     };
-  }, [installedRelease, managed.session?.user_id, managed.user?.id, text]);
+  }, [
+    installedRelease,
+    managed.session?.user_id,
+    managed.user?.id,
+    firstPaintReady,
+    text,
+  ]);
 
   useEffect(() => {
     const userId = managed.user?.id || managed.session?.user_id;
@@ -26698,6 +27263,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   }, [managed.session?.user_id, managed.user?.id]);
 
   useEffect(() => {
+    if (!firstPaintReady) return;
     if (!backendBaseUrl || !installedRelease.name) return;
     const version = installedRelease.name;
     const referral = loadInviteReferral();
@@ -26745,7 +27311,12 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", reportActive);
       window.removeEventListener("jisudeng-native-resume", reportActive);
     };
-  }, [backendBaseUrl, installedRelease.name, managed.accessToken]);
+  }, [
+    backendBaseUrl,
+    firstPaintReady,
+    installedRelease.name,
+    managed.accessToken,
+  ]);
 
   useEffect(() => {
     const consumeInviteDeepLink = (detail: any) => {
@@ -26865,23 +27436,9 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       return;
     secureRestoreStartedRef.current = true;
     void (async () => {
-      const restored = await managed.restoreSecureSession();
-      if (!restored) return;
-      const current = useManagedNextChatStore.getState();
-      if (
-        current.accessToken &&
-        (!current.workspace ||
-          shouldRefreshManagedSession(current.session) ||
-          shouldRefreshManagedSession(current.imageSession) ||
-          shouldRefreshManagedSession(current.videoSession))
-      ) {
-        await current
-          .bootstrap({ silent: Boolean(current.workspace) })
-          .catch(() => undefined);
-      }
-    })().finally(() => {
+      await managed.restoreSecureSession();
       setSecureRestoreDone(true);
-    });
+    })().catch(() => setSecureRestoreDone(true));
   }, [managed, managed._hasHydrated, secureRestoreDone]);
 
   useEffect(() => {
@@ -26967,6 +27524,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   useEffect(() => {
     if (
       managed._hasHydrated &&
+      firstPaintReady &&
       backendBaseUrl &&
       managed.backendBaseUrl === backendBaseUrl &&
       managed.accessToken &&
@@ -26979,11 +27537,17 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       managed.bootstrap().catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [managed._hasHydrated, managed.accessToken, managed.session]);
+  }, [
+    managed._hasHydrated,
+    managed.accessToken,
+    managed.session,
+    firstPaintReady,
+  ]);
 
   useEffect(() => {
     if (
       !managed._hasHydrated ||
+      !firstPaintReady ||
       !managed.accessToken ||
       !managed.backendBaseUrl
     )
@@ -27037,10 +27601,16 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       window.removeEventListener("online", recoverAfterOnline);
       window.clearInterval(timer);
     };
-  }, [managed._hasHydrated, managed.accessToken, managed.backendBaseUrl]);
+  }, [
+    managed._hasHydrated,
+    managed.accessToken,
+    managed.backendBaseUrl,
+    firstPaintReady,
+  ]);
 
   useEffect(() => {
     if (
+      !firstPaintReady ||
       !managed.accessToken ||
       !managed.backendBaseUrl ||
       !installedRelease.name
@@ -27121,10 +27691,16 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [installedRelease.name, managed.accessToken, managed.backendBaseUrl]);
+  }, [
+    firstPaintReady,
+    installedRelease.name,
+    managed.accessToken,
+    managed.backendBaseUrl,
+  ]);
 
   useEffect(() => {
     if (
+      !firstPaintReady ||
       !managed.accessToken ||
       !managed.backendBaseUrl ||
       !installedRelease.name
@@ -27147,13 +27723,14 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
       disposed = true;
       removeListeners?.();
     };
-  }, [installedRelease.name, managed.accessToken, managed.backendBaseUrl]);
+  }, [
+    firstPaintReady,
+    installedRelease.name,
+    managed.accessToken,
+    managed.backendBaseUrl,
+  ]);
 
   if (!managed._hasHydrated || !secureRestoreDone) {
-    return <MobileLoading />;
-  }
-
-  if (managed.accessToken && !managed.session && managed.loading) {
     return <MobileLoading />;
   }
 
@@ -27162,6 +27739,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   }
 
   if (!managed.isAuthenticated()) {
+    if (managed.accessToken) return <AndroidStartupShell />;
     return <AndroidLogin />;
   }
 
@@ -27169,7 +27747,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidDashboard />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27178,7 +27756,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidChat />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27187,7 +27765,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidCreationStudio />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27196,7 +27774,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidGallery />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27205,7 +27783,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidActivityCenter />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27214,7 +27792,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidProjects />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27223,7 +27801,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidContentKit />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27235,7 +27813,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     return (
       <>
         <AndroidAccountSettings />
-        <AndroidGlobalUpdatePrompt />
+        <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
       </>
     );
   }
@@ -27243,7 +27821,7 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
   return (
     <>
       {props.children}
-      <AndroidGlobalUpdatePrompt />
+      <AndroidGlobalUpdatePrompt ready={firstPaintReady} />
     </>
   );
 }

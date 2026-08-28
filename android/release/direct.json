@@ -1,28 +1,36 @@
 {
   "channel": "direct",
-  "version": "3.0.30",
-  "versionCode": 330,
-  "releaseDate": "2026-08-27",
+  "version": "3.0.32",
+  "versionCode": 332,
+  "releaseDate": "2026-08-28",
   "notes": {
     "zh": [
-      "国内测试候选：图片提示词库改为按页加载，避免全量目录阻塞界面",
-      "关闭、返回和遮罩点击会释放未使用的提示词封面资源",
-      "仅供功能验收；语音、视频/图片模型和资产读取问题仍在排查，尚未发布"
+      "启动时先显示应用界面，工作区、模型、账户和同步内容在后台补齐",
+      "图片和视频工作台完整显示账号分组与模型；输出张数支持 1 至 16 张",
+      "提示词库支持分类和搜索，移除不存在的正文语言切换",
+      "内容创作工作台改为本地项目三步流程，支持 Canvas 提示词作为可编辑镜头、图片队列和工程包导入导出",
+      "仅供真机功能验证，尚未发布"
     ],
     "en": [
-      "Domestic test candidate: the image prompt library now loads in pages to avoid blocking the interface",
-      "Close, Back, and the sheet mask release unused prompt-cover resources",
-      "For functional testing only. Voice, media-model, and asset-loading issues remain under investigation and are not released"
+      "The app shell now appears before workspace, model, account, and sync data finish loading",
+      "Image and video studios show all account-returned groups and models; output count supports 1 through 16",
+      "The prompt library adds mobile categories and search, without unsupported body-language toggles",
+      "The content workbench now uses a three-step local project flow with editable Canvas prompt shots, image queueing, and project package import/export",
+      "For real-device functional testing only. Not released"
     ],
     "ja": [
-      "国内テスト候補: 画像プロンプトライブラリをページ単位で読み込み、画面のブロックを防止します",
-      "閉じる、戻る、背景タップで未使用のプロンプト表紙リソースを解放します",
-      "機能検証専用です。音声、メディアモデル、素材読み込みの問題は調査中で、未リリースです"
+      "起動時はワークスペース、モデル、アカウント、同期データの完了を待たずにアプリ画面を表示します",
+      "画像・動画スタジオはアカウントから返されたすべてのグループとモデルを表示し、出力数は 1 から 16 に対応します",
+      "プロンプトライブラリにモバイル向け分類と検索を追加し、対応していない本文言語切替を削除しました",
+      "コンテンツ作成ワークベンチをローカルプロジェクトの3ステップに変更し、編集可能な Canvas プロンプト、画像キュー、工程パッケージの入出力に対応しました",
+      "実機での機能検証専用です。未リリースです"
     ],
     "ko": [
-      "국내 테스트 후보: 이미지 프롬프트 라이브러리를 페이지 단위로 불러와 화면 멈춤을 방지합니다",
-      "닫기, 뒤로가기 및 배경 탭 시 사용하지 않는 프롬프트 표지 리소스를 해제합니다",
-      "기능 검증 전용입니다. 음성, 미디어 모델 및 소재 불러오기 문제는 조사 중이며 아직 출시되지 않았습니다"
+      "시작 시 작업 공간, 모델, 계정 및 동기화 데이터가 완료되기 전에 앱 화면을 표시합니다",
+      "이미지 및 동영상 스튜디오는 계정에서 반환된 모든 그룹과 모델을 표시하며 출력 수는 1에서 16까지 지원합니다",
+      "프롬프트 라이브러리에 모바일용 분류와 검색을 추가하고 지원되지 않는 본문 언어 전환을 제거했습니다",
+      "콘텐츠 제작 작업대를 로컬 프로젝트 3단계로 변경하고 편집 가능한 Canvas 프롬프트, 이미지 대기열, 프로젝트 패키지 가져오기/내보내기를 지원합니다",
+      "실기기 기능 검증 전용이며 아직 출시되지 않았습니다"
     ]
   }
 }

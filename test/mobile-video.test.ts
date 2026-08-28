@@ -7,6 +7,7 @@ import {
   classifyMobileVideoBootstrapFailure,
   managedVideoCapabilities,
   filterManagedVideoGroups,
+  mergeManagedVideoGroups,
   managedVideoGroups,
   managedVideoModels,
   managedVideoWorkspaceModels,
@@ -153,7 +154,7 @@ describe("mobile video capability and response contract", () => {
     ).toEqual([]);
   });
 
-  test("does not let a group capability make an incomplete model executable", () => {
+  test("uses group capabilities as optional defaults for a returned model", () => {
     const group = {
       id: 2,
       name: "video",
@@ -167,10 +168,10 @@ describe("mobile video capability and response contract", () => {
     );
     expect(
       managedVideoCapabilities({ id: "model-without-own-caps" } as any, group),
-    ).toBeUndefined();
+    ).toEqual(group.video_capabilities);
   });
 
-  test("uses server-declared modalities for opaque video IDs", () => {
+  test("keeps every account-returned model in a video workspace", () => {
     const group = {
       id: 2,
       name: "video",
@@ -208,10 +209,11 @@ describe("mobile video capability and response contract", () => {
 
     expect(managedVideoModels(group).map((model) => model.id)).toEqual([
       "opaque-provider-id",
+      "misleading-video-name",
     ]);
   });
 
-  test("does not promote undeclared siblings from a capability-aware video group", () => {
+  test("does not hide a sibling merely because it lacks a media contract", () => {
     const group = {
       id: 2,
       name: "mixed media",
@@ -237,10 +239,11 @@ describe("mobile video capability and response contract", () => {
 
     expect(managedVideoModels(group).map((model) => model.id)).toEqual([
       "opaque-provider-id",
+      "chat-model-without-media-contract",
     ]);
   });
 
-  test("fails closed for legacy-named groups when a response contains capability declarations", () => {
+  test("keeps every non-empty returned video group", () => {
     const groups = filterManagedVideoGroups([
       {
         id: 2,
@@ -268,7 +271,7 @@ describe("mobile video capability and response contract", () => {
       },
     ] as any);
 
-    expect(groups.map((group) => group.id)).toEqual([2]);
+    expect(groups.map((group) => group.id)).toEqual([2, 3]);
   });
 
   test("normalizes typed and legacy video bootstrap models without losing capabilities", () => {
@@ -447,7 +450,7 @@ describe("mobile video capability and response contract", () => {
     ).toEqual(["grok-imagine-video-1.5"]);
   });
 
-  test("treats a root video protocol marker as strict even for an old-shaped group", () => {
+  test("keeps old-shaped workspace rows even when a protocol marker exists", () => {
     const groups = normalizeMobileVideoBootstrapGroups(
       [
         {
@@ -460,11 +463,13 @@ describe("mobile video capability and response contract", () => {
       true,
     );
 
-    expect(filterManagedVideoGroups(groups)).toEqual([]);
-    expect(managedVideoModels(groups[0])).toEqual([]);
+    expect(filterManagedVideoGroups(groups)).toEqual(groups);
+    expect(managedVideoModels(groups[0])).toEqual([
+      expect.objectContaining({ id: "video-looking-but-undeclared" }),
+    ]);
   });
 
-  test("adapts the existing per-model mobile bootstrap without name guesses", () => {
+  test("keeps every existing mobile bootstrap model without name guesses", () => {
     const groups = normalizeMobileVideoBootstrapGroups(
       [
         {
@@ -493,15 +498,8 @@ describe("mobile video capability and response contract", () => {
       }).groups,
     ).toEqual([expect.objectContaining({ id: 21, name: "video视频" })]);
     expect(managedVideoModels(groups[0])).toEqual([
-      expect.objectContaining({
-        id: "agnes-video-v2",
-        modalities: ["video"],
-        adapter: "mobile-video-bootstrap",
-        video_capabilities: expect.objectContaining({
-          operations: ["generate"],
-          resolutions: ["720p", "1080p"],
-        }),
-      }),
+      expect.objectContaining({ id: "agnes-video-v2" }),
+      expect.objectContaining({ id: "chat-model-that-must-not-leak" }),
     ]);
   });
 
@@ -554,7 +552,7 @@ describe("mobile video capability and response contract", () => {
     });
   });
 
-  test("uses the video workspace only when video bootstrap is unavailable", () => {
+  test("keeps the account video workspace when a successful bootstrap is partial or empty", () => {
     const workspace = {
       user: { id: 7, balance: 0 },
       managed_api_key: { id: 1, name: "chat" },
@@ -608,13 +606,60 @@ describe("mobile video capability and response contract", () => {
         serverGroups: [],
         workspace,
       }),
-    ).toEqual({ source: "server", groups: [], suppressed: [] });
+    ).toEqual({
+      source: "workspace",
+      groups: workspace.workspaces.video.models.groups,
+      suppressed: [],
+    });
     expect(
       resolveManagedVideoGroups({
         serverBootstrapLoaded: false,
         workspace: { ...workspace, workspaces: undefined },
       }),
     ).toEqual({ source: "unavailable", groups: [], suppressed: [] });
+  });
+
+  test("merges a partial bootstrap into all account-authorized video groups by IDs", () => {
+    const workspaceGroups = [
+      {
+        id: 41,
+        name: "workspace group one",
+        models: [
+          { id: "provider-model-a", name: "provider-model-a" },
+          { id: "provider-model-b", name: "provider-model-b" },
+        ],
+      },
+      {
+        id: 42,
+        name: "workspace group two",
+        models: [{ id: "provider-model-c", name: "provider-model-c" }],
+      },
+    ] as any;
+    const serverGroups = [
+      {
+        id: 41,
+        name: "stale server label",
+        models: [
+          {
+            id: "provider-model-a",
+            display_name: "Server display name",
+            video_capabilities: { supported_resolutions: ["1080p"] },
+          },
+        ],
+      },
+    ] as any;
+
+    const merged = mergeManagedVideoGroups({ workspaceGroups, serverGroups });
+    expect(merged.map((group) => group.id)).toEqual([41, 42]);
+    expect(merged[0].name).toBe("workspace group one");
+    expect(merged[0].models?.map((model) => model.id)).toEqual([
+      "provider-model-a",
+      "provider-model-b",
+    ]);
+    expect(merged[0].models?.[0]).toMatchObject({
+      display_name: "Server display name",
+      video_capabilities: { supported_resolutions: ["1080p"] },
+    });
   });
 
   test("keeps a successful empty bootstrap distinct from a failed bootstrap", () => {
@@ -730,13 +775,30 @@ describe("mobile video capability and response contract", () => {
       app.indexOf("function AndroidImageStudio()"),
     );
 
-    expect(studio).toContain("managed.switchVideoGroup(selectedGroup.id)");
+    expect(studio).toContain("managed.switchVideoGroup(submissionGroup.id)");
     expect(studio).toContain('purpose: "video"');
     expect(studio).toContain("selectManagedVideoSessionForGroup(");
     expect(studio).toContain(
       "shouldRefreshManagedSession(activeManaged.videoSession)",
     );
     expect(studio).not.toContain("managed.switchGroup(selectedGroup.id)");
+  });
+
+  test("contains video faults inside a recoverable workbench boundary with sanitized diagnostics", () => {
+    const app = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.tsx"),
+      "utf8",
+    );
+    const studio = app.slice(
+      app.indexOf("function AndroidVideoStudio()"),
+      app.indexOf("function AndroidImageStudio()"),
+    );
+
+    expect(app).toContain("class MobileVideoWorkbenchBoundary");
+    expect(studio).toContain("<MobileVideoWorkbenchBoundary");
+    expect(studio).toContain("lastAction: lastVideoSelectionAction");
+    expect(app).toContain('type: "mobile_video_workbench"');
+    expect(app).not.toContain("prompt: this.props.diagnostic");
   });
 
   test("localizes server suppression codes instead of rendering the raw code", () => {

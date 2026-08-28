@@ -15,6 +15,7 @@ const config: Config = {
   modulePathIgnorePatterns: ["<rootDir>/.next/"],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/$1",
+    "^fflate$": "<rootDir>/node_modules/fflate/lib/browser.cjs",
   },
   extensionsToTreatAsEsm: [".ts", ".tsx"],
   injectGlobals: true,

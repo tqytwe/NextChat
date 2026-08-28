@@ -360,6 +360,13 @@ interface NextChatNativePlugin {
     title?: string;
     text?: string;
   }): Promise<void>;
+  shareFile?(options: {
+    dataUrl: string;
+    fileName?: string;
+    mimeType?: string;
+    title?: string;
+    text?: string;
+  }): Promise<void>;
   shareText(options: { title?: string; text: string }): Promise<void>;
   copyText?(options: { text: string }): Promise<void>;
   showNotification(options: { title: string; body: string }): Promise<void>;
@@ -953,6 +960,16 @@ export async function stopNativePerformanceTrace(
     traceId,
     outcome: String(outcome || "unknown").slice(0, 80),
   });
+}
+
+/**
+ * Ends the native-owned startup trace only after React has committed a usable
+ * shell. It deliberately does not depend on workspace, model, or account
+ * bootstrap requests.
+ */
+export async function reportNativeStartupInteractive() {
+  if (!isDirectNativeBridgeAvailable()) return;
+  await callDirectNative<void>("reportStartupInteractive");
 }
 
 export async function getNativePushInbox(): Promise<NativePushInboxItem[]> {
@@ -1581,6 +1598,56 @@ export async function shareImages(
     }
   }
   for (const item of prepared) downloadInBrowser(item.dataUrl, item.fileName);
+}
+
+export async function shareFile(
+  file: Blob,
+  fileName: string,
+  options: { title?: string; text?: string; mimeType?: string } = {},
+) {
+  const mimeType = options.mimeType || file.type || "application/octet-stream";
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  if (isNativeAndroid()) {
+    if (isDirectNativeBridgeAvailable()) {
+      return callDirectNative<void>("shareFile", {
+        dataUrl,
+        fileName,
+        mimeType,
+        title: options.title || "JisudengChat",
+        text: options.text || "",
+      });
+    }
+    if (NextChatNative.shareFile) {
+      return NextChatNative.shareFile({
+        dataUrl,
+        fileName,
+        mimeType,
+        title: options.title || "JisudengChat",
+        text: options.text || "",
+      });
+    }
+  }
+  const shareable = new File([file], fileName, { type: mimeType });
+  const payload: ShareData = {
+    title: options.title || "JisudengChat",
+    text: options.text,
+    files: [shareable],
+  };
+  if (navigator.canShare?.(payload)) {
+    await navigator.share(payload);
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    downloadInBrowser(url, fileName);
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }
 
 export async function shareText(text: string, title = "JisudengChat") {

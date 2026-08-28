@@ -158,7 +158,7 @@ describe("mobile app backend alignment", () => {
     expect(imageStudio).toContain('aria-label="image-prompt"');
     expect(imageStudio).toContain("const promptRef = useRef<HTMLTextAreaElement | null>(null)");
     expect(imageStudio).toContain("defaultValue={prompt}");
-    expect(imageStudio).toContain("overrides?.prompt ?? promptRef.current?.value ?? prompt");
+    expect(imageStudio).toContain("overrides?.prompt ??\n        persistedParams.prompt ??\n        promptRef.current?.value ??\n        prompt");
     expect(imageStudio).toContain("function setImagePrompt(next: string)");
     expect(imageStudio).toContain("promptRef.current.value = next");
     expect(videoStudio).toContain('aria-label="video-prompt"');
@@ -205,7 +205,7 @@ describe("mobile app backend alignment", () => {
     expect(generateAsset).not.toContain("managed.session?.api_key");
   });
 
-  test("keeps selected reference images local and requires an explicit edit-capable model choice", () => {
+  test("keeps selected reference images local without hiding normal image models", () => {
     const imageStudio = source.slice(
       source.indexOf("function AndroidImageStudio()"),
       source.indexOf("function AndroidGallery()"),
@@ -221,7 +221,8 @@ describe("mobile app backend alignment", () => {
     expect(imageStudio).toContain("referenceModelUnsupported(selectedModel)");
     expect(attachReferences).not.toContain("setSelectedModel(modelValue");
     expect(imageStudio).toContain("selectedReferenceLimit");
-    expect(imageStudio).toContain("validateManagedImageRequest({");
+    expect(imageStudio).not.toContain("validateManagedImageRequest({");
+    expect(imageStudio).toContain("const imageOutputLimit = 16;");
   });
 
   test("allows a ready shared file to start chat and passes its asset ID to the task", () => {
@@ -604,14 +605,14 @@ describe("mobile app backend alignment", () => {
     }
 
     expect(partialVisibleBlocks).toEqual([]);
-    expect(source).toContain(
-      'type ImagePromptLanguageMode = "app" | "zh" | "en" | "jp" | "ko" | "both"',
-    );
+    expect(source).not.toContain("ImagePromptLanguageMode");
+    expect(source).not.toContain('styles["prompt-language-row"]');
     expect(source).toContain("syncLocalPromptCatalog(");
     expect(source).toContain('appLocale === "jp"');
     expect(source).toContain('appLocale === "ko"');
-    expect(source).toContain("日本語");
-    expect(source).toContain("한국어");
+    expect(source).toContain("mobilePromptSemanticCategory");
+    expect(source).toContain("portrait-character");
+    expect(source).toContain("text-infographic");
   });
 
   test("uses planned single-image outputs and a bounded local content-kit queue", () => {
@@ -624,9 +625,8 @@ describe("mobile app backend alignment", () => {
     expect(kit).toContain("scene: selectedPreset.id");
     expect(kit).toContain("presetId: selectedPreset.id");
     expect(kit).toContain("activeRunId: runId");
-    expect(kit).toContain("CONTENT_KIT_GLOBAL_CONCURRENCY");
-    expect(kit).toContain("recommendedParallelism");
-    expect(kit).toContain("activeContentKitOutputs");
+    expect(kit).toContain("withMobileImageGenerationLock(activeAccountId");
+    expect(kit).toContain("queueRef.current.has(projectId)");
     expect(kit).toContain("content-kit-output-${asset.id}");
     expect(source).toContain(
       'requestId: clientRequestID("content-kit-output")',
@@ -642,10 +642,10 @@ describe("mobile app backend alignment", () => {
       source.indexOf("function AndroidImageStudio()"),
     );
     expect(kit).toContain('asset.status === "running"');
-    expect(kit).toContain('status: "queued", updatedAt: Date.now()');
+    expect(kit).toContain('status: "reconciling",');
     expect(source).toContain("max_reference_images");
     expect(kit).toContain("max_queued_outputs");
-    expect(kit).toContain('"/api/v1/nextchat/image-studio/estimate-batch"');
+    expect(kit).not.toContain('"/api/v1/nextchat/image-studio/estimate-batch"');
     expect(kit).toContain("CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT");
     expect(kit).toContain("createNextRun(selectedProject)");
     expect(kit).toContain("content-kit-preview-modal");
@@ -680,11 +680,51 @@ describe("mobile app backend alignment", () => {
     expect(kit).not.toContain("open={groupIndex === 0}");
   });
 
-  test("uses the server capability contract and coupon IDs", () => {
-    expect(source).toContain("validateManagedImageRequest");
-    expect(source).toContain("validateManagedVideoRequest");
+  test("keeps capability validation for authored workflows but lets account workspaces submit", () => {
+    expect(source).toContain("imageModelsForExactGroup");
+    expect(source).not.toContain("validateManagedVideoRequest");
     expect(source).toContain('"/api/v1/payment/coupons/quote"');
     expect(source).toContain("coupon_id: selectedCouponID || undefined");
+  });
+
+  test("shows the app shell before a background workspace bootstrap completes", () => {
+    const gate = source.slice(
+      source.indexOf("function AndroidManagedGateContent"),
+    );
+    expect(gate).toContain("setSecureRestoreDone(true);");
+    expect(gate).toContain("await managed.restoreSecureSession();");
+    expect(gate).toContain("return <AndroidStartupShell />;");
+    expect(gate).toContain("if (!secureRestoreDone) return;");
+    expect(gate).toContain("setFirstPaintReady(true)");
+    expect(gate).toContain("reportNativeStartupInteractive()");
+    expect(gate).toContain("firstPaintReady &&\n      backendBaseUrl");
+  });
+
+  test("keeps native startup visible and interactive traces independent", () => {
+    const nativeSource = readFileSync(
+      resolve(
+        process.cwd(),
+        "android/app/src/main/java/com/jisudeng/chat/MainActivity.java",
+      ),
+      "utf8",
+    );
+    const nativeClient = readFileSync(
+      resolve(process.cwd(), "app/client/android-native.ts"),
+      "utf8",
+    );
+    const onCreate = nativeSource.slice(
+      nativeSource.indexOf("public void onCreate"),
+      nativeSource.indexOf("@Override\n    protected void onNewIntent"),
+    );
+
+    expect(nativeSource).toContain("native_start_to_webview_visible");
+    expect(nativeSource).toContain("webview_first_interactive");
+    expect(nativeSource).toContain("onPageCommitVisible");
+    expect(nativeSource).toContain('case "reportStartupInteractive"');
+    expect(nativeClient).toContain('"reportStartupInteractive"');
+    expect(onCreate).toContain("SplashScreen.installSplashScreen(this)");
+    expect(onCreate).not.toContain("new TextToSpeech(this");
+    expect(nativeSource).toContain("initializeTextToSpeech()");
   });
 
   test("retries status-zero gateway failures and preserves diagnostic errors", () => {
@@ -784,11 +824,9 @@ describe("mobile app backend alignment", () => {
     const managedGate = source.slice(
       source.indexOf("function AndroidManagedGateContent"),
     );
-    expect(managedGate).toContain(
-      "const restored = await managed.restoreSecureSession();",
-    );
-    expect(managedGate).toContain("!current.workspace");
-    expect(managedGate).toContain(
+    expect(managedGate).toContain("await managed.restoreSecureSession();");
+    expect(managedGate).toContain("firstPaintReady &&");
+    expect(managedGate).not.toContain(
       "bootstrap({ silent: Boolean(current.workspace) })",
     );
     expect(managedGate).toContain("!latest.workspace");

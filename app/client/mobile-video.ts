@@ -14,8 +14,7 @@ import {
 } from "./managed-nextchat";
 import { resolveMobileChatPreference } from "./mobile-chat-preference";
 import type { MobileChatPreference } from "./mobile-chat-preference";
-import { isChatModel, isVideoModel } from "./mobile-model-kind";
-import { isExecutableManagedVideoModel } from "./mobile-media-contract";
+import { isChatModel } from "./mobile-model-kind";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -83,7 +82,11 @@ export type MobileVideoBootstrapFailure =
   | "unauthorized"
   | "request_failed";
 
-export type ManagedVideoGroupSource = "server" | "workspace" | "unavailable";
+export type ManagedVideoGroupSource =
+  | "server"
+  | "workspace"
+  | "merged"
+  | "unavailable";
 
 export type ResolvedManagedVideoGroups = {
   source: ManagedVideoGroupSource;
@@ -123,89 +126,15 @@ export function managedVideoWorkspaceModels(
   return workspace?.workspaces?.video?.models;
 }
 
-function hasDeclaredVideoCapabilities(
-  value: Pick<ManagedWorkspaceModel, "video_capabilities">,
-) {
-  return (
-    value.video_capabilities !== undefined && value.video_capabilities !== null
-  );
-}
-
 /**
- * A single declared field makes the enclosing response a capability-aware
- * contract.  Mixing declared and name-guessed models would let a stale alias
- * bypass the platform's authorization decision, so legacy recognition is
- * allowed only when the entire group is genuinely old.
+ * The video workspace is already purpose-scoped by the platform. Its group
+ * and model rows are display truth for the signed-in user, including newer
+ * provider rows that have not yet gained optional capability annotations.
  */
-function groupHasAnyMediaDeclaration(group: ManagedWorkspaceGroup) {
-  if (
-    Array.isArray(group.modalities) ||
-    group.video_available !== undefined ||
-    hasDeclaredVideoCapabilities(group) ||
-    Boolean(String(group.media_contract_version || "").trim())
-  ) {
-    return true;
-  }
-  return groupHasPerModelMediaDeclaration(group);
-}
-
-function groupHasPerModelMediaDeclaration(group: ManagedWorkspaceGroup) {
-  return (group.models || []).some(
-    (model) =>
-      Array.isArray(model.modalities) ||
-      model.image_capabilities !== undefined ||
-      hasDeclaredVideoCapabilities(model),
-  );
-}
-
-/**
- * Media contract markers may be declared at group scope. Pass that scope to
- * the shared resolver so a normalized mobile bootstrap cannot silently fall
- * back to provider-name matching for an undeclared model.
- */
-function groupMediaContract(
-  group: ManagedWorkspaceGroup,
-): ManagedWorkspaceModels {
-  return {
-    groups: [group],
-    video_capabilities_version: group.media_contract_version,
-  };
-}
-
-function isExecutableVideoModelInGroup(
-  model: ManagedWorkspaceModel,
-  group: ManagedWorkspaceGroup,
-) {
-  return isExecutableManagedVideoModel(model, groupMediaContract(group));
-}
-
-function isManagedVideoGroup(
-  group: ManagedWorkspaceGroup,
-  allowLegacyNameFallback: boolean,
-) {
-  if (group.video_available === false) return false;
-  if (!allowLegacyNameFallback && !groupHasAnyMediaDeclaration(group)) {
-    return false;
-  }
-  const models = group.models || [];
-  return Boolean(
-    models.some(
-      (model) =>
-        isExecutableVideoModelInGroup(model, group) ||
-        (allowLegacyNameFallback && isVideoModel(model)),
-    ),
-  );
-}
-
-/** Return only groups explicitly or structurally declared as video-capable. */
 export function filterManagedVideoGroups(
   groups?: ManagedWorkspaceGroup[],
 ): ManagedWorkspaceGroup[] {
-  const items = groups || [];
-  const allowLegacyNameFallback = !items.some(groupHasAnyMediaDeclaration);
-  return items.filter((group) =>
-    isManagedVideoGroup(group, allowLegacyNameFallback),
-  );
+  return (groups || []).filter((group) => (group.models || []).length > 0);
 }
 
 export function managedVideoGroups(
@@ -215,21 +144,10 @@ export function managedVideoGroups(
   return filterManagedVideoGroups(groups);
 }
 
-/**
- * A model belongs to the video workbench when the platform explicitly says so.
- * Older bootstraps that lack per-model modalities can still use the already
- * declared video workspace/group capability, but a contradictory declaration
- * always wins and is filtered out.
- */
 export function managedVideoModels(
   group?: ManagedWorkspaceGroup,
 ): ManagedWorkspaceModel[] {
-  if (!group || group.video_available === false) return [];
-  const allowLegacyNameFallback = !groupHasAnyMediaDeclaration(group);
-  return (group.models || []).filter((model) => {
-    if (isExecutableVideoModelInGroup(model, group)) return true;
-    return allowLegacyNameFallback && isVideoModel(model);
-  });
+  return group?.models || [];
 }
 
 function normalizeServerModalities(
@@ -357,20 +275,11 @@ export function normalizeMobileVideoBootstrapGroups(
     const sourceModels = group.models?.length
       ? group.models
       : Object.keys(group.model_capabilities || {});
-    const authorizedModelIDs = new Set(
-      Object.keys(group.model_capabilities || {}).map((value) =>
-        value.trim().toLowerCase(),
-      ),
-    );
-    const models = authorizedModelIDs.size
-      ? sourceModels.filter((model) => {
-          // Typed models carry their own declaration and must not be hidden
-          // merely because an older sibling-only capability map is present.
-          if (typeof model !== "string") return true;
-          const id = typeof model === "string" ? model : "";
-          return authorizedModelIDs.has(id.trim().toLowerCase());
-        })
-      : sourceModels;
+    // A sibling capability map is supplementary metadata, not an allow-list.
+    // The signed-in video workspace already describes the user's selectable
+    // group. Dropping string rows here made newly added models disappear until
+    // every optional capability row had been populated.
+    const models = sourceModels;
     return [
       {
         id,
@@ -395,27 +304,128 @@ export function normalizeMobileVideoBootstrapGroups(
   });
 }
 
+function groupKey(group: ManagedWorkspaceGroup) {
+  return String(Number(group.id));
+}
+
+function modelKey(model: ManagedWorkspaceModel) {
+  return managedWorkspaceModelID(model);
+}
+
+function mergeManagedVideoModels(
+  workspaceModels?: ManagedWorkspaceModel[],
+  serverModels?: ManagedWorkspaceModel[],
+): ManagedWorkspaceModel[] {
+  const supplemental = new Map(
+    (serverModels || [])
+      .map((model) => [modelKey(model), model] as const)
+      .filter(([id]) => Boolean(id)),
+  );
+  const merged: ManagedWorkspaceModel[] = [];
+
+  for (const workspaceModel of workspaceModels || []) {
+    const id = modelKey(workspaceModel);
+    const serverModel = supplemental.get(id);
+    if (!serverModel) {
+      merged.push(workspaceModel);
+      continue;
+    }
+    supplemental.delete(id);
+    // The purpose-scoped workspace controls membership. The dedicated
+    // bootstrap can only enrich the same model with newer presentation and
+    // capability metadata; it must never remove a valid account-owned row.
+    merged.push({
+      ...workspaceModel,
+      ...serverModel,
+      id: workspaceModel.id || serverModel.id,
+      name: workspaceModel.name || serverModel.name,
+      display_name: serverModel.display_name || workspaceModel.display_name,
+      modalities: serverModel.modalities || workspaceModel.modalities,
+      video_capabilities:
+        serverModel.video_capabilities || workspaceModel.video_capabilities,
+    });
+  }
+
+  // A newer server bootstrap can expose an extra video model before the
+  // workspace refresh reaches the device. It is already purpose-scoped, so it
+  // is safe to append without looking at a model or group name.
+  supplemental.forEach((model) => merged.push(model));
+  return merged;
+}
+
 /**
- * Server video bootstrap is authoritative when it succeeds, including an
- * intentionally empty group list. If that endpoint is unavailable, reuse only
- * the separately declared video workspace and never the chat workspace.
+ * Keep the signed-in video workspace as the complete account membership list.
+ * The dedicated bootstrap is a metadata supplement, not an allow-list: it can
+ * be partially populated while a user already has a newly added video group.
  */
+export function mergeManagedVideoGroups(input: {
+  workspaceGroups?: ManagedWorkspaceGroup[];
+  serverGroups?: ManagedWorkspaceGroup[];
+}): ManagedWorkspaceGroup[] {
+  const serverById = new Map(
+    filterManagedVideoGroups(input.serverGroups).map((group) => [
+      groupKey(group),
+      group,
+    ]),
+  );
+  const merged: ManagedWorkspaceGroup[] = [];
+
+  for (const workspaceGroup of filterManagedVideoGroups(
+    input.workspaceGroups,
+  )) {
+    const serverGroup = serverById.get(groupKey(workspaceGroup));
+    if (!serverGroup) {
+      merged.push(workspaceGroup);
+      continue;
+    }
+    serverById.delete(groupKey(workspaceGroup));
+    merged.push({
+      ...workspaceGroup,
+      ...serverGroup,
+      id: workspaceGroup.id,
+      name: workspaceGroup.name || serverGroup.name,
+      models: mergeManagedVideoModels(
+        workspaceGroup.models,
+        serverGroup.models,
+      ),
+      video_capabilities:
+        serverGroup.video_capabilities || workspaceGroup.video_capabilities,
+      video_suppressed:
+        serverGroup.video_suppressed || workspaceGroup.video_suppressed,
+    });
+  }
+
+  serverById.forEach((group) => merged.push(group));
+  return filterManagedVideoGroups(merged);
+}
+
 export function resolveManagedVideoGroups(input: {
   serverBootstrapLoaded: boolean;
   serverGroups?: ManagedWorkspaceGroup[];
   workspace?: ManagedWorkspaceBootstrap | null;
 }): ResolvedManagedVideoGroups {
-  if (input.serverBootstrapLoaded) {
-    return {
-      source: "server",
-      groups: filterManagedVideoGroups(input.serverGroups),
-      suppressed: collectManagedVideoUnavailableDiagnostics(input.serverGroups),
-    };
-  }
   const workspaceGroups = managedVideoGroups(input.workspace);
-  return workspaceGroups.length
-    ? { source: "workspace", groups: workspaceGroups, suppressed: [] }
-    : { source: "unavailable", groups: [], suppressed: [] };
+  const serverGroups = filterManagedVideoGroups(input.serverGroups);
+  if (!input.serverBootstrapLoaded) {
+    return workspaceGroups.length
+      ? { source: "workspace", groups: workspaceGroups, suppressed: [] }
+      : { source: "unavailable", groups: [], suppressed: [] };
+  }
+
+  const groups = mergeManagedVideoGroups({ workspaceGroups, serverGroups });
+  const source: ManagedVideoGroupSource =
+    workspaceGroups.length && serverGroups.length
+      ? "merged"
+      : workspaceGroups.length
+      ? "workspace"
+      : serverGroups.length
+      ? "server"
+      : "server";
+  return {
+    source,
+    groups,
+    suppressed: collectManagedVideoUnavailableDiagnostics(input.serverGroups),
+  };
 }
 
 /**
@@ -459,11 +469,7 @@ export function managedVideoCapabilities(
   group?: ManagedWorkspaceGroup,
 ) {
   if (model?.video_capabilities) return model.video_capabilities;
-  // A group summary can support an entirely legacy bootstrap, but a current
-  // response must carry the exact model capability that its adapter executes.
-  return group && !groupHasAnyMediaDeclaration(group)
-    ? group.video_capabilities
-    : undefined;
+  return group?.video_capabilities;
 }
 
 export type MobileVideoScriptChatSession = {

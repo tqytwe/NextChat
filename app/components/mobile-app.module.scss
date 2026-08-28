@@ -4001,6 +4001,27 @@
   gap: 12px;
 }
 
+.content-kit-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+
+  button {
+    min-height: 40px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--white);
+    color: var(--black);
+    font-weight: 700;
+
+    &.active {
+      border-color: var(--ios-blue);
+      background: var(--ios-blue);
+      color: white;
+    }
+  }
+}
+
 .content-kit-fields {
   display: grid;
   gap: 10px;

@@ -57,6 +57,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import androidx.core.content.FileProvider;
 import androidx.core.content.ContextCompat;
+import androidx.core.splashscreen.SplashScreen;
 import com.android.billingclient.api.AcknowledgePurchaseParams;
 import com.android.billingclient.api.BillingClient;
 import com.android.billingclient.api.BillingClientStateListener;
@@ -174,6 +175,8 @@ public class MainActivity extends Activity {
     private String wakeWordLanguage;
     private TextToSpeech textToSpeech;
     private boolean textToSpeechReady;
+    private boolean textToSpeechInitializing;
+    private final List<PendingTextToSpeechRequest> pendingTextToSpeechRequests = new ArrayList<>();
     private final Map<String, Boolean> activeSpeechUtterances = new ConcurrentHashMap<>();
     private final Map<String, HttpURLConnection> streamConnections = new ConcurrentHashMap<>();
     private final Map<String, Boolean> cancelledStreamRequests = new ConcurrentHashMap<>();
@@ -189,9 +192,10 @@ public class MainActivity extends Activity {
     private String lastPushIntentSignature = "";
     private long lastPushIntentDispatchedAtMs = 0L;
     private boolean fcmTokenRefreshReceiverRegistered = false;
+    private boolean postFirstPaintServicesStarted = false;
     private int crashlyticsConsoleLogCount = 0;
-    private Trace appColdStartTrace;
-    private Trace webViewFirstLoadTrace;
+    private Trace nativeToWebViewVisibleTrace;
+    private Trace webViewFirstInteractiveTrace;
     private final Map<String, Trace> activePerformanceTraces = new ConcurrentHashMap<>();
     private final BroadcastReceiver fcmTokenRefreshReceiver = new BroadcastReceiver() {
         @Override
@@ -208,41 +212,11 @@ public class MainActivity extends Activity {
     @Override
     @SuppressLint("SetJavaScriptEnabled")
     public void onCreate(Bundle savedInstanceState) {
+        SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
 
         configureCrashlytics();
         startStartupPerformanceTraces();
-        registerFcmTokenRefreshReceiver();
-
-        textToSpeech = new TextToSpeech(this, status -> {
-            textToSpeechReady = status == TextToSpeech.SUCCESS;
-            if (textToSpeechReady && textToSpeech != null) {
-                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                    @Override
-                    public void onStart(String utteranceId) {
-                        emitSpeechEvent(utteranceId, "started", null);
-                    }
-
-                    @Override
-                    public void onDone(String utteranceId) {
-                        activeSpeechUtterances.remove(utteranceId);
-                        emitSpeechEvent(utteranceId, "done", null);
-                    }
-
-                    @Override
-                    @Deprecated
-                    public void onError(String utteranceId) {
-                        activeSpeechUtterances.remove(utteranceId);
-                        JSONObject payload = new JSONObject();
-                        try {
-                            payload.put("message", "text to speech failed");
-                        } catch (JSONException ignored) {
-                        }
-                        emitSpeechEvent(utteranceId, "error", payload);
-                    }
-                });
-            }
-        });
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.rgb(245, 245, 247));
@@ -277,8 +251,6 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new NativeBridge(), "JisudengNativeBridge");
 
         setContentView(webView);
-        ensurePushNotificationChannel(this);
-        registerNetworkRecoveryCallback();
         webView.loadUrl(
             LOCAL_ORIGIN + "/?nativeBridgeToken=" + Uri.encode(bridgeToken)
         );
@@ -639,35 +611,75 @@ public class MainActivity extends Activity {
 
     private void startStartupPerformanceTraces() {
         try {
-            appColdStartTrace = FirebasePerformance.getInstance().newTrace("app_cold_start");
-            appColdStartTrace.putAttribute("distribution", BuildConfig.DISTRIBUTION_CHANNEL);
-            appColdStartTrace.start();
-            webViewFirstLoadTrace = FirebasePerformance.getInstance().newTrace("webview_first_load");
-            webViewFirstLoadTrace.putAttribute("distribution", BuildConfig.DISTRIBUTION_CHANNEL);
-            webViewFirstLoadTrace.start();
+            nativeToWebViewVisibleTrace = FirebasePerformance.getInstance()
+                .newTrace("native_start_to_webview_visible");
+            nativeToWebViewVisibleTrace.putAttribute("distribution", BuildConfig.DISTRIBUTION_CHANNEL);
+            nativeToWebViewVisibleTrace.start();
+            webViewFirstInteractiveTrace = FirebasePerformance.getInstance()
+                .newTrace("webview_first_interactive");
+            webViewFirstInteractiveTrace.putAttribute("distribution", BuildConfig.DISTRIBUTION_CHANNEL);
+            webViewFirstInteractiveTrace.start();
         } catch (Exception error) {
             FirebaseCrashlytics.getInstance().log(
                 "Unable to start startup performance traces: " + error.getClass().getSimpleName()
             );
-            appColdStartTrace = null;
-            webViewFirstLoadTrace = null;
+            nativeToWebViewVisibleTrace = null;
+            webViewFirstInteractiveTrace = null;
+        }
+    }
+
+    private void markWebViewFirstVisible() {
+        if (nativeToWebViewVisibleTrace != null) {
+            try {
+                nativeToWebViewVisibleTrace.stop();
+            } catch (Exception ignored) {
+            }
+            nativeToWebViewVisibleTrace = null;
+        }
+    }
+
+    private void markWebViewFirstInteractive() {
+        if (webViewFirstInteractiveTrace != null) {
+            try {
+                webViewFirstInteractiveTrace.stop();
+            } catch (Exception ignored) {
+            }
+            webViewFirstInteractiveTrace = null;
         }
     }
 
     private void stopStartupPerformanceTraces() {
-        if (webViewFirstLoadTrace != null) {
-            try {
-                webViewFirstLoadTrace.stop();
-            } catch (Exception ignored) {
-            }
-            webViewFirstLoadTrace = null;
-        }
-        if (appColdStartTrace != null) {
-            try {
-                appColdStartTrace.stop();
-            } catch (Exception ignored) {
-            }
-            appColdStartTrace = null;
+        markWebViewFirstVisible();
+        markWebViewFirstInteractive();
+    }
+
+    private void startPostFirstPaintServices() {
+        if (postFirstPaintServicesStarted) return;
+        postFirstPaintServicesStarted = true;
+        ensurePushNotificationChannel(this);
+        registerFcmTokenRefreshReceiver();
+        registerNetworkRecoveryCallback();
+    }
+
+    private static final class PendingTextToSpeechRequest {
+        final String requestId;
+        final String text;
+        final String language;
+        final double rate;
+        final String utteranceId;
+
+        PendingTextToSpeechRequest(
+            String requestId,
+            String text,
+            String language,
+            double rate,
+            String utteranceId
+        ) {
+            this.requestId = requestId;
+            this.text = text;
+            this.language = language;
+            this.rate = rate;
+            this.utteranceId = utteranceId;
         }
     }
 
@@ -1297,6 +1309,16 @@ public class MainActivity extends Activity {
                         options.optString("text", "")
                     );
                     break;
+                case "shareFile":
+                    shareFile(
+                        requestId,
+                        options.optString("dataUrl"),
+                        options.optString("fileName", "jisudeng-project.zip"),
+                        options.optString("mimeType", "application/octet-stream"),
+                        options.optString("title", "JisudengChat"),
+                        options.optString("text", "")
+                    );
+                    break;
                 case "shareText":
                     shareText(
                         requestId,
@@ -1357,6 +1379,10 @@ public class MainActivity extends Activity {
                     break;
                 case "stopPerformanceTrace":
                     stopPerformanceTrace(requestId, options);
+                    break;
+                case "reportStartupInteractive":
+                    markWebViewFirstInteractive();
+                    resolve(requestId, new JSONObject());
                     break;
                 case "getPushInbox":
                     getPushInbox(requestId);
@@ -2334,7 +2360,16 @@ public class MainActivity extends Activity {
             return;
         }
         if (textToSpeech == null || !textToSpeechReady) {
-            reject(requestId, "text to speech is not ready");
+            pendingTextToSpeechRequests.add(
+                new PendingTextToSpeechRequest(
+                    requestId,
+                    cleanText,
+                    language,
+                    rate,
+                    requestedUtteranceId
+                )
+            );
+            initializeTextToSpeech();
             return;
         }
         try {
@@ -2367,6 +2402,58 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             reject(requestId, error.getMessage());
         }
+    }
+
+    private void initializeTextToSpeech() {
+        if (textToSpeech != null || textToSpeechInitializing) return;
+        textToSpeechInitializing = true;
+        textToSpeech = new TextToSpeech(this, status -> {
+            textToSpeechInitializing = false;
+            textToSpeechReady = status == TextToSpeech.SUCCESS;
+            if (!textToSpeechReady || textToSpeech == null) {
+                textToSpeech = null;
+                for (PendingTextToSpeechRequest request : new ArrayList<>(pendingTextToSpeechRequests)) {
+                    reject(request.requestId, "text to speech is unavailable");
+                }
+                pendingTextToSpeechRequests.clear();
+                return;
+            }
+            textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override
+                public void onStart(String utteranceId) {
+                    emitSpeechEvent(utteranceId, "started", null);
+                }
+
+                @Override
+                public void onDone(String utteranceId) {
+                    activeSpeechUtterances.remove(utteranceId);
+                    emitSpeechEvent(utteranceId, "done", null);
+                }
+
+                @Override
+                @Deprecated
+                public void onError(String utteranceId) {
+                    activeSpeechUtterances.remove(utteranceId);
+                    JSONObject payload = new JSONObject();
+                    try {
+                        payload.put("message", "text to speech failed");
+                    } catch (JSONException ignored) {
+                    }
+                    emitSpeechEvent(utteranceId, "error", payload);
+                }
+            });
+            List<PendingTextToSpeechRequest> pending = new ArrayList<>(pendingTextToSpeechRequests);
+            pendingTextToSpeechRequests.clear();
+            for (PendingTextToSpeechRequest request : pending) {
+                speakText(
+                    request.requestId,
+                    request.text,
+                    request.language,
+                    request.rate,
+                    request.utteranceId
+                );
+            }
+        });
     }
 
     private void stopSpeaking() {
@@ -2824,6 +2911,33 @@ public class MainActivity extends Activity {
             Intent intent = new Intent(Intent.ACTION_SEND);
             intent.setType("text/plain");
             intent.putExtra(Intent.EXTRA_TEXT, text);
+            startActivity(Intent.createChooser(intent, title));
+            resolve(requestId, new JSONObject());
+        } catch (Exception error) {
+            reject(requestId, error.getMessage());
+        }
+    }
+
+    private void shareFile(
+        String requestId,
+        String dataUrl,
+        String fileName,
+        String mimeType,
+        String title,
+        String text
+    ) {
+        try {
+            File file = writeShareFileToCache(dataUrl, fileName);
+            Uri uri = FileProvider.getUriForFile(
+                this,
+                getPackageName() + ".fileprovider",
+                file
+            );
+            Intent intent = new Intent(Intent.ACTION_SEND);
+            intent.setType(normalizeMimeType(mimeType));
+            intent.putExtra(Intent.EXTRA_STREAM, uri);
+            intent.putExtra(Intent.EXTRA_TEXT, text);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(intent, title));
             resolve(requestId, new JSONObject());
         } catch (Exception error) {
@@ -4129,6 +4243,19 @@ public class MainActivity extends Activity {
         return file;
     }
 
+    private File writeShareFileToCache(String dataUrl, String fileName) throws IOException {
+        byte[] data = decodeDataUrl(dataUrl);
+        File dir = new File(getCacheDir(), "shared-files");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("failed to create share cache");
+        }
+        File file = uniqueImageFile(dir, safeFileName(fileName));
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(data);
+        }
+        return file;
+    }
+
 
     private File getAppImageDir() {
         File dir = new File(getFilesDir(), APP_IMAGE_FOLDER);
@@ -4550,12 +4677,24 @@ public class MainActivity extends Activity {
         }
 
         @Override
+        public void onPageCommitVisible(WebView view, String url) {
+            super.onPageCommitVisible(view, url);
+            if (url == null || !url.startsWith(LOCAL_ORIGIN)) return;
+            markWebViewFirstVisible();
+            startPostFirstPaintServices();
+        }
+
+        @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
             if (initialIntentsDispatched || url == null || !url.startsWith(LOCAL_ORIGIN)) {
                 return;
             }
-            stopStartupPerformanceTraces();
+            // Older WebView implementations can miss onPageCommitVisible. This
+            // fallback records visibility without making page completion the
+            // normal startup timing boundary.
+            markWebViewFirstVisible();
+            startPostFirstPaintServices();
             initialIntentsDispatched = true;
             dispatchIncomingDeepLink(getIntent());
             dispatchPaymentReturn(getIntent());

@@ -479,6 +479,37 @@ public class NextChatNativePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void shareFile(PluginCall call) {
+        String dataUrl = call.getString("dataUrl", "");
+        String fileName = safeFileName(call.getString("fileName", "jisudeng-project.zip"));
+        String mimeType = call.getString("mimeType", "application/octet-stream");
+        String title = call.getString("title", "JisudengChat");
+        String text = call.getString("text", "");
+        try {
+            File dir = new File(getContext().getCacheDir(), "shared-files");
+            if (!dir.exists() && !dir.mkdirs()) throw new IOException("failed to create share cache");
+            File file = new File(dir, fileName);
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                out.write(decodeDataUrl(dataUrl));
+            }
+            Uri uri = FileProvider.getUriForFile(
+                getContext(),
+                getContext().getPackageName() + ".fileprovider",
+                file
+            );
+            Intent intent = new Intent(Intent.ACTION_SEND);
+            intent.setType(mimeType);
+            intent.putExtra(Intent.EXTRA_STREAM, uri);
+            intent.putExtra(Intent.EXTRA_TEXT, text);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getActivity().startActivity(Intent.createChooser(intent, title));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject(e.getMessage(), e);
+        }
+    }
+
+    @PluginMethod
     public void copyText(PluginCall call) {
         String text = call.getString("text", "");
         ClipboardManager clipboard = (ClipboardManager) getContext().getSystemService(Context.CLIPBOARD_SERVICE);

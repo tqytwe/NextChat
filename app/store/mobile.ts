@@ -37,6 +37,7 @@ export type ContentKitAssetKind = string;
 export type ContentKitTaskStatus =
   | "idle"
   | "queued"
+  | "reconciling"
   | "running"
   | "completed"
   | "failed"
@@ -191,7 +192,11 @@ function migrateContentKit(kit: any): ManagedMobileContentKit {
       variant: Number(asset.variant || 1),
       requestId: asset.requestId || newId("content-kit-output"),
       billingStatus: asset.billingStatus || "pending",
-      status: asset.status === "running" ? "queued" : asset.status || "idle",
+      // A request left in flight cannot be safely resent after process death:
+      // retain it for manual result reconciliation instead of duplicating a
+      // potentially billable image request.
+      status:
+        asset.status === "running" ? "reconciling" : asset.status || "idle",
       tags: Array.isArray(asset.tags) ? asset.tags : [],
       updatedAt: Number(asset.updatedAt || kit.updatedAt || Date.now()),
     };
