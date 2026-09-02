@@ -142,6 +142,7 @@ export function filterManagedVideoGroups(
     return (
       (group.models || []).length > 0 ||
       group.video_available === true ||
+      Boolean(group.video_unavailable_code) ||
       (group.modalities || []).includes("video") ||
       Boolean(group.video_capabilities) ||
       Boolean(group.video_suppressed?.length)

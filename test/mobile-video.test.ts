@@ -677,6 +677,62 @@ describe("mobile video capability and response contract", () => {
     ).toEqual({ source: "unavailable", groups: [], suppressed: [] });
   });
 
+  test("keeps every account-visible video group while respecting a server-disabled group", () => {
+    const workspace = {
+      workspaces: {
+        video: {
+          models: {
+            groups: [
+              {
+                id: 45,
+                name: "video视频",
+                models: [{ id: "agnes-video-2.5", name: "agnes-video-2.5" }],
+              },
+              {
+                id: 65,
+                name: "Grok Heavy",
+                models: [videoModel],
+              },
+            ],
+          },
+        },
+      },
+    } as any;
+    const resolved = resolveManagedVideoGroups({
+      serverBootstrapLoaded: true,
+      workspace,
+      serverGroups: [
+        {
+          id: 45,
+          name: "video视频",
+          video_available: false,
+          video_unavailable_code: "capability_not_declared",
+          video_suppressed: [{ model: "agnes-video-2.5", code: "price_missing" }],
+        },
+        {
+          id: 65,
+          name: "Grok Heavy",
+          video_available: true,
+          models: [videoModel],
+        },
+      ] as any,
+    });
+
+    expect(resolved.groups.map((group) => group.id)).toEqual([45, 65]);
+    expect(resolved.groups[0].models?.map((model) => model.id)).toEqual([
+      "agnes-video-2.5",
+    ]);
+    expect(resolved.groups[0].video_available).toBe(false);
+    expect(resolved.groups[1].models?.map((model) => model.id)).toEqual([
+      "seedance-1",
+    ]);
+    expect(resolved.suppressed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ groupId: 45, code: "price_missing" }),
+      ]),
+    );
+  });
+
   test("does not reuse chat credentials when the video session is absent or mislabelled", () => {
     const chat = {
       user_id: 7,
@@ -816,6 +872,7 @@ describe("mobile video capability and response contract", () => {
     expect(app).toContain("adapter_unsupported:");
     expect(app).toContain("subscription_reservation_unsupported:");
     expect(studio).toContain("serverCheckedWithoutVideo");
+    expect(studio).toContain("selectedVideoUnavailableHint");
     expect(studio).toContain("localizedVideoUnavailableReason(");
     expect(studio).not.toContain("unavailableVideoDiagnostic.code}</span>");
   });

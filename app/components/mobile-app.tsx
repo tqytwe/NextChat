@@ -123,6 +123,7 @@ import {
   recoverMobileImageQueueTask,
   resumeBlockedCreationQueueTasks,
 } from "../client/mobile-image-queue";
+import { requestManagedAsyncImageTask } from "../client/mobile-image-async";
 import {
   buildMobileVideoScriptPrompt,
   classifyMobileVideoBootstrapFailure,
@@ -3883,6 +3884,59 @@ function openAIImageData(json: any) {
   return [];
 }
 
+type ManagedImageGatewayResponse = {
+  ok: boolean;
+  status: number;
+  text: string;
+  requestId?: string;
+  imageApiKey?: string;
+};
+
+/**
+ * Images can take longer than the CDN's synchronous request window. Submit
+ * once to the durable async gateway, then poll the same task with the same
+ * image-purpose key. A missing/unknown task id is returned to the caller so
+ * its normal error handling can surface the real gateway response.
+ */
+async function requestManagedAsyncImage(
+  baseUrl: string,
+  endpoint: "/images/generations" | "/images/edits",
+  request: { headers: Record<string, string>; body: BodyInit },
+  apiKey: string,
+  text: ManagedMobileText,
+  signal?: AbortSignal,
+): Promise<ManagedImageGatewayResponse> {
+  return requestManagedAsyncImageTask({
+    submit: () =>
+      managedGatewayRequestText(
+        baseUrl,
+        `/v1${endpoint}/async`,
+        {
+          method: "POST",
+          headers: request.headers,
+          body: request.body,
+          signal,
+        },
+        apiKey,
+        text,
+      ),
+    poll: (pollPath, taskId) =>
+      managedGatewayRequestText(
+        baseUrl,
+        pollPath,
+        {
+          method: "GET",
+          headers: { Accept: "application/json", "X-Request-ID": taskId },
+          signal,
+        },
+        apiKey,
+        text,
+      ),
+    timeoutMessage: text.errors.requestTimeout,
+    signal,
+  });
+}
+
 async function persistContentKitImageResult(
   result: any,
   context: {
@@ -3896,6 +3950,8 @@ async function persistContentKitImageResult(
     kind: string;
     label: string;
     collectionId: string;
+    downloadBaseUrl?: string;
+    downloadApiKey?: string;
     overlay?: {
       brief: ContentWorkbenchBrief;
       shot: WorkbenchShotPlan;
@@ -3909,15 +3965,20 @@ async function persistContentKitImageResult(
       : result?.b64_json
       ? `data:image/png;base64,${result.b64_json}`
       : result?.image || result?.url || "";
-  if (/^https?:\/\//i.test(source)) {
-    imageData = await compressImage(
-      await (await fetch(source)).blob(),
-      1024 * 1024,
-    );
+  if (source.startsWith("data:")) {
+    imageData = source;
+  } else if (/^https?:\/\//i.test(source) || source.startsWith("/")) {
+    const blob =
+      context.downloadBaseUrl && context.downloadApiKey
+        ? await managedDownloadBlob(
+            context.downloadBaseUrl,
+            source,
+            context.downloadApiKey,
+          )
+        : await (await fetch(source)).blob();
+    imageData = await compressImage(blob, 1024 * 1024);
   } else if (source) {
-    imageData = source.startsWith("data:")
-      ? source
-      : `data:image/png;base64,${source}`;
+    imageData = `data:image/png;base64,${source}`;
   }
   if (!imageData) throw new Error("Image response did not contain an image.");
   if (context.overlay) {
@@ -12806,7 +12867,8 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
           ? { watermark: false }
           : {}),
       };
-      const endpoint = project.referenceImages.length
+      const endpoint: "/images/generations" | "/images/edits" = project
+        .referenceImages.length
         ? "/images/edits"
         : "/images/generations";
       if (project.referenceImages.length) {
@@ -12826,10 +12888,10 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify(payload);
       }
-      const response = await managedGatewayRequestText(
+      const response = await requestManagedAsyncImage(
         activeManaged.backendBaseUrl,
-        `/v1${endpoint}`,
-        { method: "POST", headers, body },
+        endpoint,
+        { headers, body },
         imageSession.api_key,
         text,
       );
@@ -12873,6 +12935,8 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
         kind: asset.kind,
         label: asset.label,
         collectionId: project.id,
+        downloadBaseUrl: activeManaged.backendBaseUrl,
+        downloadApiKey: imageSession.api_key,
         overlay: {
           brief: contentKitBriefFromProject(project),
           shot: overlayShot,
@@ -15007,15 +15071,55 @@ type ResolvedVideoStudioSelection = {
   durations: number[];
 };
 
+function videoModelCanSubmit(
+  model?: ManagedWorkspaceModel,
+  group?: ManagedWorkspaceGroup,
+) {
+  const capabilities = managedVideoCapabilities(model, group);
+  const operations = capabilities?.operations || [];
+  const resolutions =
+    capabilities?.resolutions || capabilities?.supported_resolutions || [];
+  const durations =
+    capabilities?.durations || capabilities?.supported_durations || [];
+  const hasGenerateOperation =
+    operations.includes("generate") || capabilities?.text_to_video === true;
+  return (
+    group?.video_available !== false &&
+    hasGenerateOperation &&
+    resolutions.length > 0 &&
+    durations.length > 0
+  );
+}
+
 function resolveVideoStudioSelection(
   groups: ManagedWorkspaceGroup[],
   preferences: VideoStudioPreferences,
 ): ResolvedVideoStudioSelection {
+  const preferredGroup = groups.find(
+    (item) => item.id === Number(preferences.groupId),
+  );
+  // A newly installed app has no saved group. Prefer a group with a server
+  // declared executable model instead of simply choosing the first account
+  // group, which is often a general chat group with video-named rows.
   const group =
-    groups.find((item) => item.id === Number(preferences.groupId)) || groups[0];
+    preferredGroup ||
+    groups.find((item) =>
+      managedVideoModels(item).some((model) =>
+        videoModelCanSubmit(model, item),
+      ),
+    ) ||
+    groups[0];
   const models = managedVideoModels(group);
+  const executableModels = models.filter((item) =>
+    videoModelCanSubmit(item, group),
+  );
   const model =
-    models.find((item) => modelMatches(item, preferences.model)) || models[0];
+    executableModels.find((item) => modelMatches(item, preferences.model)) ||
+    (preferences.model
+      ? models.find((item) => modelMatches(item, preferences.model))
+      : undefined) ||
+    executableModels[0] ||
+    models[0];
   const capabilities = managedVideoCapabilities(model, group);
   const resolutions =
     capabilities?.resolutions ||
@@ -15788,6 +15892,10 @@ function AndroidVideoStudio() {
     serverBootstrapFailure,
   );
   const unavailableVideoDiagnostic = resolvedVideoGroups.suppressed[0];
+  const selectedVideoUnavailableDiagnostics =
+    resolvedVideoGroups.suppressed.filter(
+      (item) => Number(item.groupId) === Number(selectedGroup?.id || 0),
+    );
   const serverCheckedWithoutVideo =
     serverBootstrapState === "ready" &&
     videoGroupSource === "server" &&
@@ -15801,6 +15909,15 @@ function AndroidVideoStudio() {
         unavailableVideoDiagnostic.code,
       )}`
     : copy.groupHint;
+  const selectedVideoUnavailableHint = selectedVideoUnavailableDiagnostics
+    .slice(0, 2)
+    .map((item) =>
+      [item.model, localizedVideoUnavailableReason(copy, item.code)]
+        .filter(Boolean)
+        .join(": "),
+    )
+    .filter(Boolean)
+    .join(" · ");
   const videoSelection = useMemo(
     () => resolveVideoStudioSelection(groups, preferences),
     [groups, preferences],
@@ -17280,6 +17397,7 @@ function AndroidVideoStudio() {
   const noCapability =
     !selectedGroup ||
     !selectedModel ||
+    !videoModelCanSubmit(selectedModel, selectedGroup) ||
     resolutions.length === 0 ||
     ratios.length === 0 ||
     durations.length === 0;
@@ -17370,7 +17488,7 @@ function AndroidVideoStudio() {
               <div className={styles["image-routing-hint"]}>
                 <div>
                   <strong>{groups.length ? copy.noModel : copy.noGroup}</strong>
-                  <span>{copy.groupHint}</span>
+                  <span>{selectedVideoUnavailableHint || copy.groupHint}</span>
                 </div>
               </div>
             )}
@@ -17628,7 +17746,11 @@ function AndroidVideoStudio() {
               >
                 {videoModels.length ? (
                   videoModels.map((model) => (
-                    <option key={modelValue(model)} value={modelValue(model)}>
+                    <option
+                      key={modelValue(model)}
+                      value={modelValue(model)}
+                      disabled={!videoModelCanSubmit(model, selectedGroup)}
+                    >
                       {modelLabel(model)}
                     </option>
                   ))
@@ -18309,16 +18431,31 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
       prompt: string;
       model: string;
       signal?: AbortSignal;
+      downloadBaseUrl?: string;
+      downloadApiKey?: string;
     },
   ) {
     let imageData = "";
     if (context.signal?.aborted) {
       throw new DOMException("Aborted", "AbortError");
     }
+    const downloadResult = async (url: string) => {
+      if (context.downloadBaseUrl && context.downloadApiKey) {
+        return managedDownloadBlob(
+          context.downloadBaseUrl,
+          url,
+          context.downloadApiKey,
+          context.signal,
+        );
+      }
+      const res = await fetch(url, { signal: context.signal });
+      if (!res.ok)
+        throw new Error(`image result download failed: HTTP ${res.status}`);
+      return res.blob();
+    };
     if (typeof result === "string") {
-      if (/^https?:\/\//i.test(result)) {
-        const res = await fetch(result, { signal: context.signal });
-        const blob = await res.blob();
+      if (/^https?:\/\//i.test(result) || result.startsWith("/")) {
+        const blob = await downloadResult(result);
         if (context.signal?.aborted) {
           throw new DOMException("Aborted", "AbortError");
         }
@@ -18331,9 +18468,8 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
     } else if (result?.b64_json) {
       imageData = `data:image/png;base64,${result.b64_json}`;
     } else if (result?.image && typeof result.image === "string") {
-      if (/^https?:\/\//i.test(result.image)) {
-        const res = await fetch(result.image, { signal: context.signal });
-        const blob = await res.blob();
+      if (/^https?:\/\//i.test(result.image) || result.image.startsWith("/")) {
+        const blob = await downloadResult(result.image);
         if (context.signal?.aborted) {
           throw new DOMException("Aborted", "AbortError");
         }
@@ -18344,8 +18480,7 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
           : `data:image/png;base64,${result.image}`;
       }
     } else if (result?.url) {
-      const res = await fetch(result.url, { signal: context.signal });
-      const blob = await res.blob();
+      const blob = await downloadResult(result.url);
       if (context.signal?.aborted) {
         throw new DOMException("Aborted", "AbortError");
       }
@@ -18787,17 +18922,13 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
               imageSession.api_key,
             );
             try {
-              const response = await managedGatewayRequestText(
+              const response = await requestManagedAsyncImage(
                 taskBackendBaseUrl,
-                `/v1${endpoint}`,
-                {
-                  method: "POST",
-                  headers: request.headers,
-                  body: request.body,
-                  signal: controller.signal,
-                },
+                endpoint,
+                request,
                 imageSession.api_key,
                 text,
+                controller.signal,
               );
               if (
                 (response.status === 401 || response.status === 403) &&
@@ -18810,7 +18941,7 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                   .catch(() => undefined);
                 continue;
               }
-              return response;
+              return { ...response, imageApiKey: imageSession.api_key };
             } catch (error) {
               lastError = error;
               throw error;
@@ -18969,6 +19100,8 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                   prompt: promptText,
                   model,
                   signal: controller.signal,
+                  downloadBaseUrl: taskBackendBaseUrl,
+                  downloadApiKey: response.imageApiKey,
                 });
                 savedResults.push(saved.url);
                 if (saved.fileName) localFiles.push(saved.fileName);
