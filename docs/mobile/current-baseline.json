@@ -3,21 +3,21 @@
   "channel": "direct",
   "appRepository": "https://github.com/tqytwe/NextChat.git",
   "appBranch": "app/domestic",
-  "appCommit": "1a846ed68f684692e721212b73fdd6e06b759647",
+  "appCommit": "907828c8ec4d37c450af562a78f742ba24dfdf96",
   "backendRepository": "https://github.com/tqytwe/sub2api.git",
   "backendBranch": "app/domestic",
   "backendCommit": "5c6d55f7ed117d34362d22337833c0ee4e61ab55",
-  "androidVersionName": "3.0.33",
-  "androidVersionCode": 333,
+  "androidVersionName": "3.0.34",
+  "androidVersionCode": 334,
   "artifactPath": "public/downloads/jisudengchat-android.apk",
-  "artifactSha256": "55321a4adf8214798db170981ed3e75f7e960dfdb4920fd990d18bd34744a4dc",
+  "artifactSha256": "b3d87518756f9fcae000ec31ae57432479992dd6b85e1fe357ed1dbaebc78f7b",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "knownLimitations": [
-    "3.0.33 was built from the clean feature source commit 1a846ed68f684692e721212b73fdd6e06b759647. Commit 75abea6c only corrects future fallback-note generation and is not part of the APK payload.",
-    "Toolchain doctor, TypeScript, documentation checks, ten focused Jest suites (144 tests), Direct Firebase validation, offline Gradle signing and release-artifact verification passed. No deployment, Play artifact or production publication occurred.",
-    "The real account contract must still verify that both Grok Heavy and video视频, including every newly added model, are returned by the deployed workspace/bootstrap endpoints and can be continuously switched without a crash. If either endpoint omits those IDs, a separate approved backend compatibility patch is required.",
+    "3.0.34 was built from the clean source commit 907828c8ec4d37c450af562a78f742ba24dfdf96. The domestic Direct APK is a test candidate, not a production release.",
+    "Toolchain doctor, TypeScript, documentation checks, nine focused Jest suites (145 tests), Direct Firebase validation, offline Gradle signing and release-artifact verification passed. No deployment, Play artifact or production publication occurred.",
+    "Read-only account diagnostics confirmed workspace groups video视频 (45) and Grok Heavy (65), including their returned models, and video-session switching. The deployed video bootstrap has no complete executable capability or price record for group 45; the client displays it, but an actual task can still be refused by the existing server configuration. Any server-side compatibility fix requires separate approval.",
     "Real-device acceptance remains required for image queue continuation after a provider failure, blocked-login/balance recovery, local-material single-file recovery, video-project shot submission/reconciliation, package import/export, and all four languages."
   ],
-  "updatedAt": "2026-09-02T15:25:00+08:00"
+  "updatedAt": "2026-09-02T16:15:53+08:00"
 }
