@@ -15,8 +15,12 @@
   角色、场景、道具、故事事实、分镜与任务关联；按镜头顺序提交已有视频任务，已存在任务先核对。
   工程包包含可用的参考素材和本机结果并校验 ZIP 路径、大小与 SHA-256。
 - 范围：只改 Direct 客户端，无后端接口、数据库迁移、计费规则、模型后台、部署或 Play 制品变更。
-- 验收：TypeScript、十个定向 Jest 套件、四语言静态检查与 Dell Direct 签名构建在本版本制品生成后
-  更新为最终记录。真实账号的 `Grok Heavy` / `video视频` 全部模型、真实视频提交和真机 UI 仍需用户验收；
+- 构建：Dell `codex` 固定工具链通过 doctor、Direct Firebase 校验、离线 Gradle 签名、制品校验，
+  生成 `public/downloads/jisudengchat-android.apk`，SHA-256 为
+  `55321a4adf8214798db170981ed3e75f7e960dfdb4920fd990d18bd34744a4dc`，包名
+  `com.jisudeng.chat`、版本 `3.0.33 (333)`、证书指纹均已验证。APK 源码提交为 `1a846ed6`。
+- 验收：TypeScript、十个定向 Jest 套件（144 项）和四语言静态检查通过。真实账号的
+  `Grok Heavy` / `video视频` 全部模型、真实视频提交和真机 UI 仍需用户验收；
   在这些证据齐全前保持 `candidate`，不标记为已发布。
 
 ## 3.0.30 (330) - Direct candidate
