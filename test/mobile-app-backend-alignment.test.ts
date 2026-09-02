@@ -115,7 +115,7 @@ describe("mobile app backend alignment", () => {
 
   test("routes reference image generation through the managed gateway transport", () => {
     const imageStudio = source.slice(
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
       source.indexOf("function AndroidGallery()"),
     );
     expect(source).toContain("const imageOperation = taskReferences.length");
@@ -148,12 +148,12 @@ describe("mobile app backend alignment", () => {
 
   test("accepts native WebView input events for image and video prompts", () => {
     const imageStudio = source.slice(
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
       source.indexOf("function AndroidGallery()"),
     );
     const videoStudio = source.slice(
       source.indexOf("function AndroidVideoStudio()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(imageStudio).toContain('aria-label="image-prompt"');
     expect(imageStudio).toContain("const promptRef = useRef<HTMLTextAreaElement | null>(null)");
@@ -182,8 +182,8 @@ describe("mobile app backend alignment", () => {
 
   test("pins ContentKit image work to its saved image-purpose group", () => {
     const contentKit = source.slice(
-      source.indexOf("function AndroidContentKit()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidContentKit("),
+      source.indexOf("function AndroidImageStudio("),
     );
     const generateAsset = contentKit.slice(
       contentKit.indexOf("async function generateAsset("),
@@ -207,7 +207,7 @@ describe("mobile app backend alignment", () => {
 
   test("keeps selected reference images local without hiding normal image models", () => {
     const imageStudio = source.slice(
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
       source.indexOf("function AndroidGallery()"),
     );
     const attachReferences = imageStudio.slice(
@@ -228,7 +228,7 @@ describe("mobile app backend alignment", () => {
   test("allows a ready shared file to start chat and passes its asset ID to the task", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(chat).toContain("readyMaterials");
     expect(chat).toContain("readyAssetIds.length === 0");
@@ -239,7 +239,7 @@ describe("mobile app backend alignment", () => {
   test("delegates web-search decisions to a capable model without keyword preflight", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(chat).toContain("modelSupportsWebSearch");
     expect(chat).toContain("runMobileWebSearchToolLoop");
@@ -255,7 +255,7 @@ describe("mobile app backend alignment", () => {
   test("keeps chat images and plain-text files on-device when cloud materials fail", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     const attachImages = chat.slice(
       chat.indexOf("async function attachImages("),
@@ -297,10 +297,10 @@ describe("mobile app backend alignment", () => {
   test("exposes an explicit AI content report path from chat and image results", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     const imageStudio = source.slice(
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
       source.indexOf("function AndroidGallery()"),
     );
     const account = source.slice(
@@ -617,18 +617,19 @@ describe("mobile app backend alignment", () => {
 
   test("uses planned single-image outputs and a bounded local content-kit queue", () => {
     const kit = source.slice(
-      source.indexOf("function AndroidContentKit()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidContentKit("),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(source).toContain("contentWorkbenchPresets()");
     expect(kit).toContain("contentKitAssetSpecs(");
     expect(kit).toContain("scene: selectedPreset.id");
     expect(kit).toContain("presetId: selectedPreset.id");
     expect(kit).toContain("activeRunId: runId");
-    expect(kit).toContain("withMobileImageGenerationLock(activeAccountId");
-    expect(kit).toContain("function nextContentKitQueueItem(accountId: string)");
+    expect(kit).toContain("mobileCreationQueueCoordinator");
+    expect(kit).toContain("function contentKitCreationQueueTasks(");
     expect(kit).toContain("function blockContentKitAccountQueue(");
-    expect(kit).toContain("queueRef.current = true");
+    expect(kit).toContain("persistOnUnmount: Boolean(props.queueWorker)");
+    expect(source).toContain("function AndroidCreationQueueWorker()");
     expect(kit).toContain("content-kit-output-${asset.id}");
     expect(source).toContain(
       'requestId: clientRequestID("content-kit-output")',
@@ -640,10 +641,10 @@ describe("mobile app backend alignment", () => {
 
   test("recovers content-kit outputs safely and uses server limits for batch planning", () => {
     const kit = source.slice(
-      source.indexOf("function AndroidContentKit()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidContentKit("),
+      source.indexOf("function AndroidImageStudio("),
     );
-    expect(kit).toContain('asset.status === "running"');
+    expect(kit).toContain('["submitting", "running"].includes(asset.status)');
     expect(kit).toContain('status: "reconciling",');
     expect(source).toContain("max_reference_images");
     expect(kit).toContain("max_queued_outputs");
@@ -666,8 +667,8 @@ describe("mobile app backend alignment", () => {
 
   test("keeps scenario plans editable and retries the exact failed project run", () => {
     const kit = source.slice(
-      source.indexOf("function AndroidContentKit()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidContentKit("),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(kit).toContain("presetShotEdits");
     expect(kit).toContain("function updateSelectedPlan(");
@@ -847,7 +848,7 @@ describe("mobile app backend alignment", () => {
   test("injects web search only when both the model and server contract allow it", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
 
     expect(chat).toContain("isMobileWebSearchAvailable(");
@@ -942,7 +943,7 @@ describe("mobile app backend alignment", () => {
 
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(chat).toContain("if (!effectiveChatGroupId) return;");
     expect(chat).toContain("const selectedModelIsAvailable =");
@@ -977,7 +978,7 @@ describe("mobile app backend alignment", () => {
   test("uses the saved draft group when opening chat without a session", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(chat).toContain(
       "const currentSessionChatGroupId = currentSession\n    ? preferredChatGroupID(workspace, currentSession.groupId)\n    : undefined;",
@@ -990,7 +991,7 @@ describe("mobile app backend alignment", () => {
   test("inherits the user's selected model when a new chat is created", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     const newSession = chat.slice(
       chat.indexOf("function newSession()"),
@@ -1037,7 +1038,7 @@ describe("mobile app backend alignment", () => {
   test("does not let browsing an older session replace the new-chat preference", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     const activeSessionPreference = chat.slice(
       chat.indexOf("if (!effectiveChatGroupId) return;"),
@@ -1056,7 +1057,7 @@ describe("mobile app backend alignment", () => {
   test("prefers the remembered model for a selected group and server current group recovery", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     const switchGroup = chat.slice(
       chat.indexOf("async function switchGroup(groupID: number)"),
@@ -1086,15 +1087,15 @@ describe("mobile app backend alignment", () => {
     expect(dashboard).toContain("handleNativeHomeBack(text)");
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidContentKit()"),
+      source.indexOf("function AndroidContentKit("),
     );
     expect(chat).toContain("lastNativeHomeBackAt = 0");
     expect(chat).toContain("navigateBack(navigate, Path.Home)");
     expect(chat).not.toContain("handleNativeHomeBack(text)");
 
     const contentKit = source.slice(
-      source.indexOf("function AndroidContentKit()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidContentKit("),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(contentKit).toContain(
       "Content workbench is opened from the image tab",
@@ -1132,7 +1133,7 @@ describe("mobile app backend alignment", () => {
   test("reuses a failed chat request ID for manual and network recovery", () => {
     const chat = source.slice(
       source.indexOf("function AndroidChat()"),
-      source.indexOf("function AndroidImageStudio()"),
+      source.indexOf("function AndroidImageStudio("),
     );
     expect(chat).toContain("requestId: gatewayRequestId");
     expect(chat).toContain('"jisudeng-network-restored"');

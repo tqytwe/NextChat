@@ -17,6 +17,51 @@ export type MobileImageQueueTask = {
   blockedReason?: CreationQueueBlockReason;
 };
 
+/**
+ * The image studio and the project workbench retain their own local records:
+ * each record has different result data and migration history. This is the
+ * common, persisted-task projection used to select one account-wide FIFO
+ * instead of letting either screen reserve a second worker independently.
+ */
+export type CreationQueueSource = "image-studio" | "content-workbench";
+
+export type CreationQueueTask = MobileImageQueueTask & {
+  source: CreationQueueSource;
+  /** The durable ID in the source store; `id` is globally namespaced. */
+  sourceTaskId: string;
+};
+
+export type CreationQueueRunOutcome =
+  | { status: "settled" }
+  | { status: "blocked"; blockedReason?: CreationQueueBlockReason }
+  | { status: "skipped" };
+
+export type CreationQueueSourceRegistration = {
+  source: CreationQueueSource;
+  tasks: (accountId: string) => CreationQueueTask[];
+  run: (task: CreationQueueTask) => Promise<CreationQueueRunOutcome>;
+  /**
+   * A screen can leave its executor registered while it is not visible, but
+   * it must never submit a saved request using a later account's session.
+   * The application shell checks this immediately before selecting work.
+   */
+  isActive?: (accountId: string) => boolean;
+  /**
+   * Keep a registered executor for the lifetime of the authenticated app.
+   * This is used by durable creation queues: navigation must not stop an
+   * already registered source from progressing its persisted FIFO records.
+   */
+  persistOnUnmount?: boolean;
+  /** Visible pages temporarily override the retained app-level worker. */
+  priority?: number;
+  block: (
+    accountId: string,
+    createdAt: number,
+    reason?: CreationQueueBlockReason,
+  ) => void;
+  resume: (accountId: string) => void;
+};
+
 export type CreationQueueBlockReason =
   | "authentication"
   | "balance"
@@ -81,6 +126,13 @@ export function nextRunnableCreationQueueTask<T extends MobileImageQueueTask>(
     )[0];
 }
 
+export function nextRunnableCreationTask(
+  tasks: CreationQueueTask[],
+  accountId: string,
+) {
+  return nextRunnableCreationQueueTask(tasks, accountId);
+}
+
 export function resumeBlockedCreationQueueTasks<T extends MobileImageQueueTask>(
   tasks: T[],
   accountId: string,
@@ -117,28 +169,109 @@ export function canRunMobileImageQueueTask(
 }
 
 /**
- * Account-scoped execution gate shared by simple image generation and content
- * projects. It deliberately serializes only a single request at a time, while
- * callers persist the queue state before asking the gate to execute.
+ * The coordinator owns scheduling, while each screen remains the owner of its
+ * durable task payload. It intentionally does not persist a duplicate task
+ * table: image-history and content-kit records are already the recovery
+ * source, and duplicating them would make interrupted work ambiguous.
+ *
+ * A source only runs one immutable task per call. After its terminal outcome,
+ * the next oldest task is selected from every registered source. A normal
+ * provider/model/network failure therefore cannot strand later queued work.
  */
-export class MobileImageAccountQueueGate {
-  private tails = new Map<string, Promise<void>>();
+export class MobileCreationQueueCoordinator {
+  private registrations = new Map<
+    CreationQueueSource,
+    CreationQueueSourceRegistration[]
+  >();
+  private drains = new Map<string, Promise<void>>();
 
-  async run<T>(accountId: string, work: () => Promise<T>): Promise<T> {
-    const key = String(accountId || "anonymous");
-    const previous = this.tails.get(key) || Promise.resolve();
-    let release!: () => void;
-    const tail = new Promise<void>((resolve) => {
-      release = resolve;
+  register(registration: CreationQueueSourceRegistration) {
+    const current = this.registrations.get(registration.source) || [];
+    // There is one retained worker per source. Replacing it after a login
+    // transition must not displace a currently visible page's higher-priority
+    // executor, because that page owns its cancel/progress controls.
+    const next = registration.persistOnUnmount
+      ? current.filter((item) => !item.persistOnUnmount)
+      : current;
+    next.push(registration);
+    this.registrations.set(registration.source, next);
+    return () => {
+      if (registration.persistOnUnmount) return;
+      const remaining = (
+        this.registrations.get(registration.source) || []
+      ).filter((item) => item !== registration);
+      if (remaining.length)
+        this.registrations.set(registration.source, remaining);
+      else this.registrations.delete(registration.source);
+    };
+  }
+
+  private activeRegistrations() {
+    return Array.from(this.registrations.values()).map((registrations) =>
+      registrations.reduce((selected, candidate) =>
+        Number(candidate.priority || 0) >= Number(selected.priority || 0)
+          ? candidate
+          : selected,
+      ),
+    );
+  }
+
+  wake(accountId: string) {
+    const account = String(accountId || "").trim();
+    if (!account) return Promise.resolve();
+    const existing = this.drains.get(account);
+    if (existing) return existing;
+    const drain = this.drain(account).finally(() => {
+      if (this.drains.get(account) === drain) this.drains.delete(account);
     });
-    const queued = previous.then(() => tail);
-    this.tails.set(key, queued);
-    await previous;
-    try {
-      return await work();
-    } finally {
-      release();
-      if (this.tails.get(key) === queued) this.tails.delete(key);
+    this.drains.set(account, drain);
+    return drain;
+  }
+
+  resume(accountId: string) {
+    const account = String(accountId || "").trim();
+    if (!account) return Promise.resolve();
+    this.activeRegistrations().forEach((registration) =>
+      registration.resume(account),
+    );
+    return this.wake(account);
+  }
+
+  private next(accountId: string) {
+    return this.activeRegistrations()
+      .flatMap((registration) =>
+        registration.tasks(accountId).map((task) => ({ registration, task })),
+      )
+      .filter(
+        ({ registration }) => registration.isActive?.(accountId) !== false,
+      )
+      .filter(({ task }) => canRunMobileImageQueueTask(task, accountId))
+      .sort(
+        (left, right) =>
+          Number(left.task.createdAt || 0) -
+            Number(right.task.createdAt || 0) ||
+          left.task.id.localeCompare(right.task.id),
+      )[0];
+  }
+
+  private async drain(accountId: string) {
+    // A source that is unmounted while a task is selected returns "skipped".
+    // Stop instead of spinning; its next mount calls wake() again.
+    for (let guard = 0; guard < 10_000; guard += 1) {
+      const selected = this.next(accountId);
+      if (!selected) return;
+      const outcome = await selected.registration.run(selected.task);
+      if (outcome.status === "skipped") return;
+      if (outcome.status === "blocked") {
+        this.activeRegistrations().forEach((registration) =>
+          registration.block(
+            accountId,
+            Number(selected.task.createdAt || 0),
+            outcome.blockedReason,
+          ),
+        );
+        return;
+      }
     }
   }
 }

@@ -366,6 +366,7 @@ const MANAGED_MOBILE_TEXT_BASE = {
       materialEmpty: "暂无本机素材",
       materialRefreshFailed: "本机素材库读取失败",
       materialSyncAvailable: "本机素材可用，远端同步未完成",
+      materialSyncUnavailable: "远端素材同步暂不可用，可继续使用本机素材",
       materialSyncItemFailed: "该素材等待重新同步",
       uploadMaterial: "添加素材",
       uploadWaiting: "正在添加",
@@ -1778,6 +1779,8 @@ const MANAGED_MOBILE_TEXT_BASE = {
       materialRefreshFailed: "Local material library could not be read.",
       materialSyncAvailable:
         "Local materials are available; remote sync did not finish.",
+      materialSyncUnavailable:
+        "Remote material sync is temporarily unavailable. Local materials remain usable.",
       materialSyncItemFailed: "This material is waiting to sync again.",
       uploadMaterial: "Add material",
       uploadWaiting: "Adding",
@@ -4421,6 +4424,8 @@ const MANAGED_MOBILE_TEXT_JP_COMPLETE_OVERRIDES = {
     materialRefreshFailed: "ローカル素材ライブラリを読み取れませんでした。",
     materialSyncAvailable:
       "ローカル素材は利用できます。リモート同期は未完了です。",
+    materialSyncUnavailable:
+      "リモート素材同期は一時的に利用できません。ローカル素材は引き続き利用できます。",
     materialSyncItemFailed: "この素材は再同期待ちです。",
     uploadReady: "この端末に保存済み",
     uploadLocalReady: "この端末で添付済み",
@@ -4961,6 +4966,8 @@ const MANAGED_MOBILE_TEXT_KO_COMPLETE_OVERRIDES = {
     materialRefreshFailed: "로컬 소재 라이브러리를 읽을 수 없습니다.",
     materialSyncAvailable:
       "로컬 소재는 사용할 수 있지만 원격 동기화가 완료되지 않았습니다.",
+    materialSyncUnavailable:
+      "원격 소재 동기화를 일시적으로 사용할 수 없습니다. 로컬 소재는 계속 사용할 수 있습니다.",
     materialSyncItemFailed: "이 소재는 다시 동기화해야 합니다.",
     uploadReady: "이 기기에 저장됨",
     uploadLocalReady: "이 기기에 첨부됨",

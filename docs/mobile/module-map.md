@@ -4,7 +4,7 @@
 | ----------------------- | ------------------------------------------------------------------ | ------------------------------------------------ | ---------------------------------------- |
 | 登录、安全、OAuth、TOTP | `managed-nextchat.ts`、`mobile-app.tsx`                            | auth、session、account                           | `managed-nextchat-request`、账户隔离测试 |
 | 对话、模型、联网        | `mobile-chat-tools.ts`、`mobile-model-kind.ts`                     | managed session、gateway                         | 聊天 UI、模型分类测试                    |
-| 图像、队列与素材        | `mobile-image-queue.ts`、`content-workbench.ts`、`local-materials.ts`、`local-prompt-library.ts` | assets、image history、Canvas 只读图像提示词目录 | 队列、素材、提示词缓存与账户隔离测试     |
+| 图像、队列与素材        | `mobile-image-queue.ts`、`mobile-app.tsx` 内的 `AndroidCreationQueueWorker`、`content-workbench.ts`、`local-materials.ts`、`local-prompt-library.ts` | assets、image history、Canvas 只读图像提示词目录 | 统一 FIFO、进程恢复、素材、提示词缓存与账户隔离测试     |
 | 视频创作与本机工程      | `mobile-video.ts`、`local-video-cache.ts`、`local-video-projects.ts`、`local-video-project-package.ts` | video bootstrap、jobs、内容下载；工程仅本机持久化 | `mobile-video`、视频工程包、媒体合同测试 |
 | 任务投影                | `mobile-platform.ts`                                                | tasks 仅作图片任务历史投影，生成与扣费仍由网关/视频任务为准 | 后端合同与任务恢复测试                   |
 | 支付、兑换、订单        | `mobile-platform.ts`、`mobile-subscription.ts`                     | payments、redeem、Play Billing                   | 渠道与订阅测试                           |

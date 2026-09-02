@@ -80,7 +80,7 @@ describe("mobile video capability and response contract", () => {
     );
     const studio = app.slice(
       app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
+      app.indexOf("function AndroidImageStudio("),
     );
     expect(studio).toContain(
       "Canvas publishes an image-prompt directory only. Do not mislabel its",
@@ -95,7 +95,7 @@ describe("mobile video capability and response contract", () => {
     );
     const studio = app.slice(
       app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
+      app.indexOf("function AndroidImageStudio("),
     );
     expect(studio).toContain("setVideoPrompts([]);");
     expect(studio).not.toContain('"video",\n          "canvas",');
@@ -772,7 +772,7 @@ describe("mobile video capability and response contract", () => {
     );
     const studio = app.slice(
       app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
+      app.indexOf("function AndroidImageStudio("),
     );
 
     expect(studio).toContain("managed.switchVideoGroup(submissionGroup.id)");
@@ -791,7 +791,7 @@ describe("mobile video capability and response contract", () => {
     );
     const studio = app.slice(
       app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
+      app.indexOf("function AndroidImageStudio("),
     );
 
     expect(app).toContain("class MobileVideoWorkbenchBoundary");
@@ -808,7 +808,7 @@ describe("mobile video capability and response contract", () => {
     );
     const studio = app.slice(
       app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
+      app.indexOf("function AndroidImageStudio("),
     );
 
     expect(app).toContain("function localizedVideoUnavailableReason(");
@@ -827,7 +827,7 @@ describe("mobile video capability and response contract", () => {
     );
     const studio = app.slice(
       app.indexOf("function AndroidVideoStudio()"),
-      app.indexOf("function AndroidImageStudio()"),
+      app.indexOf("function AndroidImageStudio("),
     );
     expect(app).toContain("function videoBootstrapFailureCopy(");
     expect(studio).toContain("classifyMobileVideoBootstrapFailure(error)");

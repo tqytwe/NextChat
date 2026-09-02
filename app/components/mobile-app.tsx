@@ -117,8 +117,9 @@ import {
 import {
   canRunMobileImageQueueTask,
   classifyCreationQueueFailure,
-  MobileImageAccountQueueGate,
-  nextRunnableCreationQueueTask,
+  MobileCreationQueueCoordinator,
+  type CreationQueueBlockReason,
+  type CreationQueueTask,
   recoverMobileImageQueueTask,
   resumeBlockedCreationQueueTasks,
 } from "../client/mobile-image-queue";
@@ -405,13 +406,13 @@ const COLLABORATION_AGENT_ID = "multi-agent-collaboration";
 const CONTENT_KIT_MAX_OUTPUTS_PER_RUN = 24;
 const CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT =
   CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT;
-const mobileImageQueueGate = new MobileImageAccountQueueGate();
+const mobileCreationQueueCoordinator = new MobileCreationQueueCoordinator();
 
-async function withMobileImageGenerationLock<T>(
-  accountId: string,
-  work: () => Promise<T>,
-): Promise<T> {
-  return mobileImageQueueGate.run(accountId, work);
+function currentMobileCreationAccountId() {
+  const state = useManagedNextChatStore.getState();
+  return String(
+    state.user?.id || state.session?.user_id || state.workspace?.user?.id || "",
+  ).trim();
 }
 
 type ContentKitShotPlan = WorkbenchShotPlan;
@@ -12153,7 +12154,7 @@ function AndroidChat() {
   );
 }
 
-function AndroidContentKit() {
+function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
   const managed = useManagedNextChatStore();
   const mobileStore = useManagedMobileAppStore();
   const text = useMobileText();
@@ -12211,11 +12212,9 @@ function AndroidContentKit() {
   >({});
   const fileRef = useRef<HTMLInputElement | null>(null);
   const packageImportRef = useRef<HTMLInputElement | null>(null);
-  // Content-kit runs used to own independent workers. That allowed one
-  // project to retain the account gate while another project's earlier work
-  // waited indefinitely. A single account-scoped runner below now chooses
-  // the oldest queued shot across every local project.
-  const queueRef = useRef(false);
+  // Content-kit runs used to own independent workers. The application-level
+  // coordinator now chooses the oldest persisted shot across both creation
+  // surfaces, and retains that executor when this page is no longer visible.
   const recoveredQueuesRef = useRef(false);
   const [assetTagFilter, setAssetTagFilter] = useState<
     "all" | ContentKitAssetTag
@@ -12653,7 +12652,18 @@ function AndroidContentKit() {
     );
     // Local projects are account-scoped. A worker that survived a React
     // transition must never submit an old account's saved request.
-    if (!currentAccountId || currentAccountId !== project.accountId) return;
+    if (!currentAccountId || currentAccountId !== project.accountId) {
+      // A React transition can outlive logout/login. Leaving this snapshot in
+      // `queued` causes the FIFO to select it forever; block it explicitly so
+      // the account recovery action, rather than a blind retry, decides what
+      // happens next.
+      patchAsset(project.id, asset.id, {
+        status: "blocked",
+        blockedReason: "authentication",
+        error: text.errors.loginRequired,
+      });
+      return;
+    }
     const projectImageGroupId = Number(project.imageGroupId);
     if (
       !Number.isSafeInteger(projectImageGroupId) ||
@@ -12667,8 +12677,17 @@ function AndroidContentKit() {
       setError(message);
       return;
     }
+    const currentWorkspace = useManagedNextChatStore.getState().workspace;
+    const executionWorkspace = currentWorkspace
+      ? {
+          ...currentWorkspace,
+          models:
+            currentWorkspace.workspaces?.image?.models ||
+            currentWorkspace.models,
+        }
+      : null;
     const projectImageModels = imageModelsForExactGroup(
-      workspace,
+      executionWorkspace,
       projectImageGroupId,
     );
     const projectModel = projectImageModels.find((item) =>
@@ -12997,7 +13016,9 @@ function AndroidContentKit() {
     });
   }
 
-  function nextContentKitQueueItem(accountId: string) {
+  function contentKitCreationQueueTasks(
+    accountId: string,
+  ): CreationQueueTask[] {
     return useManagedMobileAppStore
       .getState()
       .contentKits.filter((project) => project.accountId === accountId)
@@ -13011,26 +13032,27 @@ function AndroidContentKit() {
           ) {
             return [];
           }
-          return [{ project, run, asset }];
+          return [
+            {
+              id: `content-workbench:${project.id}:${asset.id}`,
+              sourceTaskId: asset.id,
+              source: "content-workbench" as const,
+              accountId: project.accountId,
+              // The guard above admits only idle/queued assets; idle is the
+              // legacy migration spelling for a not-yet-submitted task.
+              status: "queued" as const,
+              createdAt: Number(
+                asset.createdAt ||
+                  asset.updatedAt ||
+                  run.createdAt ||
+                  project.createdAt ||
+                  0,
+              ),
+              blockedReason: asset.blockedReason,
+            },
+          ];
         }),
-      )
-      .sort(
-        (left, right) =>
-          Number(
-            left.asset.createdAt ||
-              left.asset.updatedAt ||
-              left.run.createdAt ||
-              left.project.createdAt ||
-              0,
-          ) -
-            Number(
-              right.asset.createdAt ||
-                right.asset.updatedAt ||
-                right.run.createdAt ||
-                right.project.createdAt ||
-                0,
-            ) || left.asset.id.localeCompare(right.asset.id),
-      )[0];
+      );
   }
 
   function settleContentKitRun(projectId: string, runId: string) {
@@ -13057,6 +13079,8 @@ function AndroidContentKit() {
       (asset) => asset.status === "blocked",
     )
       ? "blocked"
+      : assets.some((asset) => asset.status === "reconciling")
+      ? "partial"
       : assets.some(
           (asset) => asset.status === "failed" || asset.status === "cancelled",
         )
@@ -13105,69 +13129,135 @@ function AndroidContentKit() {
       });
   }
 
-  async function runProjectQueue(_projectId?: string) {
-    if (queueRef.current) return;
-    queueRef.current = true;
-    try {
-      while (true) {
-        const next = nextContentKitQueueItem(activeAccountId);
-        if (!next) return;
-        const { project, run, asset } = next;
+  function resumeBlockedContentKitAccountQueue(accountId: string) {
+    useManagedMobileAppStore
+      .getState()
+      .contentKits.filter((item) => item.accountId === accountId)
+      .forEach((project) => {
+        const resumedRuns = new Set(
+          project.assets
+            .filter((asset) => asset.status === "blocked")
+            .map((asset) => asset.runId),
+        );
+        if (!resumedRuns.size) return;
         mobileStore.updateContentKit(project.id, {
-          activeRunId: run.id,
-          runs: (project.runs || []).map((item) =>
-            item.id === run.id && item.status === "queued"
-              ? { ...item, status: "running", updatedAt: Date.now() }
-              : item,
+          assets: project.assets.map((asset) =>
+            asset.status === "blocked"
+              ? {
+                  ...asset,
+                  status: "queued" as const,
+                  blockedReason: undefined,
+                  error: "",
+                  updatedAt: Date.now(),
+                }
+              : asset,
+          ),
+          runs: (project.runs || []).map((run) =>
+            resumedRuns.has(run.id)
+              ? { ...run, status: "queued" as const, updatedAt: Date.now() }
+              : run,
           ),
         });
-        await withMobileImageGenerationLock(activeAccountId, async () => {
-          const latestProject = useManagedMobileAppStore
-            .getState()
-            .contentKits.find((item) => item.id === project.id);
-          const latestRun = latestProject?.runs?.find(
-            (item) => item.id === run.id,
-          );
-          const latestAsset = latestProject?.assets.find(
-            (item) => item.id === asset.id,
-          );
-          if (
-            !latestProject ||
-            latestProject.accountId !== activeAccountId ||
-            !latestAsset ||
-            !["queued", "idle"].includes(latestAsset.status) ||
-            !latestRun ||
-            !["queued", "running"].includes(latestRun.status)
-          ) {
-            return;
-          }
-          await generateAsset(latestProject, latestAsset);
-        });
-        const after = useManagedMobileAppStore
-          .getState()
-          .contentKits.find((item) => item.id === project.id);
-        const afterAsset = after?.assets.find((item) => item.id === asset.id);
-        if (afterAsset?.status === "blocked") {
-          const createdAt = Number(
-            afterAsset.createdAt ||
-              afterAsset.updatedAt ||
-              asset.createdAt ||
-              0,
-          );
-          blockContentKitAccountQueue(
-            activeAccountId,
-            createdAt,
-            afterAsset.blockedReason,
-          );
-          updateRun(project.id, run.id, "blocked");
-          return;
-        }
-        settleContentKitRun(project.id, run.id);
-      }
-    } finally {
-      queueRef.current = false;
-    }
+      });
   }
+
+  async function runContentKitCreationQueueTask(task: CreationQueueTask) {
+    const taskAccountId = String(task.accountId || "").trim();
+    if (!taskAccountId || currentMobileCreationAccountId() !== taskAccountId) {
+      return { status: "skipped" as const };
+    }
+    const state = useManagedMobileAppStore.getState();
+    const project = state.contentKits.find(
+      (item) =>
+        item.accountId === taskAccountId &&
+        item.assets.some((asset) => asset.id === task.sourceTaskId),
+    );
+    const run = project?.runs?.find(
+      (item) =>
+        project?.assets.some(
+          (asset) => asset.id === task.sourceTaskId && asset.runId === item.id,
+        ),
+    );
+    const asset = project?.assets.find((item) => item.id === task.sourceTaskId);
+    if (
+      !project ||
+      !run ||
+      !asset ||
+      project.accountId !== taskAccountId ||
+      !["queued", "idle"].includes(asset.status) ||
+      !["queued", "running"].includes(run.status)
+    ) {
+      return { status: "skipped" as const };
+    }
+
+    mobileStore.updateContentKit(project.id, {
+      activeRunId: run.id,
+      runs: (project.runs || []).map((item) =>
+        item.id === run.id && item.status === "queued"
+          ? { ...item, status: "running", updatedAt: Date.now() }
+          : item,
+      ),
+    });
+    const latestProject = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === project.id);
+    const latestRun = latestProject?.runs?.find((item) => item.id === run.id);
+    const latestAsset = latestProject?.assets.find(
+      (item) => item.id === asset.id,
+    );
+    if (
+      !latestProject ||
+      latestProject.accountId !== taskAccountId ||
+      !latestAsset ||
+      !["queued", "idle"].includes(latestAsset.status) ||
+      !latestRun ||
+      !["queued", "running"].includes(latestRun.status)
+    ) {
+      return { status: "skipped" as const };
+    }
+    await generateAsset(latestProject, latestAsset);
+    const after = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === project.id);
+    const afterAsset = after?.assets.find((item) => item.id === asset.id);
+    if (!afterAsset) return { status: "skipped" as const };
+    if (afterAsset.status === "blocked") {
+      updateRun(project.id, run.id, "blocked");
+      return {
+        status: "blocked" as const,
+        blockedReason: afterAsset.blockedReason,
+      };
+    }
+    settleContentKitRun(project.id, run.id);
+    return { status: "settled" as const };
+  }
+
+  async function runProjectQueue(_projectId?: string) {
+    if (!activeAccountId) return;
+    await mobileCreationQueueCoordinator.wake(activeAccountId);
+  }
+
+  useEffect(() => {
+    return mobileCreationQueueCoordinator.register({
+      source: "content-workbench",
+      tasks: contentKitCreationQueueTasks,
+      run: runContentKitCreationQueueTask,
+      isActive: (accountId) => currentMobileCreationAccountId() === accountId,
+      persistOnUnmount: Boolean(props.queueWorker),
+      priority: props.queueWorker ? 0 : 10,
+      block: blockContentKitAccountQueue,
+      resume: resumeBlockedContentKitAccountQueue,
+    });
+    // The registration deliberately follows the hydrated task records and
+    // active media session. It is replaced atomically when either changes,
+    // so an old account callback cannot submit a newly selected task.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeAccountId,
+    managed.imageSession,
+    mobileStore.contentKits,
+    props.queueWorker,
+  ]);
 
   function pauseProjectQueue(project: ManagedMobileContentKit) {
     if (!project.activeRunId) return;
@@ -13198,7 +13288,7 @@ function AndroidContentKit() {
     const retryable = project.assets.filter(
       (asset) =>
         asset.runId === runId &&
-        ["failed", "blocked"].includes(asset.status) &&
+        ["failed", "blocked", "reconciling"].includes(asset.status) &&
         (retryingAllFailed || retryIds.has(asset.id)),
     );
     if (!retryable.length) return;
@@ -13255,37 +13345,9 @@ function AndroidContentKit() {
   }
 
   function resumeBlockedProjectQueue(project: ManagedMobileContentKit) {
-    useManagedMobileAppStore
-      .getState()
-      .contentKits.filter((item) => item.accountId === project.accountId)
-      .forEach((item) => {
-        const recoveredRuns = new Set(
-          item.assets
-            .filter((asset) => asset.status === "blocked")
-            .map((asset) => asset.runId),
-        );
-        if (!recoveredRuns.size) return;
-        mobileStore.updateContentKit(item.id, {
-          assets: item.assets.map((asset) =>
-            asset.status === "blocked"
-              ? {
-                  ...asset,
-                  status: "queued" as const,
-                  blockedReason: undefined,
-                  error: "",
-                  updatedAt: Date.now(),
-                }
-              : asset,
-          ),
-          runs: (item.runs || []).map((run) =>
-            recoveredRuns.has(run.id)
-              ? { ...run, status: "queued" as const, updatedAt: Date.now() }
-              : run,
-          ),
-        });
-      });
+    resumeBlockedContentKitAccountQueue(project.accountId);
     setError("");
-    void runProjectQueue();
+    void mobileCreationQueueCoordinator.resume(project.accountId);
   }
 
   function createNextRun(project: ManagedMobileContentKit) {
@@ -13515,8 +13577,8 @@ function AndroidContentKit() {
     if (!recoveredQueuesRef.current) {
       recoveredQueuesRef.current = true;
       projects.forEach((project) => {
-        const hasUnconfirmedOutput = project.assets.some(
-          (asset) => asset.status === "running",
+        const hasUnconfirmedOutput = project.assets.some((asset) =>
+          ["submitting", "running"].includes(asset.status),
         );
         const activeRun = project.runs?.find(
           (run) => run.id === project.activeRunId,
@@ -13524,7 +13586,7 @@ function AndroidContentKit() {
         if (hasUnconfirmedOutput) {
           mobileStore.updateContentKit(project.id, {
             assets: project.assets.map((asset) =>
-              asset.status === "running"
+              ["submitting", "running"].includes(asset.status)
                 ? {
                     ...asset,
                     status: "reconciling",
@@ -13535,7 +13597,9 @@ function AndroidContentKit() {
           });
         }
         if (activeRun?.status === "running") {
-          updateRun(project.id, activeRun.id, "paused");
+          // In-flight rows are now reconciling and will not be resent. Keep
+          // the run runnable so its later untouched snapshots can continue.
+          updateRun(project.id, activeRun.id, "queued");
         }
       });
     }
@@ -13684,7 +13748,7 @@ function AndroidContentKit() {
     setSelectedProjectId("");
   }
 
-  useNativeBackHandler(true, () => {
+  useNativeBackHandler(!props.queueWorker, () => {
     if (previewAssetId) {
       setPreviewAssetId("");
       return;
@@ -13708,6 +13772,8 @@ function AndroidContentKit() {
     // Content workbench is opened from the image tab, not a home tab itself.
     navigateBack(navigate, Path.Sd);
   });
+
+  if (props.queueWorker) return null;
 
   if (selectedProject) {
     const activeRunId = selectedProject.activeRunId;
@@ -14002,7 +14068,9 @@ function AndroidContentKit() {
                           ))}
                         </div>
                       )}
-                      {["failed", "blocked"].includes(asset.status) && (
+                      {["failed", "blocked", "reconciling"].includes(
+                        asset.status,
+                      ) && (
                         <button
                           type="button"
                           onClick={() =>
@@ -16350,7 +16418,7 @@ function AndroidVideoStudio() {
         });
         return false;
       }
-      await waitForVideoTask(remote, requestID, controller);
+      await waitForVideoTask(remote, requestID, controller, shot.prompt);
       await patchVideoProjectShot(projectId, shot.id, {
         taskStatus: "completed",
         resultTaskId: shot.taskId,
@@ -16815,6 +16883,7 @@ function AndroidVideoStudio() {
     initialTask: MobileVideoServerTask,
     requestID: string,
     controller: AbortController,
+    sourcePrompt = prompt.trim(),
   ): Promise<string> {
     const id = String(initialTask?.id || "");
     if (!id) throw new Error(copy.noResult);
@@ -16863,7 +16932,10 @@ function AndroidVideoStudio() {
       controller.signal,
     );
     const localEntry = await saveLocalVideo(activeAccountId, id, blob, {
-      prompt: prompt.trim(),
+      // A project shot submits an immutable prompt snapshot. Do not overwrite
+      // its history with the visible composer if that changed while the job
+      // was running.
+      prompt: sourcePrompt,
       createdAt: Date.now(),
     });
     // Keep the private relay object while the user can still download this
@@ -17039,7 +17111,12 @@ function AndroidVideoStudio() {
         createData?.task || (createData as unknown as MobileVideoServerTask);
       const createdTaskId = String(createdTask?.id || "").trim();
       if (createdTaskId) await snapshot?.onTaskCreated?.(createdTaskId);
-      return await waitForVideoTask(createdTask, requestID, controller);
+      return await waitForVideoTask(
+        createdTask,
+        requestID,
+        controller,
+        submissionPrompt,
+      );
     } catch (runError) {
       handleVideoRunError(controller, runError);
       return null;
@@ -17900,7 +17977,7 @@ function AndroidVideoStudio() {
   );
 }
 
-function AndroidImageStudio() {
+function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
   const managed = useManagedNextChatStore();
   const text = useMobileText();
   const sdStore = useSdStore();
@@ -18133,6 +18210,70 @@ function AndroidImageStudio() {
     });
   }
 
+  function imageStudioCreationQueueTasks(
+    accountId: string,
+  ): CreationQueueTask[] {
+    return useSdStore
+      .getState()
+      .draw.filter(
+        (item: any) =>
+          item?.queue_schema === 1 &&
+          String(item?.account_id || "") === accountId &&
+          item.status === "queued",
+      )
+      .map((item: any) => ({
+        id: `image-studio:${String(item.id)}`,
+        sourceTaskId: String(item.id),
+        source: "image-studio" as const,
+        accountId: String(item.account_id || ""),
+        status: "queued" as const,
+        createdAt: Number(item.created_at_ms || 0),
+        blockedReason: item.blocked_reason as
+          | CreationQueueBlockReason
+          | undefined,
+      }));
+  }
+
+  function blockImageStudioAccountQueue(
+    accountId: string,
+    fromCreatedAt: number,
+    reason?: CreationQueueBlockReason,
+  ) {
+    sdStore.update((state) => {
+      state.draw.forEach((item: any) => {
+        if (
+          item?.queue_schema === 1 &&
+          String(item?.account_id || "") === accountId &&
+          item.status === "queued" &&
+          Number(item?.created_at_ms || 0) >= fromCreatedAt
+        ) {
+          item.status = "blocked";
+          item.blocked_reason = reason;
+          item.updated_at = Date.now();
+        }
+      });
+      state.currentId += 1;
+    });
+  }
+
+  function resumeBlockedImageStudioAccountQueue(accountId: string) {
+    sdStore.update((state) => {
+      state.draw = resumeBlockedCreationQueueTasks(
+        state.draw.map((item: any) => ({
+          ...item,
+          accountId: String(item?.account_id || ""),
+          blockedReason: item?.blocked_reason,
+        })),
+        accountId,
+      ).map((item: any) => ({
+        ...item,
+        account_id: item.accountId,
+        blocked_reason: item.blockedReason,
+      }));
+      state.currentId += 1;
+    });
+  }
+
   // Android WebView can update a focused textarea without delivering React's
   // synthetic input event. Keep the native value through unrelated renders and
   // mirror explicit template/history updates into both representations.
@@ -18295,6 +18436,19 @@ function AndroidImageStudio() {
 
   async function runImageTask(overrides?: Partial<any>) {
     const queuedTaskID = String(overrides?.queueTaskId || "").trim();
+    const settleQueuedTaskBeforeNetwork = (
+      status: "error" | "blocked",
+      message: string,
+      blockedReason?: CreationQueueBlockReason,
+    ) => {
+      if (!queuedTaskID) return;
+      updateTask(queuedTaskID, {
+        status,
+        progress: 100,
+        error: message,
+        blocked_reason: blockedReason,
+      });
+    };
     const persistedTask = queuedTaskID
       ? useSdStore
           .getState()
@@ -18348,10 +18502,16 @@ function AndroidImageStudio() {
 
     if (!activeAccountId) {
       setError(text.errors.loginRequired);
+      settleQueuedTaskBeforeNetwork(
+        "blocked",
+        text.errors.loginRequired,
+        "authentication",
+      );
       return;
     }
     if (!promptText) {
       setError(text.errors.emptyPrompt);
+      settleQueuedTaskBeforeNetwork("error", text.errors.emptyPrompt);
       return;
     }
     if (
@@ -18360,18 +18520,35 @@ function AndroidImageStudio() {
       })
     ) {
       setError(text.errors.loginRequired);
+      settleQueuedTaskBeforeNetwork(
+        "blocked",
+        text.errors.loginRequired,
+        "authentication",
+      );
       return;
     }
-    const taskImageModelOptions = imageModelsForGroup(workspace, taskGroupId);
+    const currentWorkspace = useManagedNextChatStore.getState().workspace;
+    const executionWorkspace = currentWorkspace
+      ? {
+          ...currentWorkspace,
+          models:
+            currentWorkspace.workspaces?.image?.models ||
+            currentWorkspace.models,
+        }
+      : null;
+    const taskImageModelOptions = imageModelsForGroup(
+      executionWorkspace,
+      taskGroupId,
+    );
     if (taskImageModelOptions.length === 0) {
-      setError(
-        describeImageError("", {
-          text,
-          selectedModel: model,
-          imageModelCount: taskImageModelOptions.length,
-          hasImageGroup: Boolean(taskGroupId),
-        }),
-      );
+      const message = describeImageError("", {
+        text,
+        selectedModel: model,
+        imageModelCount: taskImageModelOptions.length,
+        hasImageGroup: Boolean(taskGroupId),
+      });
+      setError(message);
+      settleQueuedTaskBeforeNetwork("error", message);
       return;
     }
 
@@ -18381,14 +18558,14 @@ function AndroidImageStudio() {
     );
     model = modelValue(modelInfo);
     if (!model) {
-      setError(
-        describeImageError("", {
-          text,
-          selectedModel: requestedModel,
-          imageModelCount: taskImageModelOptions.length,
-          hasImageGroup: Boolean(taskGroupId),
-        }),
-      );
+      const message = describeImageError("", {
+        text,
+        selectedModel: requestedModel,
+        imageModelCount: taskImageModelOptions.length,
+        hasImageGroup: Boolean(taskGroupId),
+      });
+      setError(message);
+      settleQueuedTaskBeforeNetwork("error", message);
       return;
     }
     const e2eFixture = await getNativeE2EFixtureFlags().catch(() => ({
@@ -18427,10 +18604,7 @@ function AndroidImageStudio() {
     };
 
     if (queuedTaskID) {
-      if (
-        !persistedTask ||
-        !["queued", "reconciling"].includes(String(persistedTask.status || ""))
-      ) {
+      if (!persistedTask || String(persistedTask.status || "") !== "queued") {
         return;
       }
     } else {
@@ -18447,7 +18621,7 @@ function AndroidImageStudio() {
 
     queuedImageRunsRef.current.add(id);
     try {
-      await withMobileImageGenerationLock(activeAccountId, async () => {
+      {
         const currentState = useSdStore.getState();
         const currentTask = currentState.draw.find(
           (item: any) => String(item?.id) === id,
@@ -18630,7 +18804,8 @@ function AndroidImageStudio() {
                 authAttempt < 1
               ) {
                 authAttempt += 1;
-                await managed
+                await useManagedNextChatStore
+                  .getState()
                   .bootstrap({ silent: true })
                   .catch(() => undefined);
                 continue;
@@ -18668,7 +18843,9 @@ function AndroidImageStudio() {
             taskGroupId &&
             (!activeImageSession || activeImageGroupID !== taskGroupId)
           ) {
-            await managed.switchImageGroup(taskGroupId);
+            await useManagedNextChatStore
+              .getState()
+              .switchImageGroup(taskGroupId);
             activeManaged = useManagedNextChatStore.getState();
           }
           if (
@@ -18890,7 +19067,10 @@ function AndroidImageStudio() {
             text.image.title,
             text.image.savedToDevice,
           );
-          await managed.bootstrap({ silent: true }).catch(() => {});
+          await useManagedNextChatStore
+            .getState()
+            .bootstrap({ silent: true })
+            .catch(() => {});
         } catch (err) {
           const aborted = controller.signal.aborted;
           performanceOutcome = aborted ? "cancelled" : "error";
@@ -18928,30 +19108,6 @@ function AndroidImageStudio() {
             error: message,
             blocked_reason: aborted ? undefined : failure.blockedReason,
           });
-          if (!aborted && failure.status === "blocked") {
-            // Authentication, balance and permission errors cannot be solved
-            // by retrying silently. Keep this request and every later request
-            // for the same account intact until the user resolves the cause
-            // and explicitly resumes the queue.
-            sdStore.update((state) => {
-              const currentCreatedAt = Number(
-                currentTask?.created_at_ms || createdAtMs,
-              );
-              state.draw.forEach((item: any) => {
-                if (
-                  item?.queue_schema === 1 &&
-                  String(item?.account_id || "") === activeAccountId &&
-                  item.status === "queued" &&
-                  Number(item?.created_at_ms || 0) >= currentCreatedAt
-                ) {
-                  item.status = "blocked";
-                  item.blocked_reason = failure.blockedReason;
-                  item.updated_at = Date.now();
-                }
-              });
-              state.currentId += 1;
-            });
-          }
           void projectedTaskPromise.then(async (task) => {
             if (!task) return;
             const client = await mobilePlatformClient().catch(() => null);
@@ -18987,11 +19143,55 @@ function AndroidImageStudio() {
             abortRef.current = null;
           }
         }
-      });
+      }
     } finally {
       queuedImageRunsRef.current.delete(id);
+      // The terminal status update can be rendered while this ID is still in
+      // the in-memory guard. Emit one more durable wake after releasing it so
+      // a provider failure always advances the next persisted task.
+      sdStore.update((state) => {
+        state.currentId += 1;
+      });
     }
   }
+
+  useEffect(() => {
+    return mobileCreationQueueCoordinator.register({
+      source: "image-studio",
+      tasks: imageStudioCreationQueueTasks,
+      run: async (task) => {
+        await runImageTask({ queueTaskId: task.sourceTaskId });
+        const latest = useSdStore
+          .getState()
+          .draw.find((item: any) => String(item?.id) === task.sourceTaskId);
+        if (!latest) return { status: "skipped" as const };
+        if (latest.status === "queued") return { status: "skipped" as const };
+        if (latest.status === "blocked") {
+          return {
+            status: "blocked" as const,
+            blockedReason: latest.blocked_reason as
+              | CreationQueueBlockReason
+              | undefined,
+          };
+        }
+        return { status: "settled" as const };
+      },
+      isActive: (accountId) => currentMobileCreationAccountId() === accountId,
+      persistOnUnmount: Boolean(props.queueWorker),
+      priority: props.queueWorker ? 0 : 10,
+      block: blockImageStudioAccountQueue,
+      resume: resumeBlockedImageStudioAccountQueue,
+    });
+    // The current account and durable draw revision are the queue's source of
+    // truth. Registering a new closure never replays an in-flight task because
+    // the coordinator owns one drain per account.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeAccountId,
+    managed.imageSession,
+    props.queueWorker,
+    sdStore.currentId,
+  ]);
 
   useEffect(() => {
     if (!activeAccountId) return;
@@ -19021,28 +19221,9 @@ function AndroidImageStudio() {
       });
     }
     if (!managed.imageSession || !managed.accessToken) return;
-    const hasActiveTask = sdStore.draw.some(
-      (item: any) =>
-        item?.queue_schema === 1 &&
-        String(item?.account_id || "") === activeAccountId &&
-        ["submitting", "running"].includes(String(item.status || "")),
-    );
-    if (hasActiveTask) return;
-    const next = nextRunnableCreationQueueTask(
-      sdStore.draw
-        .filter((item: any) => item?.queue_schema === 1)
-        .map((item: any) => ({
-          ...item,
-          accountId: String(item?.account_id || ""),
-          createdAt: Number(item?.created_at_ms || 0),
-        })),
-      activeAccountId,
-    );
-    if (next && !queuedImageRunsRef.current.has(String(next.id))) {
-      void runImageTask({ queueTaskId: String(next.id) });
-    }
-    // `currentId` is the persisted FIFO wake-up signal. One task is selected
-    // per account, so recovery cannot race into a second billable request.
+    void mobileCreationQueueCoordinator.wake(activeAccountId);
+    // `currentId` is the persisted FIFO wake-up signal. The shared
+    // coordinator chooses the oldest task across image studio and workbench.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeAccountId,
@@ -19085,22 +19266,9 @@ function AndroidImageStudio() {
 
   function resumeBlockedImageQueue() {
     if (!activeAccountId || !blockedTasks.length) return;
-    sdStore.update((state) => {
-      state.draw = resumeBlockedCreationQueueTasks(
-        state.draw.map((item: any) => ({
-          ...item,
-          accountId: String(item?.account_id || ""),
-          blockedReason: item?.blocked_reason,
-        })),
-        activeAccountId,
-      ).map((item: any) => ({
-        ...item,
-        account_id: item.accountId,
-        blocked_reason: item.blockedReason,
-      }));
-      state.currentId += 1;
-    });
+    resumeBlockedImageStudioAccountQueue(activeAccountId);
     setError("");
+    void mobileCreationQueueCoordinator.resume(activeAccountId);
   }
 
   function reuseImageTaskPrompt(item: any) {
@@ -19287,7 +19455,7 @@ function AndroidImageStudio() {
     { id: "digital-art", title: text.image.styleDigital },
   ];
 
-  useNativeBackHandler(true, () => {
+  useNativeBackHandler(!props.queueWorker, () => {
     if (imageActionTarget) {
       setImageActionTarget(null);
       return;
@@ -19322,6 +19490,8 @@ function AndroidImageStudio() {
     }
     handleNativeHomeBack(text);
   });
+
+  if (props.queueWorker) return null;
 
   return (
     <AndroidAppShell active="create" text={text}>
@@ -19890,6 +20060,20 @@ function AndroidImageStudio() {
   );
 }
 
+/**
+ * Persistent Direct-only queue runtime. It registers durable image and
+ * workbench executors but returns no visible interface, allowing queued
+ * account work to resume from Home after a process restart.
+ */
+function AndroidCreationQueueWorker() {
+  return (
+    <>
+      <AndroidContentKit queueWorker />
+      <AndroidImageStudio queueWorker />
+    </>
+  );
+}
+
 function AndroidGallery() {
   const text = useMobileText();
   const managed = useManagedNextChatStore();
@@ -20002,9 +20186,18 @@ function AndroidGallery() {
     // IndexedDB is the first source of truth for this device. Network sync is
     // a best-effort refresh that must never turn usable local assets into a
     // full-screen "read failed" state.
-    const local = await listLocalMaterials(activeAccountId).catch(() => []);
+    let local: LocalMaterial[] = [];
+    let localReadFailed = false;
+    try {
+      local = await listLocalMaterials(activeAccountId);
+    } catch {
+      localReadFailed = true;
+      // This is the only case that means the local library itself cannot be
+      // read. A missing optional sync endpoint is reported separately below.
+      setError(text.platform.materialRefreshFailed);
+    }
     setLocalMaterials(local);
-    setMaterialSyncWarning(false);
+    setMaterialSyncWarning(localReadFailed);
     try {
       if (managed.accessToken && managed.backendBaseUrl) {
         const synced = await syncLocalMaterials(
@@ -20017,10 +20210,11 @@ function AndroidGallery() {
       } else {
         setLocalMaterials(local);
       }
-      setError("");
+      if (!localReadFailed) setError("");
     } catch {
       setMaterialSyncWarning(true);
-      if (!local.length) setError(text.platform.materialRefreshFailed);
+      // `/assets/sync` is optional for this Direct client. Do not convert a
+      // remote 404/temporary failure into a full local-material read failure.
     } finally {
       setLocalMaterialsLoading(false);
     }
@@ -20523,8 +20717,12 @@ function AndroidGallery() {
         {materialSyncWarning && (
           <div className={styles["image-routing-hint"]} role="status">
             <div>
-              <strong>{text.platform.materialSyncAvailable}</strong>
-              <span>{text.platform.materialRefreshFailed}</span>
+              <strong>
+                {localMaterials.length
+                  ? text.platform.materialSyncAvailable
+                  : text.platform.materialEmpty}
+              </strong>
+              <span>{text.platform.materialSyncUnavailable}</span>
             </div>
             <button type="button" onClick={() => void refreshLocalMaterials()}>
               {text.common.retry}
@@ -28568,6 +28766,11 @@ function AndroidGlobalUpdatePrompt(props: { ready: boolean }) {
     manifest?.apkUrl || manifest?.androidApkUrl || manifest?.url || "",
     clientConfig,
   );
+  // This mount has no DOM and does not render a studio. It is deliberately
+  // attached to the authenticated app shell so a restart on Home can recover
+  // saved creation work without waiting for a user to reopen its source page.
+  const creationQueueWorker =
+    props.ready && !playDistribution ? <AndroidCreationQueueWorker /> : null;
 
   useEffect(() => {
     if (!props.ready) return;
@@ -28683,66 +28886,71 @@ function AndroidGlobalUpdatePrompt(props: { ready: boolean }) {
     }
   }
 
-  if (playDistribution || !visible || (!hasUpdate && !required)) return null;
+  if (playDistribution || !visible || (!hasUpdate && !required)) {
+    return creationQueueWorker;
+  }
   return (
-    <div className={styles["sheet-mask"]} role="dialog" aria-modal="true">
-      <div className={styles["confirm-dialog"]}>
-        <h2>{text.account.updateFound}</h2>
-        <p>{`${text.account.installed} ${currentVersion} · ${text.account.latestVersion} ${latestVersion}`}</p>
-        {manifestNotes(manifest, text).length > 0 && (
-          <ul>
-            {manifestNotes(manifest, text)
-              .slice(0, 4)
-              .map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-          </ul>
-        )}
-        {downloadError && (
-          <div className={styles["form-error"]} role="alert">
-            {downloadError}
-          </div>
-        )}
-        {downloading && (
-          <div
-            className={styles["download-progress"]}
-            role="status"
-            aria-live="polite"
-          >
-            <progress value={downloadProgress} max={100} />
-            <span>{text.account.downloading(downloadProgress)}</span>
-          </div>
-        )}
-        <div className={styles["inline-actions"]}>
-          {!required && (
+    <>
+      {creationQueueWorker}
+      <div className={styles["sheet-mask"]} role="dialog" aria-modal="true">
+        <div className={styles["confirm-dialog"]}>
+          <h2>{text.account.updateFound}</h2>
+          <p>{`${text.account.installed} ${currentVersion} · ${text.account.latestVersion} ${latestVersion}`}</p>
+          {manifestNotes(manifest, text).length > 0 && (
+            <ul>
+              {manifestNotes(manifest, text)
+                .slice(0, 4)
+                .map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+            </ul>
+          )}
+          {downloadError && (
+            <div className={styles["form-error"]} role="alert">
+              {downloadError}
+            </div>
+          )}
+          {downloading && (
+            <div
+              className={styles["download-progress"]}
+              role="status"
+              aria-live="polite"
+            >
+              <progress value={downloadProgress} max={100} />
+              <span>{text.account.downloading(downloadProgress)}</span>
+            </div>
+          )}
+          <div className={styles["inline-actions"]}>
+            {!required && (
+              <button
+                type="button"
+                onClick={() => {
+                  localStorage.setItem(
+                    UPDATE_DISMISSED_VERSION_STORAGE_KEY,
+                    latestVersion,
+                  );
+                  setVisible(false);
+                }}
+              >
+                {text.common.cancel}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => {
-                localStorage.setItem(
-                  UPDATE_DISMISSED_VERSION_STORAGE_KEY,
-                  latestVersion,
-                );
-                setVisible(false);
-              }}
+              onClick={() => void downloadUpdate()}
+              disabled={!apkUrl || downloading}
             >
-              {text.common.cancel}
+              <DownloadIcon />
+              <span>
+                {downloading
+                  ? text.account.downloading(downloadProgress)
+                  : text.account.downloadUpdate}
+              </span>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => void downloadUpdate()}
-            disabled={!apkUrl || downloading}
-          >
-            <DownloadIcon />
-            <span>
-              {downloading
-                ? text.account.downloading(downloadProgress)
-                : text.account.downloadUpdate}
-            </span>
-          </button>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -28795,6 +29003,36 @@ function AndroidManagedGateContent(props: { children: ReactNode }) {
     startupInteractiveReportedRef.current = true;
     void reportNativeStartupInteractive().catch(() => undefined);
   }, [firstPaintReady]);
+
+  // Queue execution is independent of the visible creation route. A task is
+  // always selected from its persisted source record, and reopening/resuming
+  // the application only wakes that same FIFO; it never manufactures a new
+  // request ID for an interrupted submission.
+  useEffect(() => {
+    if (!firstPaintReady) return;
+    const accountId = currentMobileCreationAccountId();
+    if (!accountId) return;
+    const wake = () => {
+      if (document.visibilityState !== "visible") return;
+      void mobileCreationQueueCoordinator.wake(accountId);
+    };
+    wake();
+    window.addEventListener("online", wake);
+    window.addEventListener("jisudeng-network-restored", wake);
+    window.addEventListener("jisudeng-native-resume", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      window.removeEventListener("online", wake);
+      window.removeEventListener("jisudeng-network-restored", wake);
+      window.removeEventListener("jisudeng-native-resume", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [
+    firstPaintReady,
+    managed.accessToken,
+    managed.session?.user_id,
+    managed.user?.id,
+  ]);
 
   // Warm the account-scoped material cache when the app becomes active. The
   // sync endpoint returns only metadata deltas and a 304 when nothing changed;
