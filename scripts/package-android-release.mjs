@@ -707,16 +707,22 @@ const manifest = {
   sha256,
   minAndroidVersion: existingManifest.minAndroidVersion || "6.0",
   releaseDate: new Date().toISOString().slice(0, 10),
-  notes: envNotes.length
-    ? envNotes
-    : existingManifest.notes && existingManifest.notes.length
-    ? existingManifest.notes
-    : [
-        "平台账号登录",
-        "余额、分组和模型自动同步",
-        "JisudengChat 聊天与生图支持 Android",
-        "生图结果保存在 APP 本机",
-      ],
+  // Keep the legacy one-language field aligned with the canonical Chinese
+  // release notes. Older Direct clients still render `notes`, while current
+  // clients select `notes_i18n`; neither may show a prior version's text.
+  notes:
+    envNotes.length > 0
+      ? envNotes
+      : localizedNotes.zh?.length
+      ? localizedNotes.zh
+      : existingManifest.notes && existingManifest.notes.length
+      ? existingManifest.notes
+      : [
+          "平台账号登录",
+          "余额、分组和模型自动同步",
+          "JisudengChat 聊天与生图支持 Android",
+          "生图结果保存在 APP 本机",
+        ],
   ...(Object.keys(localizedNotes).length
     ? {
         notes_i18n: localizedNotes,
