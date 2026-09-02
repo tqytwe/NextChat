@@ -46,6 +46,22 @@ describe("content workbench package", () => {
     expect(contentWorkbenchPackageFileName(project)).toMatch(/\.zip$/);
   });
 
+  test("preserves the declared completed-output order instead of ZIP entry order", async () => {
+    const archive = await exportContentWorkbenchPackage({
+      project,
+      files: [
+        { path: "outputs/002-second.png", blob: new Blob(["second"]) },
+        { path: "outputs/001-first.png", blob: new Blob(["first"]) },
+      ],
+      outputPaths: ["outputs/002-second.png", "outputs/001-first.png"],
+    });
+    const restored = await importContentWorkbenchPackage(archive);
+    expect(restored.outputPaths).toEqual([
+      "outputs/002-second.png",
+      "outputs/001-first.png",
+    ]);
+  });
+
   test("rejects a damaged archive", async () => {
     await expect(importContentWorkbenchPackage(new Blob(["not-a-zip"]))).rejects.toThrow(
       "damaged",

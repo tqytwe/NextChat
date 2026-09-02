@@ -33,6 +33,11 @@ export interface LocalMaterial {
   // replacement download, so a stale Blob can never be accepted as current.
   cachedRemoteUpdatedAt?: string;
   cachedRemoteSha256?: string;
+  /** Safe local sync metadata; never includes request content or credentials. */
+  syncError?: {
+    stage: "download" | "integrity";
+    retryable: boolean;
+  };
 }
 
 export interface MobileMaterialSyncItem {
@@ -166,6 +171,14 @@ function asMaterial(value: unknown): LocalMaterial | null {
       String(item?.cachedRemoteUpdatedAt || "").trim() || undefined,
     cachedRemoteSha256:
       String(item?.cachedRemoteSha256 || "").trim() || undefined,
+    syncError:
+      item?.syncError && typeof item.syncError === "object"
+        ? {
+            stage:
+              item.syncError.stage === "integrity" ? "integrity" : "download",
+            retryable: item.syncError.retryable !== false,
+          }
+        : undefined,
   };
 }
 
@@ -343,6 +356,7 @@ export function mergeLocalMaterialSyncDelta(
       contentUrl: item.content_url || previous?.contentUrl,
       cachedRemoteUpdatedAt: previous?.cachedRemoteUpdatedAt,
       cachedRemoteSha256: previous?.cachedRemoteSha256,
+      syncError: previous?.syncError,
     };
     const existingIndex = next.findIndex(
       (candidate) => candidate.id === normalized.id,
@@ -374,6 +388,7 @@ export interface LocalMaterialSyncResult {
   deleted: number;
   materials: LocalMaterial[];
   state: LocalMaterialSyncState | null;
+  failedIds: string[];
 }
 
 const syncInFlight = new Map<string, Promise<LocalMaterialSyncResult>>();
@@ -497,6 +512,7 @@ async function syncLocalMaterialsInternal(
       deleted: 0,
       materials: await readIndex(owner),
       state,
+      failedIds: [],
     };
   }
   if (!response.ok)
@@ -521,6 +537,7 @@ async function syncLocalMaterialsInternal(
     ((url: string, token: string, signal?: AbortSignal) =>
       managedDownloadBlob(baseUrl, url, token, signal));
   let downloaded = 0;
+  const failedIds: string[] = [];
   // Apply tombstones before any potentially failing byte downloads. If a
   // later item loses its connection, the deleted material must not become an
   // unreachable Blob after the metadata index has already dropped its row.
@@ -560,20 +577,34 @@ async function syncLocalMaterialsInternal(
     const url = /^https?:\/\//i.test(item.content_url)
       ? item.content_url
       : managedApiUrl(baseUrl, item.content_url);
-    const blob = await downloader(url, accessToken, options.signal);
-    if (!(blob instanceof Blob) || blob.size <= 0) {
-      throw new Error("material download returned no data");
+    try {
+      const blob = await downloader(url, accessToken, options.signal);
+      if (!(blob instanceof Blob) || blob.size <= 0) {
+        throw new Error("material download returned no data");
+      }
+      await verifyRemoteMaterialBlob(blob, item);
+      await set(blobKey(owner, local.id), blob);
+      local.cachedRemoteSha256 = String(item.sha256 || "").trim() || undefined;
+      local.cachedRemoteUpdatedAt =
+        String(item.updated_at || "").trim() || undefined;
+      local.syncError = undefined;
+      // Persist the byte-version marker with each successful blob. A later
+      // download in the same response may still fail; completed earlier files
+      // must not be fetched again, while a failed replacement stays retryable.
+      await writeIndex(owner, next);
+      downloaded += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      local.syncError = {
+        stage: /size|hash|integrity/i.test(message) ? "integrity" : "download",
+        retryable: true,
+      };
+      failedIds.push(local.id);
+      // A failed entry never hides unrelated local material. Keep the updated
+      // metadata so UI can offer a focused retry and force a full delta next
+      // time rather than accepting a 304 with the missing bytes.
+      await writeIndex(owner, next);
     }
-    await verifyRemoteMaterialBlob(blob, item);
-    await set(blobKey(owner, local.id), blob);
-    local.cachedRemoteSha256 = String(item.sha256 || "").trim() || undefined;
-    local.cachedRemoteUpdatedAt =
-      String(item.updated_at || "").trim() || undefined;
-    // Persist the byte-version marker with each successful blob. A later
-    // download in the same response may still fail; completed earlier files
-    // must not be fetched again, while a failed replacement stays retryable.
-    await writeIndex(owner, next);
-    downloaded += 1;
   }
   const nextState: LocalMaterialSyncState = {
     version: delta.version,
@@ -581,13 +612,15 @@ async function syncLocalMaterialsInternal(
     syncedAt: Date.now(),
     remoteCount: next.filter((item) => item.remoteId).length,
   };
-  await set(syncKey(owner), nextState);
+  if (failedIds.length) await del(syncKey(owner));
+  else await set(syncKey(owner), nextState);
   return {
     changed: true,
     downloaded,
     deleted: delta.deleted_ids?.length || 0,
     materials: next,
-    state: nextState,
+    state: failedIds.length ? null : nextState,
+    failedIds,
   };
 }
 
@@ -617,6 +650,80 @@ export function syncLocalMaterials(
   };
   void request.then(release, release);
   return request;
+}
+
+/** Repair one missing/corrupt remote blob without disturbing other materials. */
+export async function retryLocalMaterial(
+  ownerUserId: string,
+  materialId: string,
+  baseUrl: string,
+  accessToken: string,
+  options: Pick<SyncLocalMaterialsOptions, "downloadBlob" | "signal"> = {},
+) {
+  const owner = normalizedOwnerUserId(ownerUserId);
+  const id = String(materialId || "").trim();
+  if (!owner || !id || !accessToken) {
+    throw new Error("A signed-in account is required.");
+  }
+  const materials = await readIndex(owner);
+  const material = materials.find((item) => item.id === id);
+  if (!material?.remoteId || !material.contentUrl) {
+    throw new Error("This material is not available for remote recovery.");
+  }
+  const url = /^https?:\/\//i.test(material.contentUrl)
+    ? material.contentUrl
+    : managedApiUrl(baseUrl, material.contentUrl);
+  const downloader =
+    options.downloadBlob ||
+    ((downloadURL: string, token: string, signal?: AbortSignal) =>
+      managedDownloadBlob(baseUrl, downloadURL, token, signal));
+  try {
+    const blob = await downloader(url, accessToken, options.signal);
+    if (!(blob instanceof Blob) || blob.size <= 0) {
+      throw new Error("material download returned no data");
+    }
+    const syncItem: MobileMaterialSyncItem = {
+      id: material.remoteId,
+      kind: material.kind,
+      content_type: material.mimeType,
+      byte_size: material.size,
+      sha256: material.remoteSha256,
+      content_url: material.contentUrl,
+      updated_at: material.remoteUpdatedAt,
+      status: material.remoteStatus,
+    };
+    await verifyRemoteMaterialBlob(blob, syncItem);
+    await set(blobKey(owner, material.id), blob);
+    const repaired: LocalMaterial = {
+      ...material,
+      cachedRemoteSha256: material.remoteSha256,
+      cachedRemoteUpdatedAt: material.remoteUpdatedAt,
+      syncError: undefined,
+      updatedAt: Date.now(),
+    };
+    await writeIndex(
+      owner,
+      materials.map((item) => (item.id === repaired.id ? repaired : item)),
+    );
+    return repaired;
+  } catch (error) {
+    const failed: LocalMaterial = {
+      ...material,
+      syncError: {
+        stage:
+          error instanceof Error && /size|hash|integrity/i.test(error.message)
+            ? "integrity"
+            : "download",
+        retryable: true,
+      },
+      updatedAt: Date.now(),
+    };
+    await writeIndex(
+      owner,
+      materials.map((item) => (item.id === failed.id ? failed : item)),
+    );
+    throw error;
+  }
 }
 
 export const localMaterialLimits = {

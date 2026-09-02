@@ -221,6 +221,54 @@ describe("local material library", () => {
     expect(requestedPaths[1]).toContain("since=2026-08-20T00%3A00%3A00Z");
   });
 
+  test("repairs only a failed remote material without clearing other local assets", async () => {
+    const response = {
+      ok: true,
+      status: 200,
+      text: JSON.stringify({
+        code: 0,
+        data: {
+          version: "v1",
+          etag: '"v1"',
+          items: [
+            {
+              id: "asset-retry",
+              kind: "image",
+              original_name: "retry.png",
+              content_type: "image/png",
+              byte_size: 5,
+              content_url: "/api/v1/mobile/assets/asset-retry/content",
+              updated_at: "2026-08-20T00:00:00Z",
+            },
+          ],
+          deleted_ids: [],
+        },
+      }),
+    };
+    await materials.syncLocalMaterials(
+      "user-a",
+      "https://api.example.test",
+      "token",
+      {
+        requestText: jest.fn(async () => response),
+        downloadBlob: jest.fn(async () => {
+          throw new Error("offline");
+        }),
+      },
+    );
+    const failed = (await materials.listLocalMaterials("user-a"))[0];
+    expect(failed.syncError).toMatchObject({ stage: "download", retryable: true });
+    const repaired = await materials.retryLocalMaterial(
+      "user-a",
+      failed.id,
+      "https://api.example.test",
+      "token",
+      { downloadBlob: jest.fn(async () => new Blob(["bytes"], { type: "image/png" })) },
+    );
+    expect(repaired.syncError).toBeUndefined();
+    await expect(materials.readLocalMaterialBlob("user-a", repaired.id)).resolves.toBeInstanceOf(Blob);
+  });
+
   test("recovers the full remote library when IndexedDB evicts only its index", async () => {
     const requests: Array<{ path: string; etag: string | null }> = [];
     const item = {
@@ -472,8 +520,7 @@ describe("local material library", () => {
       },
     );
 
-    await expect(
-      materials.syncLocalMaterials(
+    const partial = await materials.syncLocalMaterials(
         "user-a",
         "https://api.example.test",
         "access-token",
@@ -501,8 +548,8 @@ describe("local material library", () => {
             throw new Error("download interrupted");
           }),
         },
-      ),
-    ).rejects.toThrow("download interrupted");
+      );
+    expect(partial.failedIds).toEqual(["remote-asset-download-failure"]);
 
     await expect(
       materials.readLocalMaterialBlob(
@@ -550,8 +597,7 @@ describe("local material library", () => {
       },
     );
 
-    await expect(
-      materials.syncLocalMaterials(
+    const partial = await materials.syncLocalMaterials(
         "user-a",
         "https://api.example.test",
         "access-token",
@@ -568,8 +614,8 @@ describe("local material library", () => {
             throw new Error("replacement interrupted");
           }),
         },
-      ),
-    ).rejects.toThrow("replacement interrupted");
+      );
+    expect(partial.failedIds).toEqual(["remote-asset-retry-changed"]);
 
     const retryDownload = jest.fn(async () => new Blob(["new-bytes"]));
     const retried = await materials.syncLocalMaterials(
@@ -708,8 +754,7 @@ describe("local material library", () => {
       }),
     });
     let attempts = 0;
-    await expect(
-      materials.syncLocalMaterials(
+    const partial = await materials.syncLocalMaterials(
         "user-a",
         "https://api.example.test",
         "access-token",
@@ -721,8 +766,9 @@ describe("local material library", () => {
             return new Blob(["first"]);
           }),
         },
-      ),
-    ).rejects.toThrow("connection lost");
+      );
+    expect(partial.downloaded).toBe(1);
+    expect(partial.failedIds).toEqual(["remote-asset-2"]);
 
     expect(await materials.listLocalMaterials("user-a")).toEqual(
       expect.arrayContaining([
@@ -816,8 +862,7 @@ describe("local material library", () => {
       }),
     }));
 
-    await expect(
-      materials.syncLocalMaterials(
+    const partial = await materials.syncLocalMaterials(
         "user-a",
         "https://api.example.test",
         "access-token",
@@ -825,16 +870,15 @@ describe("local material library", () => {
           requestText,
           downloadBlob: jest.fn(async () => new Blob(["bad"])),
         },
-      ),
-    ).rejects.toThrow("material download size does not match the server record");
+      );
+    expect(partial.failedIds).toEqual(["remote-asset-truncated"]);
     await expect(
       materials.readLocalMaterialBlob("user-a", "remote-asset-truncated"),
     ).resolves.toBeNull();
   });
 
   test("does not commit a hash-mismatched download as a locally cached material", async () => {
-    await expect(
-      materials.syncLocalMaterials(
+    const partial = await materials.syncLocalMaterials(
         "user-a",
         "https://api.example.test",
         "access-token",
@@ -864,8 +908,8 @@ describe("local material library", () => {
           })),
           downloadBlob: jest.fn(async () => new Blob(["wrong"])),
         },
-      ),
-    ).rejects.toThrow("material download hash does not match the server record");
+      );
+    expect(partial.failedIds).toEqual(["remote-asset-hash-mismatch"]);
     await expect(
       materials.readLocalMaterialBlob("user-a", "remote-asset-hash-mismatch"),
     ).resolves.toBeNull();

@@ -3766,6 +3766,77 @@
   }
 }
 
+.video-project-panel {
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: var(--border-in-light);
+  border-radius: 8px;
+  background: var(--surface-strong);
+
+  .section-head {
+    margin: 0;
+  }
+
+  label {
+    display: grid;
+    gap: 5px;
+  }
+
+  label > span {
+    color: var(--ios-gray);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  input,
+  textarea,
+  select {
+    width: 100%;
+    min-width: 0;
+    border: var(--border-in-light);
+    border-radius: 7px;
+    background: var(--gray);
+    color: var(--black);
+  }
+
+  textarea {
+    min-height: 68px;
+    resize: vertical;
+  }
+}
+
+.video-project-shot-list {
+  display: grid;
+  gap: 6px;
+
+  > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 3px 8px;
+    padding: 8px;
+    border-radius: 7px;
+    background: var(--gray);
+  }
+
+  strong,
+  small {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  small {
+    grid-column: 1 / -1;
+    color: var(--ios-gray);
+  }
+
+  span {
+    color: var(--ios-blue);
+    font-size: 11px;
+    font-weight: 800;
+  }
+}
+
 .creation-screen {
   display: grid;
   gap: 8px;
@@ -4272,6 +4343,64 @@
       font: inherit;
       font-size: 11px;
     }
+  }
+}
+
+.content-kit-shot-actions,
+.content-kit-rewrite-compare {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 30px;
+    padding: 4px 8px;
+    border: var(--border-in-light);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--ios-blue);
+    font-size: 11px;
+    font-weight: 750;
+  }
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.content-kit-rewrite-compare {
+  display: grid;
+  padding: 7px;
+  border: 1px solid var(--ios-blue);
+  border-radius: 6px;
+  background: var(--surface);
+
+  small,
+  strong {
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  small {
+    color: var(--ios-gray);
+    text-decoration: line-through;
+  }
+
+  strong {
+    color: var(--black);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 }
 

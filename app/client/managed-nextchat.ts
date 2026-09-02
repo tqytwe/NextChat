@@ -285,6 +285,12 @@ export interface ManagedWorkspaceGroup {
   /** Diagnostics returned by the dedicated mobile-video bootstrap. */
   video_suppressed?: ManagedVideoSuppressedModel[];
   video_capabilities?: ManagedVideoCapabilities;
+  /**
+   * Compatibility shape used by early media workspaces. The mobile client
+   * normalizes these exact server model IDs into ordinary model rows; it never
+   * infers a video model from its display name.
+   */
+  model_capabilities?: Record<string, ManagedVideoCapabilities>;
   models?: ManagedWorkspaceModel[];
 }
 
@@ -371,10 +377,68 @@ function normalizeManagedWorkspaceModels(
   models?: ManagedWorkspaceModels,
 ): ManagedWorkspaceModels | undefined {
   if (!models) return undefined;
-  const groups = (models.groups || []).map((group) => ({
-    ...group,
-    models: (group.models || []).map(normalizeManagedWorkspaceModel),
-  }));
+  const groups = (Array.isArray(models.groups) ? models.groups : []).map(
+    (group) => {
+      const rawGroup = group as ManagedWorkspaceGroup & {
+        model_ids?: unknown;
+        model_names?: unknown;
+        available_models?: unknown;
+        model_list?: unknown;
+      };
+      const declared = Array.isArray(rawGroup.models) ? rawGroup.models : [];
+      const alternateRows = [
+        rawGroup.model_ids,
+        rawGroup.model_names,
+        rawGroup.available_models,
+        rawGroup.model_list,
+      ].flatMap((value) => (Array.isArray(value) ? value : []));
+      const capabilityModelIDs = Object.keys(group.model_capabilities || {});
+      const known = new Set(
+        declared.map((model) => managedWorkspaceModelID(model)).filter(Boolean),
+      );
+      // The server may publish video capability rows before it includes the
+      // corresponding model in the generic group list. Preserve those stable
+      // IDs as selectable rows; do not guess from group/model display names.
+      const supplemental = capabilityModelIDs
+        .filter((id) => id && !known.has(id))
+        .map((id) => ({
+          id,
+          name: id,
+          video_capabilities: group.model_capabilities?.[id],
+        }));
+      const normalizedAlternate = alternateRows.flatMap((value) => {
+        if (value && typeof value === "object") {
+          const row = value as Record<string, unknown>;
+          const id = String(row.id || row.model || row.name || "").trim();
+          return id && !known.has(id)
+            ? [
+                {
+                  id,
+                  name: id,
+                  video_capabilities: group.model_capabilities?.[id],
+                },
+              ]
+            : [];
+        }
+        const id = String(value || "").trim();
+        return id && !known.has(id)
+          ? [
+              {
+                id,
+                name: id,
+                video_capabilities: group.model_capabilities?.[id],
+              },
+            ]
+          : [];
+      });
+      return {
+        ...group,
+        models: [...declared, ...supplemental, ...normalizedAlternate].map(
+          normalizeManagedWorkspaceModel,
+        ),
+      };
+    },
+  );
   const defaultModel = String(models.default_model || "").trim();
   const canonicalDefault = groups
     .flatMap((group) => group.models || [])

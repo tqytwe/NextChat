@@ -626,7 +626,9 @@ describe("mobile app backend alignment", () => {
     expect(kit).toContain("presetId: selectedPreset.id");
     expect(kit).toContain("activeRunId: runId");
     expect(kit).toContain("withMobileImageGenerationLock(activeAccountId");
-    expect(kit).toContain("queueRef.current.has(projectId)");
+    expect(kit).toContain("function nextContentKitQueueItem(accountId: string)");
+    expect(kit).toContain("function blockContentKitAccountQueue(");
+    expect(kit).toContain("queueRef.current = true");
     expect(kit).toContain("content-kit-output-${asset.id}");
     expect(source).toContain(
       'requestId: clientRequestID("content-kit-output")',

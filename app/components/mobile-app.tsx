@@ -67,6 +67,7 @@ import type {
   ManagedMobileChatSession,
   ManagedMobileContentKit,
   ManagedMobileContentKitAsset,
+  ManagedMobileContentKitRun,
 } from "../store/mobile";
 import { localizedMobileDisplay } from "../client/mobile-display";
 import {
@@ -115,8 +116,11 @@ import {
 } from "../client/mobile-media-contract";
 import {
   canRunMobileImageQueueTask,
+  classifyCreationQueueFailure,
   MobileImageAccountQueueGate,
+  nextRunnableCreationQueueTask,
   recoverMobileImageQueueTask,
+  resumeBlockedCreationQueueTasks,
 } from "../client/mobile-image-queue";
 import {
   buildMobileVideoScriptPrompt,
@@ -258,6 +262,7 @@ import {
   importLocalMaterials,
   listLocalMaterials,
   syncLocalMaterials,
+  retryLocalMaterial,
   readLocalMaterialBlob,
   readLocalMaterialDataUrl,
   clearLocalMaterials,
@@ -280,10 +285,26 @@ import type {
 import {
   clearLocalVideos,
   deleteLocalVideos,
+  readLocalVideoBlob,
   listLocalVideosWithBlobs,
   saveLocalVideo,
 } from "../client/local-video-cache";
 import type { LocalVideoEntry } from "../client/local-video-cache";
+import {
+  createLocalVideoProject,
+  deleteLocalVideoProject,
+  listLocalVideoProjects,
+  updateLocalVideoProject,
+} from "../client/local-video-projects";
+import type {
+  LocalVideoProject,
+  LocalVideoShot,
+} from "../client/local-video-projects";
+import {
+  exportLocalVideoProjectPackage,
+  importLocalVideoProjectPackage,
+  localVideoProjectPackagePath,
+} from "../client/local-video-project-package";
 import {
   createMobilePlatformClient,
   mergeMobileTaskPages,
@@ -498,6 +519,7 @@ function contentKitAssetSpecs(
 ): Omit<ManagedMobileContentKitAsset, "status" | "updatedAt">[] {
   return plan.flatMap((inputShot) => {
     const shot = normalizeContentWorkbenchShot(inputShot);
+    const createdAt = Date.now();
     return Array.from({ length: shot.count }, (_, index) => ({
       id: `${runId}-${shot.id}-${index + 1}`,
       projectId,
@@ -512,6 +534,7 @@ function contentKitAssetSpecs(
       size: shot.size,
       variant: index + 1,
       requestId: clientRequestID("content-kit-output"),
+      createdAt: createdAt + index,
       tags: [],
       prompt: buildContentWorkbenchPrompt(brief, shot),
     }));
@@ -3622,6 +3645,8 @@ function imageTaskStatusText(item: any, text: ManagedMobileText) {
       return text.image.statusSubmitting;
     case "reconciling":
       return text.image.statusReconciling;
+    case "blocked":
+      return text.image.statusBlocked;
     case "running":
       return text.image.statusRunning;
     case "success":
@@ -12186,13 +12211,23 @@ function AndroidContentKit() {
   >({});
   const fileRef = useRef<HTMLInputElement | null>(null);
   const packageImportRef = useRef<HTMLInputElement | null>(null);
-  const queueRef = useRef(new Set<string>());
+  // Content-kit runs used to own independent workers. That allowed one
+  // project to retain the account gate while another project's earlier work
+  // waited indefinitely. A single account-scoped runner below now chooses
+  // the oldest queued shot across every local project.
+  const queueRef = useRef(false);
   const recoveredQueuesRef = useRef(false);
   const [assetTagFilter, setAssetTagFilter] = useState<
     "all" | ContentKitAssetTag
   >("all");
   const [previewAssetId, setPreviewAssetId] = useState("");
   const [viewRunId, setViewRunId] = useState("");
+  const [rewritingShotId, setRewritingShotId] = useState("");
+  const [rewriteDraft, setRewriteDraft] = useState<{
+    shotId: string;
+    original: string;
+    candidate: string;
+  } | null>(null);
 
   useEffect(() => {
     const selectedImageModel = imageModels.find((item) =>
@@ -12267,6 +12302,114 @@ function AndroidContentKit() {
         current[selectedPreset.id] || selectedPreset.shots,
       ),
     }));
+  }
+
+  async function rewriteShotPrompt(shot: ContentKitShotPlan) {
+    if (!chatModel) {
+      setError(text.platform.contentKit.noChatModel);
+      return;
+    }
+    if (!shot.promptTemplate.trim()) return;
+    if (!window.confirm(text.platform.contentKit.rewriteWarning)) return;
+    const requestId = clientRequestID("content-kit-shot-rewrite");
+    setRewritingShotId(shot.id);
+    setError("");
+    try {
+      const response = await managedGatewayRequestText(
+        managed.backendBaseUrl,
+        "/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": requestId,
+            "X-Request-ID": requestId,
+            "X-Client-Request-ID": requestId,
+          },
+          body: JSON.stringify({
+            model: chatModel,
+            stream: false,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  "Rewrite this image-generation prompt for a clearer, more specific visual result.",
+                  "Preserve the user's subject, constraints, aspect intent, and required safe area.",
+                  "Do not invent brands, facts, readable image text, or unsupported technical settings.",
+                  "Return only the rewritten prompt without headings or commentary.",
+                  `Current prompt:\n${shot.promptTemplate.trim()}`,
+                ].join("\n\n"),
+              },
+            ],
+          }),
+        },
+        managed.session?.api_key || "",
+        text,
+      );
+      if (!response.ok) {
+        throw new Error(
+          parseOpenAIError(
+            response.text,
+            response.status,
+            "/v1/chat/completions",
+            response.requestId || requestId,
+          ),
+        );
+      }
+      const payload = JSON.parse(response.text || "{}");
+      const candidate = String(
+        payload?.choices?.[0]?.message?.content || payload?.output_text || "",
+      ).trim();
+      if (!candidate) throw new Error(text.platform.contentKit.failed);
+      setRewriteDraft({
+        shotId: shot.id,
+        original: shot.promptTemplate,
+        candidate,
+      });
+    } catch (error) {
+      setError(
+        localizedMobileErrorMessage(error, text.platform.contentKit.failed),
+      );
+    } finally {
+      setRewritingShotId("");
+    }
+  }
+
+  function acceptShotRewrite() {
+    if (!rewriteDraft) return;
+    updateSelectedPlan((items) =>
+      items.map((item) =>
+        item.id === rewriteDraft.shotId
+          ? {
+              ...item,
+              promptTemplate: rewriteDraft.candidate,
+              promptHistory: [
+                rewriteDraft.original,
+                ...(item.promptHistory || []).filter(
+                  (entry) => entry !== rewriteDraft.original,
+                ),
+              ].slice(0, 8),
+            }
+          : item,
+      ),
+    );
+    setRewriteDraft(null);
+  }
+
+  function restoreShotPrompt(shot: ContentKitShotPlan) {
+    const [previous, ...rest] = shot.promptHistory || [];
+    if (!previous) return;
+    updateSelectedPlan((items) =>
+      items.map((item) =>
+        item.id === shot.id
+          ? {
+              ...item,
+              promptTemplate: previous,
+              promptHistory: [item.promptTemplate, ...rest].slice(0, 8),
+            }
+          : item,
+      ),
+    );
   }
 
   function assetSpecs(
@@ -12346,6 +12489,7 @@ function AndroidContentKit() {
   async function exportProjectPackage(project: ManagedMobileContentKit) {
     try {
       const files: Array<{ path: string; blob: Blob }> = [];
+      const outputPaths: string[] = [];
       for (const [index, image] of project.referenceImages.entries()) {
         files.push({
           path: contentWorkbenchPackageAssetPath(
@@ -12357,7 +12501,15 @@ function AndroidContentKit() {
         });
       }
       for (const [index, asset] of project.assets.entries()) {
-        if (!asset.imageUrl) continue;
+        if (asset.status !== "completed") continue;
+        if (!asset.imageUrl) {
+          throw new Error("Project package is missing a completed output");
+        }
+        const path = contentWorkbenchPackageAssetPath(
+          "outputs",
+          index,
+          asset.fileName || "output.png",
+        );
         try {
           const blob = asset.imageUrl.startsWith("data:")
             ? dataUrlToBlob(asset.imageUrl)
@@ -12366,19 +12518,21 @@ function AndroidContentKit() {
                 return response.blob();
               });
           files.push({
-            path: contentWorkbenchPackageAssetPath(
-              "outputs",
-              index,
-              asset.fileName || "output.png",
-            ),
+            path,
             blob,
           });
-        } catch {
-          // A missing local output is retained as metadata; do not export a
-          // partial byte stream that would later look like a valid backup.
+          outputPaths.push(path);
+        } catch (error) {
+          // A completed output without bytes is an invalid backup, not a
+          // partial archive the user could mistake for a recoverable project.
+          throw error;
         }
       }
-      const archive = await exportContentWorkbenchPackage({ project, files });
+      const archive = await exportContentWorkbenchPackage({
+        project,
+        files,
+        outputPaths,
+      });
       await shareFile(archive, contentWorkbenchPackageFileName(project), {
         title: project.productName,
         mimeType: "application/zip",
@@ -12398,9 +12552,11 @@ function AndroidContentKit() {
       const assetPaths = [...restored.files.keys()].filter((path) =>
         path.startsWith("assets/"),
       );
-      const outputPaths = [...restored.files.keys()].filter((path) =>
-        path.startsWith("outputs/"),
-      );
+      const outputPaths = restored.outputPaths.length
+        ? restored.outputPaths
+        : [...restored.files.keys()]
+            .filter((path) => path.startsWith("outputs/"))
+            .sort();
       const restoredReferences = await Promise.all(
         assetPaths.map((path) =>
           dataUrlForPackageBlob(restored.files.get(path)!),
@@ -12411,15 +12567,22 @@ function AndroidContentKit() {
           dataUrlForPackageBlob(restored.files.get(path)!),
         ),
       );
+      let completedOutputIndex = 0;
       const projectId = mobileStore.createContentKit({
         ...project,
         referenceImages: restoredReferences,
-        assets: project.assets.map((asset, index) => ({
-          ...asset,
-          imageUrl: outputUrls[index] || asset.imageUrl,
-          status: outputUrls[index] ? "completed" : asset.status,
-          updatedAt: Date.now(),
-        })),
+        assets: project.assets.map((asset) => {
+          const outputUrl =
+            asset.status === "completed"
+              ? outputUrls[completedOutputIndex++]
+              : undefined;
+          return {
+            ...asset,
+            imageUrl: outputUrl || asset.imageUrl,
+            status: outputUrl ? "completed" : asset.status,
+            updatedAt: Date.now(),
+          };
+        }),
         runs: project.runs || [],
         copyStatus: project.copyStatus || "idle",
       });
@@ -12531,7 +12694,16 @@ function AndroidContentKit() {
           err,
           text.errors.switchGroupFailed,
         );
-        patchAsset(project.id, asset.id, { status: "failed", error: message });
+        const failure = classifyCreationQueueFailure({
+          status: err instanceof ManagedApiError ? err.status : 0,
+          code: err instanceof ManagedApiError ? String(err.code || "") : "",
+          message,
+        });
+        patchAsset(project.id, asset.id, {
+          status: failure.status === "blocked" ? "blocked" : "failed",
+          blockedReason: failure.blockedReason,
+          error: message,
+        });
         setError(message);
         return;
       }
@@ -12543,7 +12715,8 @@ function AndroidContentKit() {
     }
     if (!imageSession) {
       patchAsset(project.id, asset.id, {
-        status: "failed",
+        status: "blocked",
+        blockedReason: "authentication",
         error: text.errors.switchGroupFailed,
       });
       setError(text.errors.switchGroupFailed);
@@ -12555,7 +12728,7 @@ function AndroidContentKit() {
     const localTaskId =
       asset.requestId || clientRequestID(`content-kit-output-${asset.id}`);
     patchAsset(project.id, asset.id, {
-      status: "running",
+      status: "submitting",
       error: "",
       taskId: localTaskId,
       requestId: localTaskId,
@@ -12596,6 +12769,7 @@ function AndroidContentKit() {
       // Optional task history must not prevent the local output from running.
     }
     try {
+      patchAsset(project.id, asset.id, { status: "running" });
       const headers: Record<string, string> = {
         Accept: "application/json",
         "Idempotency-Key": localTaskId,
@@ -12704,7 +12878,19 @@ function AndroidContentKit() {
         err,
         text.platform.contentKit.failed,
       );
-      patchAsset(project.id, asset.id, { status: "failed", error: message });
+      const statusFromMessage = Number(
+        String(message).match(/HTTP\s+(\d{3})/i)?.[1] || 0,
+      );
+      const failure = classifyCreationQueueFailure({
+        status: err instanceof ManagedApiError ? err.status : statusFromMessage,
+        code: err instanceof ManagedApiError ? String(err.code || "") : "",
+        message,
+      });
+      patchAsset(project.id, asset.id, {
+        status: failure.status === "blocked" ? "blocked" : "failed",
+        blockedReason: failure.blockedReason,
+        error: message,
+      });
       void hydrateAssetBilling(project.id, asset.id, localTaskId);
       if (platformTask) {
         const client = await mobilePlatformClient().catch(() => null);
@@ -12714,7 +12900,7 @@ function AndroidContentKit() {
             error: {
               code: "content_kit_image_failed",
               message,
-              retryable: true,
+              retryable: failure.status !== "blocked",
             },
           })
           .catch(() => {});
@@ -12798,13 +12984,7 @@ function AndroidContentKit() {
   function updateRun(
     projectId: string,
     runId: string,
-    status:
-      | "queued"
-      | "running"
-      | "paused"
-      | "completed"
-      | "partial"
-      | "cancelled",
+    status: ManagedMobileContentKitRun["status"],
   ) {
     const project = useManagedMobileAppStore
       .getState()
@@ -12817,58 +12997,136 @@ function AndroidContentKit() {
     });
   }
 
-  async function runProjectQueue(projectId: string) {
-    if (queueRef.current.has(projectId)) return;
-    queueRef.current.add(projectId);
+  function nextContentKitQueueItem(accountId: string) {
+    return useManagedMobileAppStore
+      .getState()
+      .contentKits.filter((project) => project.accountId === accountId)
+      .flatMap((project) =>
+        project.assets.flatMap((asset) => {
+          const run = project.runs?.find((item) => item.id === asset.runId);
+          if (
+            !run ||
+            !["queued", "running"].includes(run.status) ||
+            !["queued", "idle"].includes(asset.status)
+          ) {
+            return [];
+          }
+          return [{ project, run, asset }];
+        }),
+      )
+      .sort(
+        (left, right) =>
+          Number(
+            left.asset.createdAt ||
+              left.asset.updatedAt ||
+              left.run.createdAt ||
+              left.project.createdAt ||
+              0,
+          ) -
+            Number(
+              right.asset.createdAt ||
+                right.asset.updatedAt ||
+                right.run.createdAt ||
+                right.project.createdAt ||
+                0,
+            ) || left.asset.id.localeCompare(right.asset.id),
+      )[0];
+  }
+
+  function settleContentKitRun(projectId: string, runId: string) {
+    const project = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === projectId);
+    const run = project?.runs?.find((item) => item.id === runId);
+    if (
+      !project ||
+      !run ||
+      ["paused", "blocked", "cancelled"].includes(run.status)
+    ) {
+      return;
+    }
+    const assets = project.assets.filter((asset) => asset.runId === runId);
+    if (
+      assets.some((asset) =>
+        ["idle", "queued", "submitting", "running"].includes(asset.status),
+      )
+    ) {
+      return;
+    }
+    const status: ManagedMobileContentKitRun["status"] = assets.some(
+      (asset) => asset.status === "blocked",
+    )
+      ? "blocked"
+      : assets.some(
+          (asset) => asset.status === "failed" || asset.status === "cancelled",
+        )
+      ? "partial"
+      : "completed";
+    updateRun(projectId, runId, status);
+  }
+
+  function blockContentKitAccountQueue(
+    accountId: string,
+    fromCreatedAt: number,
+    reason: "authentication" | "balance" | "permission" | undefined,
+  ) {
+    const state = useManagedMobileAppStore.getState();
+    state.contentKits
+      .filter((project) => project.accountId === accountId)
+      .forEach((project) => {
+        const affectedRuns = new Set<string>();
+        const assets = project.assets.map((asset) => {
+          const createdAt = Number(
+            asset.createdAt || asset.updatedAt || project.createdAt || 0,
+          );
+          if (
+            ["queued", "idle"].includes(asset.status) &&
+            createdAt >= fromCreatedAt
+          ) {
+            affectedRuns.add(asset.runId);
+            return {
+              ...asset,
+              status: "blocked" as const,
+              blockedReason: reason,
+              updatedAt: Date.now(),
+            };
+          }
+          return asset;
+        });
+        if (!affectedRuns.size) return;
+        mobileStore.updateContentKit(project.id, {
+          assets,
+          runs: (project.runs || []).map((run) =>
+            affectedRuns.has(run.id)
+              ? { ...run, status: "blocked" as const, updatedAt: Date.now() }
+              : run,
+          ),
+        });
+      });
+  }
+
+  async function runProjectQueue(_projectId?: string) {
+    if (queueRef.current) return;
+    queueRef.current = true;
     try {
       while (true) {
-        const project = useManagedMobileAppStore
-          .getState()
-          .contentKits.find((item) => item.id === projectId);
-        const runId = project?.activeRunId;
-        const run = project?.runs?.find((item) => item.id === runId);
-        if (
-          !project ||
-          !runId ||
-          !run ||
-          run.status === "paused" ||
-          run.status === "cancelled"
-        ) {
-          return;
-        }
-        if (run.status !== "running") updateRun(projectId, runId, "running");
-        const queued = project.assets.filter(
-          (asset) =>
-            asset.runId === runId &&
-            (asset.status === "queued" || asset.status === "idle"),
-        );
-        if (!queued.length) {
-          const outputs = project.assets.filter(
-            (asset) => asset.runId === runId,
-          );
-          const finalStatus = outputs.some(
-            (asset) =>
-              asset.status === "failed" || asset.status === "cancelled",
-          )
-            ? "partial"
-            : "completed";
-          updateRun(projectId, runId, finalStatus);
-          const nextRun = project.runs
-            ?.filter((item) => item.id !== runId && item.status === "queued")
-            .sort((left, right) => left.createdAt - right.createdAt)[0];
-          if (!nextRun) return;
-          mobileStore.updateContentKit(projectId, {
-            activeRunId: nextRun.id,
-          });
-          continue;
-        }
-        const asset = queued[0];
+        const next = nextContentKitQueueItem(activeAccountId);
+        if (!next) return;
+        const { project, run, asset } = next;
+        mobileStore.updateContentKit(project.id, {
+          activeRunId: run.id,
+          runs: (project.runs || []).map((item) =>
+            item.id === run.id && item.status === "queued"
+              ? { ...item, status: "running", updatedAt: Date.now() }
+              : item,
+          ),
+        });
         await withMobileImageGenerationLock(activeAccountId, async () => {
           const latestProject = useManagedMobileAppStore
             .getState()
-            .contentKits.find((item) => item.id === projectId);
+            .contentKits.find((item) => item.id === project.id);
           const latestRun = latestProject?.runs?.find(
-            (item) => item.id === latestProject.activeRunId,
+            (item) => item.id === run.id,
           );
           const latestAsset = latestProject?.assets.find(
             (item) => item.id === asset.id,
@@ -12885,9 +13143,29 @@ function AndroidContentKit() {
           }
           await generateAsset(latestProject, latestAsset);
         });
+        const after = useManagedMobileAppStore
+          .getState()
+          .contentKits.find((item) => item.id === project.id);
+        const afterAsset = after?.assets.find((item) => item.id === asset.id);
+        if (afterAsset?.status === "blocked") {
+          const createdAt = Number(
+            afterAsset.createdAt ||
+              afterAsset.updatedAt ||
+              asset.createdAt ||
+              0,
+          );
+          blockContentKitAccountQueue(
+            activeAccountId,
+            createdAt,
+            afterAsset.blockedReason,
+          );
+          updateRun(project.id, run.id, "blocked");
+          return;
+        }
+        settleContentKitRun(project.id, run.id);
       }
     } finally {
-      queueRef.current.delete(projectId);
+      queueRef.current = false;
     }
   }
 
@@ -12920,7 +13198,7 @@ function AndroidContentKit() {
     const retryable = project.assets.filter(
       (asset) =>
         asset.runId === runId &&
-        asset.status === "failed" &&
+        ["failed", "blocked"].includes(asset.status) &&
         (retryingAllFailed || retryIds.has(asset.id)),
     );
     if (!retryable.length) return;
@@ -12950,6 +13228,7 @@ function AndroidContentKit() {
               requestId: clientRequestID(`content-kit-retry-${asset.id}`),
               taskId: undefined,
               status: "queued",
+              blockedReason: undefined,
               error: "",
               billingStatus: "pending",
               updatedAt: Date.now(),
@@ -12973,6 +13252,40 @@ function AndroidContentKit() {
   ) {
     if (!runId) return;
     retryRunAssets(project, runId);
+  }
+
+  function resumeBlockedProjectQueue(project: ManagedMobileContentKit) {
+    useManagedMobileAppStore
+      .getState()
+      .contentKits.filter((item) => item.accountId === project.accountId)
+      .forEach((item) => {
+        const recoveredRuns = new Set(
+          item.assets
+            .filter((asset) => asset.status === "blocked")
+            .map((asset) => asset.runId),
+        );
+        if (!recoveredRuns.size) return;
+        mobileStore.updateContentKit(item.id, {
+          assets: item.assets.map((asset) =>
+            asset.status === "blocked"
+              ? {
+                  ...asset,
+                  status: "queued" as const,
+                  blockedReason: undefined,
+                  error: "",
+                  updatedAt: Date.now(),
+                }
+              : asset,
+          ),
+          runs: (item.runs || []).map((run) =>
+            recoveredRuns.has(run.id)
+              ? { ...run, status: "queued" as const, updatedAt: Date.now() }
+              : run,
+          ),
+        });
+      });
+    setError("");
+    void runProjectQueue();
   }
 
   function createNextRun(project: ManagedMobileContentKit) {
@@ -13020,7 +13333,71 @@ function AndroidContentKit() {
     void runProjectQueue(project.id);
   }
 
-  async function createProject() {
+  function queueRemainingPlannedOutputs(project: ManagedMobileContentKit) {
+    const plan = contentWorkbenchClonePlan(project.shotPlan || []);
+    if (!plan.length) {
+      setError(text.platform.contentKit.planLimit);
+      return;
+    }
+    const alreadyPlanned = new Map<string, number>();
+    project.assets.forEach((asset) => {
+      if (asset.status !== "cancelled") {
+        alreadyPlanned.set(
+          asset.shotId,
+          (alreadyPlanned.get(asset.shotId) || 0) + 1,
+        );
+      }
+    });
+    const remaining = plan
+      .map((shot) => ({
+        ...shot,
+        count: Math.max(0, shot.count - (alreadyPlanned.get(shot.id) || 0)),
+      }))
+      .filter((shot) => shot.count > 0);
+    const outputCount = contentWorkbenchPlanOutputCount(remaining);
+    if (!outputCount) {
+      setError(text.platform.contentKit.projectLimit);
+      return;
+    }
+    if (
+      project.assets.length + outputCount >
+      CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT
+    ) {
+      setError(text.platform.contentKit.projectLimit);
+      return;
+    }
+    const runId = clientRequestID("content-kit-fill-remaining");
+    const assets = contentKitAssetSpecs(
+      runId,
+      remaining,
+      contentKitBriefFromProject(project),
+      project.id,
+    ).map((asset) => ({
+      ...asset,
+      status: "queued" as const,
+      updatedAt: Date.now(),
+    }));
+    mobileStore.updateContentKit(project.id, {
+      activeRunId: runId,
+      runs: [
+        ...(project.runs || []),
+        {
+          id: runId,
+          presetId: project.presetId || "custom",
+          status: "queued",
+          total: assets.length,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+      assets: [...project.assets, ...assets],
+    });
+    setViewRunId(runId);
+    setError("");
+    void runProjectQueue(project.id);
+  }
+
+  async function createProject(mode: "full" | "trial" = "full") {
     if (!productName.trim() || !sellingPoints.trim())
       return setError(text.platform.contentKit.requiredProduct);
     if (!model || !imageModels.length)
@@ -13042,7 +13419,17 @@ function AndroidContentKit() {
     ) {
       return setError(text.platform.contentKit.planLimit);
     }
-    const rawAssets = assetSpecs("content-kit-pending");
+    const runPlan =
+      mode === "trial"
+        ? selectedPlanShots
+            .filter((shot) => shot.count > 0)
+            .slice(0, 1)
+            .map((shot) => ({ ...shot, count: 1 }))
+        : selectedPlanShots;
+    const rawAssets = assetSpecs("content-kit-pending", runPlan);
+    if (!rawAssets.length) {
+      return setError(text.platform.contentKit.planLimit);
+    }
     const runs = Array.from(
       { length: Math.ceil(rawAssets.length / maxOutputsPerRun) },
       (_, index) => {
@@ -13096,6 +13483,9 @@ function AndroidContentKit() {
       imageGroupId: projectImageGroupId,
       referenceImages: references,
       presetId: selectedPreset.id,
+      // Always preserve the complete plan. A trial run consumes one output;
+      // the remaining shot quantities can be appended later without guessing
+      // from current composer state or cloning a new unrelated project.
       shotPlan: contentWorkbenchClonePlan(selectedPlanShots),
       activeRunId: runs[0]?.id,
       runs,
@@ -13161,9 +13551,11 @@ function AndroidContentKit() {
 
   function taskStatusLabel(status: ManagedMobileContentKitAsset["status"]) {
     if (status === "completed") return text.platform.contentKit.completed;
-    if (status === "running") return text.platform.contentKit.generating;
+    if (status === "running" || status === "submitting")
+      return text.platform.contentKit.generating;
     if (status === "reconciling")
       return text.platform.contentKit.billingPending;
+    if (status === "blocked") return text.image.statusBlocked;
     if (status === "failed") return text.platform.contentKit.failed;
     return text.platform.contentKit.waiting;
   }
@@ -13185,13 +13577,19 @@ function AndroidContentKit() {
     if (
       statuses.some(
         (status) =>
-          status === "running" || status === "idle" || status === "queued",
+          status === "running" ||
+          status === "submitting" ||
+          status === "idle" ||
+          status === "queued",
       )
     ) {
       return text.platform.contentKit.generating;
     }
     if (statuses.some((status) => status === "reconciling")) {
       return text.platform.contentKit.billingPending;
+    }
+    if (statuses.some((status) => status === "blocked")) {
+      return text.image.statusBlocked;
     }
     if (statuses.some((status) => status === "completed")) {
       return text.platform.contentKit.partial;
@@ -13414,6 +13812,13 @@ function AndroidContentKit() {
             >
               {text.platform.contentKit.resumeQueue}
             </button>
+          ) : activeRun?.status === "blocked" ? (
+            <button
+              type="button"
+              onClick={() => resumeBlockedProjectQueue(selectedProject)}
+            >
+              {text.platform.contentKit.resumeQueue}
+            </button>
           ) : null}
           {(activeRun?.status === "running" ||
             activeRun?.status === "queued" ||
@@ -13425,7 +13830,9 @@ function AndroidContentKit() {
               {text.platform.contentKit.cancelQueue}
             </button>
           )}
-          {runAssets.some((asset) => asset.status === "failed") && (
+          {runAssets.some((asset) =>
+            ["failed", "blocked"].includes(asset.status),
+          ) && (
             <button
               type="button"
               onClick={() => retryFailedAssets(selectedProject, displayedRunId)}
@@ -13437,13 +13844,22 @@ function AndroidContentKit() {
             ["completed", "partial", "cancelled"].includes(
               activeRun.status,
             ) && (
-              <button
-                type="button"
-                onClick={() => createNextRun(selectedProject)}
-              >
-                <AddIcon />
-                {text.platform.contentKit.newVersion}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => queueRemainingPlannedOutputs(selectedProject)}
+                >
+                  <AddIcon />
+                  {text.platform.contentKit.fillRemaining}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => createNextRun(selectedProject)}
+                >
+                  <AddIcon />
+                  {text.platform.contentKit.newVersion}
+                </button>
+              </>
             )}
           <button
             type="button"
@@ -13586,7 +14002,7 @@ function AndroidContentKit() {
                           ))}
                         </div>
                       )}
-                      {asset.status === "failed" && (
+                      {["failed", "blocked"].includes(asset.status) && (
                         <button
                           type="button"
                           onClick={() =>
@@ -13889,7 +14305,7 @@ function AndroidContentKit() {
           </button>
           {composerStep === 2 && showPlanEditor && (
             <div className={styles["content-kit-custom-plan"]}>
-              {selectedPlanShots.map((shot) => (
+              {selectedPlanShots.map((shot, shotIndex) => (
                 <div
                   key={shot.id}
                   className={styles["content-kit-custom-shot"]}
@@ -13938,7 +14354,40 @@ function AndroidContentKit() {
                       >
                         -
                       </button>
-                      <strong>{shot.count}</strong>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT}
+                        aria-label={`${
+                          shot.label
+                        } ${text.platform.contentKit.plannedImages(0)}`}
+                        value={shot.count}
+                        onChange={(event) => {
+                          const requested = Number(event.currentTarget.value);
+                          updateSelectedPlan((items) => {
+                            const withoutCurrent = items.filter(
+                              (item) => item.id !== shot.id,
+                            );
+                            const otherCount =
+                              contentWorkbenchPlanOutputCount(withoutCurrent);
+                            const nextCount = Math.max(
+                              1,
+                              Math.min(
+                                CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
+                                CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT -
+                                  otherCount,
+                                Number.isFinite(requested) ? requested : 1,
+                              ),
+                            );
+                            return items.map((item) =>
+                              item.id === shot.id
+                                ? { ...item, count: nextCount }
+                                : item,
+                            );
+                          });
+                        }}
+                      />
                       <button
                         type="button"
                         aria-label={`${shot.label} +`}
@@ -13986,6 +14435,62 @@ function AndroidContentKit() {
                         </option>
                       ))}
                     </select>
+                    <button
+                      type="button"
+                      aria-label={`${text.common.copy} ${shot.label}`}
+                      onClick={() =>
+                        updateSelectedPlan((items) => {
+                          const duplicate = {
+                            ...shot,
+                            id: clientRequestID("content-kit-duplicate-shot"),
+                            label: `${shot.label} 2`,
+                          };
+                          const next = [...items];
+                          next.splice(shotIndex + 1, 0, duplicate);
+                          return next;
+                        })
+                      }
+                      disabled={
+                        selectedPlanCount + shot.count >
+                        CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT
+                      }
+                    >
+                      <CopyIcon />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${shot.label} - 1`}
+                      disabled={shotIndex === 0}
+                      onClick={() =>
+                        updateSelectedPlan((items) => {
+                          const next = [...items];
+                          [next[shotIndex - 1], next[shotIndex]] = [
+                            next[shotIndex],
+                            next[shotIndex - 1],
+                          ];
+                          return next;
+                        })
+                      }
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${shot.label} + 1`}
+                      disabled={shotIndex === selectedPlanShots.length - 1}
+                      onClick={() =>
+                        updateSelectedPlan((items) => {
+                          const next = [...items];
+                          [next[shotIndex], next[shotIndex + 1]] = [
+                            next[shotIndex + 1],
+                            next[shotIndex],
+                          ];
+                          return next;
+                        })
+                      }
+                    >
+                      ↓
+                    </button>
                     <button
                       type="button"
                       aria-label={`${text.platform.contentKit.removeShot} ${shot.label}`}
@@ -14038,6 +14543,43 @@ function AndroidContentKit() {
                         )
                       }
                     />
+                    <div className={styles["content-kit-shot-actions"]}>
+                      <button
+                        type="button"
+                        onClick={() => void rewriteShotPrompt(shot)}
+                        disabled={rewritingShotId === shot.id}
+                      >
+                        <PromptIcon />
+                        {rewritingShotId === shot.id
+                          ? text.common.loading
+                          : text.platform.contentKit.rewritePrompt}
+                      </button>
+                      {shot.promptHistory?.length ? (
+                        <button
+                          type="button"
+                          onClick={() => restoreShotPrompt(shot)}
+                        >
+                          {text.platform.contentKit.restorePrompt}
+                        </button>
+                      ) : null}
+                    </div>
+                    {rewriteDraft?.shotId === shot.id && (
+                      <div className={styles["content-kit-rewrite-compare"]}>
+                        <small>{rewriteDraft.original}</small>
+                        <strong>{rewriteDraft.candidate}</strong>
+                        <div>
+                          <button type="button" onClick={acceptShotRewrite}>
+                            {text.platform.contentKit.applyRewrite}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRewriteDraft(null)}
+                          >
+                            {text.common.cancel}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </label>
                 </div>
               ))}
@@ -14278,6 +14820,13 @@ function AndroidContentKit() {
             onClick={() => void createProject()}
           >
             {text.platform.contentKit.create}
+          </button>
+          <button
+            type="button"
+            hidden={composerStep !== 3}
+            onClick={() => void createProject("trial")}
+          >
+            {text.platform.contentKit.trialGenerate}
           </button>
           <div className={styles["content-kit-actions"]}>
             {composerStep > 1 && (
@@ -14581,6 +15130,34 @@ function videoStudioCopy() {
       materialEmpty: "没有适用于当前模型的已同步素材",
       materialLoading: "正在检查素材更新",
       materialKinds: { image: "图片", video: "视频", audio: "音频" },
+      project: "视频工程",
+      newProject: "新建工程",
+      projectName: "工程名称",
+      projectBrief: "项目简介或长文本",
+      projectScript: "剧本",
+      characters: "角色",
+      scenes: "场景",
+      props: "道具",
+      storyFacts: "故事事实",
+      saveProject: "保存工程",
+      addShot: "加入当前镜头",
+      shots: "分镜",
+      noShots: "还没有分镜，请先填写提示词并加入工程",
+      generateShots: "按顺序生成分镜",
+      exportProject: "导出工程包",
+      importProject: "导入工程包",
+      projectSaved: "工程已保存",
+      shotQueued: "镜头已加入工程",
+      taskStatus: {
+        queued: "等待生成",
+        submitting: "正在提交",
+        running: "正在生成",
+        reconciling: "正在核对任务",
+        blocked: "等待处理",
+        completed: "已完成",
+        failed: "生成失败",
+        cancelled: "已取消",
+      },
     },
     en: {
       title: "Video creation",
@@ -14662,6 +15239,34 @@ function videoStudioCopy() {
       materialEmpty: "No synced material is supported by this model",
       materialLoading: "Checking material updates",
       materialKinds: { image: "Image", video: "Video", audio: "Audio" },
+      project: "Video project",
+      newProject: "New project",
+      projectName: "Project name",
+      projectBrief: "Project brief or long text",
+      projectScript: "Script",
+      characters: "Characters",
+      scenes: "Scenes",
+      props: "Props",
+      storyFacts: "Story facts",
+      saveProject: "Save project",
+      addShot: "Add current shot",
+      shots: "Shots",
+      noShots: "No shots yet. Fill in a prompt and add the current shot.",
+      generateShots: "Generate shots in order",
+      exportProject: "Export project package",
+      importProject: "Import project package",
+      projectSaved: "Project saved",
+      shotQueued: "Shot added to project",
+      taskStatus: {
+        queued: "Queued",
+        submitting: "Submitting",
+        running: "Generating",
+        reconciling: "Checking task",
+        blocked: "Needs attention",
+        completed: "Completed",
+        failed: "Failed",
+        cancelled: "Cancelled",
+      },
     },
     jp: {
       title: "動画作成",
@@ -14741,6 +15346,34 @@ function videoStudioCopy() {
       materialEmpty: "このモデルで使える同期済み素材はありません",
       materialLoading: "素材の更新を確認中",
       materialKinds: { image: "画像", video: "動画", audio: "音声" },
+      project: "動画プロジェクト",
+      newProject: "新規プロジェクト",
+      projectName: "プロジェクト名",
+      projectBrief: "プロジェクト概要または長文",
+      projectScript: "脚本",
+      characters: "登場人物",
+      scenes: "シーン",
+      props: "小道具",
+      storyFacts: "ストーリーの事実",
+      saveProject: "プロジェクトを保存",
+      addShot: "現在のショットを追加",
+      shots: "ショット",
+      noShots: "ショットがありません。プロンプトを入力して追加してください。",
+      generateShots: "ショットを順番に生成",
+      exportProject: "プロジェクトパッケージをエクスポート",
+      importProject: "プロジェクトパッケージをインポート",
+      projectSaved: "プロジェクトを保存しました",
+      shotQueued: "ショットをプロジェクトに追加しました",
+      taskStatus: {
+        queued: "待機中",
+        submitting: "送信中",
+        running: "生成中",
+        reconciling: "タスク確認中",
+        blocked: "対応待ち",
+        completed: "完了",
+        failed: "失敗",
+        cancelled: "キャンセル済み",
+      },
     },
     ko: {
       title: "동영상 만들기",
@@ -14819,6 +15452,34 @@ function videoStudioCopy() {
       materialEmpty: "이 모델에서 사용할 수 있는 동기화된 자료가 없습니다",
       materialLoading: "자료 업데이트 확인 중",
       materialKinds: { image: "이미지", video: "동영상", audio: "오디오" },
+      project: "동영상 프로젝트",
+      newProject: "새 프로젝트",
+      projectName: "프로젝트 이름",
+      projectBrief: "프로젝트 설명 또는 긴 텍스트",
+      projectScript: "스크립트",
+      characters: "등장인물",
+      scenes: "장면",
+      props: "소품",
+      storyFacts: "이야기 사실",
+      saveProject: "프로젝트 저장",
+      addShot: "현재 샷 추가",
+      shots: "샷",
+      noShots: "아직 샷이 없습니다. 프롬프트를 입력하고 현재 샷을 추가하세요.",
+      generateShots: "샷을 순서대로 생성",
+      exportProject: "프로젝트 패키지 내보내기",
+      importProject: "프로젝트 패키지 가져오기",
+      projectSaved: "프로젝트를 저장했습니다",
+      shotQueued: "샷을 프로젝트에 추가했습니다",
+      taskStatus: {
+        queued: "대기 중",
+        submitting: "전송 중",
+        running: "생성 중",
+        reconciling: "작업 확인 중",
+        blocked: "처리 필요",
+        completed: "완료",
+        failed: "실패",
+        cancelled: "취소됨",
+      },
     },
   } as const;
   return copies[locale] || copies.cn;
@@ -15142,6 +15803,18 @@ function AndroidVideoStudio() {
   const referenceObjectURLsRef = useRef<string[]>([]);
   const resultObjectURLRef = useRef<string>("");
   const scriptAbortRef = useRef<AbortController | null>(null);
+  const projectPackageInputRef = useRef<HTMLInputElement | null>(null);
+  const [videoProjects, setVideoProjects] = useState<LocalVideoProject[]>([]);
+  const [selectedVideoProjectId, setSelectedVideoProjectId] = useState("");
+  const [videoProjectName, setVideoProjectName] = useState("");
+  const [videoProjectBrief, setVideoProjectBrief] = useState("");
+  const [videoProjectScript, setVideoProjectScript] = useState("");
+  const [videoProjectCharacters, setVideoProjectCharacters] = useState("");
+  const [videoProjectScenes, setVideoProjectScenes] = useState("");
+  const [videoProjectProps, setVideoProjectProps] = useState("");
+  const [videoProjectStoryFacts, setVideoProjectStoryFacts] = useState("");
+  const [videoProjectSaving, setVideoProjectSaving] = useState(false);
+  const [videoProjectOpen, setVideoProjectOpen] = useState(false);
 
   const referenceLimitForKind = useCallback(
     (kind: LocalMaterialKind) => {
@@ -15239,6 +15912,61 @@ function AndroidVideoStudio() {
       readStoredJSON(preferenceKey, DEFAULT_VIDEO_STUDIO_PREFERENCES),
     );
   }, [preferenceKey]);
+
+  useEffect(() => {
+    let disposed = false;
+    void listLocalVideoProjects(activeAccountId)
+      .then((projects) => {
+        if (disposed) return;
+        setVideoProjects(projects);
+        const selected =
+          projects.find((project) => project.id === selectedVideoProjectId) ||
+          projects[0];
+        if (selected) {
+          setSelectedVideoProjectId(selected.id);
+          setVideoProjectName(selected.name);
+          setVideoProjectBrief(selected.brief);
+          setVideoProjectScript(selected.script);
+          setVideoProjectCharacters(
+            selected.characters
+              .map((fact) =>
+                [fact.name, fact.description].filter(Boolean).join(": "),
+              )
+              .join("\n"),
+          );
+          setVideoProjectScenes(
+            selected.scenes
+              .map((fact) =>
+                [fact.name, fact.description].filter(Boolean).join(": "),
+              )
+              .join("\n"),
+          );
+          setVideoProjectProps(
+            selected.props
+              .map((fact) =>
+                [fact.name, fact.description].filter(Boolean).join(": "),
+              )
+              .join("\n"),
+          );
+          setVideoProjectStoryFacts(selected.storyFacts.join("\n"));
+        } else {
+          setSelectedVideoProjectId("");
+          setVideoProjectName("");
+          setVideoProjectBrief("");
+          setVideoProjectScript("");
+          setVideoProjectCharacters("");
+          setVideoProjectScenes("");
+          setVideoProjectProps("");
+          setVideoProjectStoryFacts("");
+        }
+      })
+      .catch(() => {
+        if (!disposed) setVideoProjects([]);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [activeAccountId]);
 
   useEffect(() => {
     void refreshReferenceMaterials();
@@ -15399,6 +16127,489 @@ function AndroidVideoStudio() {
     setReferences([]);
     setReferenceAssetIDs([]);
     setReferenceAssetKinds({});
+  }
+
+  const selectedVideoProject = videoProjects.find(
+    (project) => project.id === selectedVideoProjectId,
+  );
+
+  function videoProjectFacts(value: string, prefix: string) {
+    return value
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line, index) => {
+        const [name, ...rest] = line.split(/[:：]/);
+        return {
+          id: `${prefix}-${index + 1}`,
+          name: name.trim(),
+          description: rest.join(":").trim(),
+        };
+      });
+  }
+
+  async function saveVideoProject() {
+    if (!activeAccountId) {
+      setError(text.errors.loginRequired);
+      return;
+    }
+    setVideoProjectSaving(true);
+    try {
+      const name = videoProjectName.trim() || copy.project;
+      const project = selectedVideoProject
+        ? await updateLocalVideoProject(
+            activeAccountId,
+            selectedVideoProject.id,
+            {
+              name,
+              brief: videoProjectBrief,
+              script: videoProjectScript,
+              characters: videoProjectFacts(
+                videoProjectCharacters,
+                "character",
+              ),
+              scenes: videoProjectFacts(videoProjectScenes, "scene"),
+              props: videoProjectFacts(videoProjectProps, "prop"),
+              storyFacts: videoProjectStoryFacts
+                .split("\n")
+                .map((fact) => fact.trim())
+                .filter(Boolean),
+            },
+          )
+        : await createLocalVideoProject(activeAccountId, {
+            name,
+            brief: videoProjectBrief,
+            script: videoProjectScript,
+            characters: videoProjectFacts(videoProjectCharacters, "character"),
+            scenes: videoProjectFacts(videoProjectScenes, "scene"),
+            props: videoProjectFacts(videoProjectProps, "prop"),
+            storyFacts: videoProjectStoryFacts
+              .split("\n")
+              .map((fact) => fact.trim())
+              .filter(Boolean),
+          });
+      setVideoProjects((projects) => [
+        project,
+        ...projects.filter((item) => item.id !== project.id),
+      ]);
+      setSelectedVideoProjectId(project.id);
+      setVideoProjectName(project.name);
+      setVideoProjectBrief(project.brief);
+      setVideoProjectScript(project.script);
+      setError("");
+    } catch (projectError) {
+      setError(
+        localizedMobileErrorMessage(projectError, text.errors.saveFailed),
+      );
+    } finally {
+      setVideoProjectSaving(false);
+    }
+  }
+
+  async function createVideoProject() {
+    if (!activeAccountId) {
+      setError(text.errors.loginRequired);
+      return;
+    }
+    try {
+      const project = await createLocalVideoProject(activeAccountId, {
+        name: `${copy.project} ${videoProjects.length + 1}`,
+      });
+      setVideoProjects((projects) => [project, ...projects]);
+      setSelectedVideoProjectId(project.id);
+      setVideoProjectName(project.name);
+      setVideoProjectBrief("");
+      setVideoProjectScript("");
+      setVideoProjectCharacters("");
+      setVideoProjectScenes("");
+      setVideoProjectProps("");
+      setVideoProjectStoryFacts("");
+      setVideoProjectOpen(true);
+    } catch (projectError) {
+      setError(
+        localizedMobileErrorMessage(projectError, text.errors.saveFailed),
+      );
+    }
+  }
+
+  async function removeVideoProject() {
+    if (!selectedVideoProject || !window.confirm(text.common.delete)) return;
+    await deleteLocalVideoProject(
+      activeAccountId,
+      selectedVideoProject.id,
+    ).catch(() => undefined);
+    const remaining = videoProjects.filter(
+      (project) => project.id !== selectedVideoProject.id,
+    );
+    setVideoProjects(remaining);
+    const next = remaining[0];
+    setSelectedVideoProjectId(next?.id || "");
+    setVideoProjectName(next?.name || "");
+    setVideoProjectBrief(next?.brief || "");
+    setVideoProjectScript(next?.script || "");
+  }
+
+  async function addCurrentShotToVideoProject() {
+    if (!activeAccountId || !prompt.trim()) {
+      setError(copy.placeholder);
+      return;
+    }
+    let project = selectedVideoProject;
+    if (!project) {
+      project = await createLocalVideoProject(activeAccountId, {
+        name: videoProjectName.trim() || copy.project,
+        brief: videoProjectBrief,
+        script: videoProjectScript,
+        characters: videoProjectFacts(videoProjectCharacters, "character"),
+        scenes: videoProjectFacts(videoProjectScenes, "scene"),
+        props: videoProjectFacts(videoProjectProps, "prop"),
+        storyFacts: videoProjectStoryFacts
+          .split("\n")
+          .map((fact) => fact.trim())
+          .filter(Boolean),
+      });
+      setVideoProjects((projects) => [project!, ...projects]);
+      setSelectedVideoProjectId(project.id);
+    }
+    const now = Date.now();
+    const shot: LocalVideoShot = {
+      id: clientRequestID("video-shot"),
+      order: project.shots.length,
+      title: `${copy.shots} ${project.shots.length + 1}`,
+      prompt: prompt.trim(),
+      referenceMaterialIds: [...referenceAssetIDs],
+      model: modelValue(selectedModel),
+      groupId: Number(selectedGroup?.id || 0) || undefined,
+      resolution: selectedPreferences.resolution,
+      ratio: selectedPreferences.ratio,
+      duration: Number(selectedPreferences.duration),
+      watermark: Boolean(selectedPreferences.watermark),
+      taskStatus: "queued",
+      updatedAt: now,
+    };
+    const updated = await updateLocalVideoProject(activeAccountId, project.id, {
+      shots: [...project.shots, shot],
+    });
+    setVideoProjects((projects) => [
+      updated,
+      ...projects.filter((item) => item.id !== updated.id),
+    ]);
+    setSelectedVideoProjectId(updated.id);
+    setError("");
+  }
+
+  async function patchVideoProjectShot(
+    projectId: string,
+    shotId: string,
+    patch: Partial<LocalVideoShot>,
+  ) {
+    const current = (await listLocalVideoProjects(activeAccountId)).find(
+      (project) => project.id === projectId,
+    );
+    if (!current) throw new Error("Video project was not found.");
+    const updated = await updateLocalVideoProject(activeAccountId, projectId, {
+      shots: current.shots.map((shot) =>
+        shot.id === shotId
+          ? { ...shot, ...patch, updatedAt: Date.now() }
+          : shot,
+      ),
+    });
+    setVideoProjects((projects) => [
+      updated,
+      ...projects.filter((item) => item.id !== updated.id),
+    ]);
+    return updated;
+  }
+
+  async function reconcileVideoProjectShot(
+    projectId: string,
+    shot: LocalVideoShot,
+  ) {
+    if (!shot.taskId || !managed.accessToken) return false;
+    const requestID =
+      shot.clientRequestId || clientRequestID("video-reconcile");
+    const controller = new AbortController();
+    try {
+      await patchVideoProjectShot(projectId, shot.id, {
+        taskStatus: "reconciling",
+      });
+      const remote =
+        await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
+          `/api/v1/mobile/video/jobs/${encodeURIComponent(shot.taskId)}`,
+          {
+            method: "GET",
+            headers: { "X-Request-ID": requestID },
+            signal: controller.signal,
+          },
+        );
+      const state = String(remote.status || "").toLowerCase();
+      if (["failed", "cancelled"].includes(state)) {
+        await patchVideoProjectShot(projectId, shot.id, {
+          taskStatus: state as "failed" | "cancelled",
+          error: remote.error?.message || copy.failed,
+        });
+        return false;
+      }
+      await waitForVideoTask(remote, requestID, controller);
+      await patchVideoProjectShot(projectId, shot.id, {
+        taskStatus: "completed",
+        resultTaskId: shot.taskId,
+        error: "",
+      });
+      return true;
+    } catch (reconcileError) {
+      // Preserve the existing server task reference and require an explicit
+      // retry if it remains unavailable. Never create a second billable job.
+      await patchVideoProjectShot(projectId, shot.id, {
+        taskStatus: "reconciling",
+        error: localizedMobileErrorMessage(reconcileError, copy.failed),
+      }).catch(() => undefined);
+      return false;
+    }
+  }
+
+  async function runVideoProjectShots() {
+    if (!selectedVideoProject || !activeAccountId) return;
+    await saveVideoProject();
+    let project = (await listLocalVideoProjects(activeAccountId)).find(
+      (item) => item.id === selectedVideoProject.id,
+    );
+    if (!project) return;
+    for (const initialShot of project.shots
+      .slice()
+      .sort((a, b) => a.order - b.order)) {
+      project = (await listLocalVideoProjects(activeAccountId)).find(
+        (item) => item.id === selectedVideoProject.id,
+      );
+      const shot = project?.shots.find((item) => item.id === initialShot.id);
+      if (
+        !project ||
+        !shot ||
+        ["completed", "failed", "cancelled", "blocked"].includes(
+          shot.taskStatus,
+        )
+      ) {
+        continue;
+      }
+      if (
+        shot.taskId &&
+        ["submitting", "running", "reconciling"].includes(shot.taskStatus)
+      ) {
+        await reconcileVideoProjectShot(project.id, shot);
+        continue;
+      }
+      const clientRequestId =
+        shot.clientRequestId || clientRequestID("video-project-shot");
+      await patchVideoProjectShot(project.id, shot.id, {
+        taskStatus: "submitting",
+        clientRequestId,
+        error: "",
+      });
+      const taskId = await runVideo({
+        prompt: shot.prompt,
+        groupId: shot.groupId,
+        model: shot.model,
+        resolution: shot.resolution,
+        ratio: shot.ratio,
+        duration: shot.duration,
+        watermark: shot.watermark,
+        referenceAssetIds: shot.referenceMaterialIds,
+        clientRequestId,
+        onTaskCreated: (serverTaskId) =>
+          patchVideoProjectShot(project!.id, shot.id, {
+            taskId: serverTaskId,
+            taskStatus: "running",
+          }).then(() => undefined),
+      });
+      await patchVideoProjectShot(
+        project.id,
+        shot.id,
+        taskId
+          ? { taskId, resultTaskId: taskId, taskStatus: "completed", error: "" }
+          : { taskStatus: "failed", error: error || copy.failed },
+      );
+    }
+  }
+
+  async function exportSelectedVideoProject() {
+    if (!selectedVideoProject) return;
+    try {
+      const materialIndex = await listLocalMaterials(activeAccountId);
+      const files: Array<{ path: string; blob: Blob }> = [];
+      const project = {
+        ...selectedVideoProject,
+        shots: await Promise.all(
+          selectedVideoProject.shots.map(async (shot, shotIndex) => {
+            const referencePackagePaths: string[] = [];
+            for (const referenceId of shot.referenceMaterialIds) {
+              const material = materialIndex.find(
+                (item) =>
+                  item.remoteId === referenceId || item.id === referenceId,
+              );
+              if (!material) {
+                throw new Error("A referenced local material is missing.");
+              }
+              const blob = await readLocalMaterialBlob(
+                activeAccountId,
+                material.id,
+              );
+              if (!blob) {
+                throw new Error("A referenced local material is unavailable.");
+              }
+              const path = localVideoProjectPackagePath(
+                "references",
+                files.length,
+                material.fileName,
+              );
+              files.push({ path, blob });
+              referencePackagePaths.push(path);
+            }
+            const resultId = shot.resultTaskId || shot.taskId;
+            let resultPackagePath: string | undefined;
+            if (resultId && shot.taskStatus === "completed") {
+              const result = await readLocalVideoBlob(
+                activeAccountId,
+                `video-${resultId}`,
+              );
+              if (!result) {
+                throw new Error("A completed video result is unavailable.");
+              }
+              resultPackagePath = localVideoProjectPackagePath(
+                "results",
+                shotIndex,
+                `shot-${shotIndex + 1}.mp4`,
+              );
+              files.push({ path: resultPackagePath, blob: result });
+            }
+            return { ...shot, referencePackagePaths, resultPackagePath };
+          }),
+        ),
+      };
+      const archive = await exportLocalVideoProjectPackage({
+        project,
+        files,
+      });
+      await shareFile(
+        archive,
+        `${selectedVideoProject.name || copy.project}.zip`,
+        {
+          title: selectedVideoProject.name,
+          mimeType: "application/zip",
+        },
+      );
+    } catch (projectError) {
+      setError(
+        localizedMobileErrorMessage(projectError, text.errors.shareFailed),
+      );
+    }
+  }
+
+  async function importVideoProject(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || !activeAccountId) return;
+    try {
+      const restored = await importLocalVideoProjectPackage(file);
+      const referenceIdByPath = new Map<string, string>();
+      for (const [path, blob] of restored.files) {
+        if (!path.startsWith("references/")) continue;
+        if (!managed.accessToken) throw new Error(text.errors.loginRequired);
+        const form = new FormData();
+        const name = path.split("-").slice(1).join("-") || "reference.bin";
+        form.append("file", blob, name);
+        form.append(
+          "kind",
+          localMaterialKind({ name, type: blob.type } as File),
+        );
+        form.append("source", "video_project_import");
+        const uploaded = await managedFormDataRequest<{ id?: string }>(
+          "/api/v1/mobile/assets",
+          form,
+          text,
+          { idempotencyKey: clientRequestID("video-project-import-asset") },
+        );
+        const remoteId = String(uploaded?.id || "").trim();
+        if (!remoteId) throw new Error(copy.failed);
+        referenceIdByPath.set(path, remoteId);
+      }
+      const project = await createLocalVideoProject(activeAccountId, {
+        ...restored.project,
+        shots: restored.project.shots.map((shot) => ({
+          ...shot,
+          referenceMaterialIds: (shot.referencePackagePaths || [])
+            .map((path) => referenceIdByPath.get(path) || "")
+            .filter(Boolean),
+          // A task ID belongs to the original account. The imported project
+          // may retain its result bytes locally but must never query or retry
+          // another account's durable task.
+          taskId: undefined,
+          clientRequestId: undefined,
+          resultTaskId: undefined,
+          taskStatus: shot.resultPackagePath ? "completed" : "queued",
+        })),
+      });
+      for (const shot of restored.project.shots) {
+        if (!shot.resultPackagePath) continue;
+        const result = restored.files.get(shot.resultPackagePath);
+        const targetShot = project.shots.find((item) => item.id === shot.id);
+        if (result && targetShot) {
+          const importedTaskId = `imported-${project.id}-${targetShot.id}`;
+          await saveLocalVideo(activeAccountId, importedTaskId, result, {
+            prompt: targetShot.prompt,
+          });
+          await updateLocalVideoProject(activeAccountId, project.id, {
+            shots: (await listLocalVideoProjects(activeAccountId))
+              .find((item) => item.id === project.id)!
+              .shots.map((item) =>
+                item.id === targetShot.id
+                  ? {
+                      ...item,
+                      resultTaskId: importedTaskId,
+                      taskStatus: "completed",
+                    }
+                  : item,
+              ),
+          });
+        }
+      }
+      const hydrated =
+        (await listLocalVideoProjects(activeAccountId)).find(
+          (item) => item.id === project.id,
+        ) || project;
+      setVideoProjects((projects) => [hydrated, ...projects]);
+      setSelectedVideoProjectId(hydrated.id);
+      setVideoProjectName(hydrated.name);
+      setVideoProjectBrief(hydrated.brief);
+      setVideoProjectScript(hydrated.script);
+      setVideoProjectCharacters(
+        hydrated.characters
+          .map((fact) =>
+            [fact.name, fact.description].filter(Boolean).join(": "),
+          )
+          .join("\n"),
+      );
+      setVideoProjectScenes(
+        hydrated.scenes
+          .map((fact) =>
+            [fact.name, fact.description].filter(Boolean).join(": "),
+          )
+          .join("\n"),
+      );
+      setVideoProjectProps(
+        hydrated.props
+          .map((fact) =>
+            [fact.name, fact.description].filter(Boolean).join(": "),
+          )
+          .join("\n"),
+      );
+      setVideoProjectStoryFacts(hydrated.storyFacts.join("\n"));
+      setVideoProjectOpen(true);
+      setError("");
+    } catch (projectError) {
+      setError(
+        localizedMobileErrorMessage(projectError, text.errors.saveFailed),
+      );
+    }
   }
 
   function toggleReferenceMaterial(material: LocalMaterial) {
@@ -15604,7 +16815,7 @@ function AndroidVideoStudio() {
     initialTask: MobileVideoServerTask,
     requestID: string,
     controller: AbortController,
-  ) {
+  ): Promise<string> {
     const id = String(initialTask?.id || "");
     if (!id) throw new Error(copy.noResult);
     setTaskID(id);
@@ -15672,6 +16883,7 @@ function AndroidVideoStudio() {
     setHistory((items) =>
       [entry, ...items.filter((item) => item.taskId !== id)].slice(0, 24),
     );
+    return id;
   }
 
   function handleVideoRunError(controller: AbortController, runError: unknown) {
@@ -15684,8 +16896,35 @@ function AndroidVideoStudio() {
     setError(runError instanceof Error ? runError.message : copy.failed);
   }
 
-  async function runVideo() {
-    const submission = resolveVideoStudioSelection(groups, preferences);
+  type VideoTaskSnapshot = {
+    prompt: string;
+    groupId?: number;
+    model?: string;
+    resolution?: string;
+    ratio?: string;
+    duration?: number;
+    watermark?: boolean;
+    referenceAssetIds?: string[];
+    clientRequestId?: string;
+    onTaskCreated?: (taskId: string) => void | Promise<void>;
+  };
+
+  async function runVideo(
+    snapshot?: VideoTaskSnapshot,
+  ): Promise<string | null> {
+    const submission = resolveVideoStudioSelection(groups, {
+      ...preferences,
+      ...(snapshot?.groupId ? { groupId: snapshot.groupId } : {}),
+      ...(snapshot?.model ? { model: snapshot.model } : {}),
+      ...(snapshot?.resolution ? { resolution: snapshot.resolution } : {}),
+      ...(snapshot?.ratio ? { ratio: snapshot.ratio } : {}),
+      ...(Number.isFinite(Number(snapshot?.duration))
+        ? { duration: Number(snapshot?.duration) }
+        : {}),
+      ...(typeof snapshot?.watermark === "boolean"
+        ? { watermark: snapshot.watermark }
+        : {}),
+    });
     const submissionGroup = submission.group;
     const submissionModel = submission.model;
     const submissionPreferences = submission.preferences;
@@ -15702,11 +16941,15 @@ function AndroidVideoStudio() {
           ? copy.noModel
           : copy.noGroup,
       );
-      return;
+      return null;
     }
-    if (!prompt.trim()) {
+    const submissionPrompt = String(snapshot?.prompt ?? prompt).trim();
+    const submissionReferenceAssetIDs = snapshot?.referenceAssetIds
+      ? [...snapshot.referenceAssetIds]
+      : [...referenceAssetIDs];
+    if (!submissionPrompt) {
       setError(copy.placeholder);
-      return;
+      return null;
     }
     if (!managed.accessToken || videoGroupSource === "unavailable") {
       setError(
@@ -15714,7 +16957,7 @@ function AndroidVideoStudio() {
           ? copy.loadingCapabilities
           : copy.capabilitiesUnavailable,
       );
-      return;
+      return null;
     }
 
     try {
@@ -15750,12 +16993,13 @@ function AndroidVideoStudio() {
       setError(
         localizedMobileErrorMessage(sessionError, copy.capabilitiesUnavailable),
       );
-      return;
+      return null;
     }
 
     const controller = new AbortController();
     abortRef.current = controller;
-    const requestID = clientRequestID("mobile-video");
+    const requestID =
+      snapshot?.clientRequestId || clientRequestID("mobile-video");
     setStatus("running");
     setProgress(8);
     setTaskID("");
@@ -15774,11 +17018,11 @@ function AndroidVideoStudio() {
           group_id: Number(submissionGroup.id),
           model: modelValue(submissionModel),
           purpose: "video",
-          prompt: prompt.trim(),
+          prompt: submissionPrompt,
           resolution: submissionPreferences.resolution,
           ratio: submissionPreferences.ratio,
           duration_seconds: Number(submissionPreferences.duration),
-          reference_asset_ids: referenceAssetIDs,
+          reference_asset_ids: submissionReferenceAssetIDs,
           generate_audio: Boolean(
             submissionCapabilities?.generate_audio &&
               submissionPreferences.generateAudio,
@@ -15791,13 +17035,14 @@ function AndroidVideoStudio() {
         }),
         signal: controller.signal,
       });
-      await waitForVideoTask(
-        createData?.task || (createData as unknown as MobileVideoServerTask),
-        requestID,
-        controller,
-      );
+      const createdTask =
+        createData?.task || (createData as unknown as MobileVideoServerTask);
+      const createdTaskId = String(createdTask?.id || "").trim();
+      if (createdTaskId) await snapshot?.onTaskCreated?.(createdTaskId);
+      return await waitForVideoTask(createdTask, requestID, controller);
     } catch (runError) {
       handleVideoRunError(controller, runError);
+      return null;
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
@@ -16052,6 +17297,225 @@ function AndroidVideoStudio() {
                 </div>
               </div>
             )}
+          <section className={styles["video-project-panel"]}>
+            <div className={styles["section-head"]}>
+              <div>
+                <h2>{copy.project}</h2>
+                <span>
+                  {selectedVideoProject?.shots.length || 0} {copy.shots}
+                </span>
+              </div>
+              <div className={styles["library-action-row"]}>
+                <button type="button" onClick={() => void createVideoProject()}>
+                  <AddIcon />
+                  {copy.newProject}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => projectPackageInputRef.current?.click()}
+                >
+                  {copy.importProject}
+                </button>
+                <input
+                  ref={projectPackageInputRef}
+                  hidden
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={(event) => void importVideoProject(event)}
+                />
+              </div>
+            </div>
+            {videoProjects.length > 0 && (
+              <label>
+                <span>{copy.project}</span>
+                <select
+                  value={selectedVideoProjectId}
+                  onChange={(event) => {
+                    const project = videoProjects.find(
+                      (item) => item.id === event.currentTarget.value,
+                    );
+                    setSelectedVideoProjectId(event.currentTarget.value);
+                    setVideoProjectName(project?.name || "");
+                    setVideoProjectBrief(project?.brief || "");
+                    setVideoProjectScript(project?.script || "");
+                    setVideoProjectCharacters(
+                      project?.characters
+                        .map((fact) =>
+                          [fact.name, fact.description]
+                            .filter(Boolean)
+                            .join(": "),
+                        )
+                        .join("\n") || "",
+                    );
+                    setVideoProjectScenes(
+                      project?.scenes
+                        .map((fact) =>
+                          [fact.name, fact.description]
+                            .filter(Boolean)
+                            .join(": "),
+                        )
+                        .join("\n") || "",
+                    );
+                    setVideoProjectProps(
+                      project?.props
+                        .map((fact) =>
+                          [fact.name, fact.description]
+                            .filter(Boolean)
+                            .join(": "),
+                        )
+                        .join("\n") || "",
+                    );
+                    setVideoProjectStoryFacts(
+                      project?.storyFacts.join("\n") || "",
+                    );
+                  }}
+                >
+                  {videoProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {videoProjectOpen && (
+              <>
+                <label>
+                  <span>{copy.projectName}</span>
+                  <input
+                    value={videoProjectName}
+                    onChange={(event) =>
+                      setVideoProjectName(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{copy.projectBrief}</span>
+                  <textarea
+                    value={videoProjectBrief}
+                    onChange={(event) =>
+                      setVideoProjectBrief(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{copy.projectScript}</span>
+                  <textarea
+                    value={videoProjectScript}
+                    onChange={(event) =>
+                      setVideoProjectScript(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{copy.characters}</span>
+                  <textarea
+                    value={videoProjectCharacters}
+                    onChange={(event) =>
+                      setVideoProjectCharacters(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{copy.scenes}</span>
+                  <textarea
+                    value={videoProjectScenes}
+                    onChange={(event) =>
+                      setVideoProjectScenes(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{copy.props}</span>
+                  <textarea
+                    value={videoProjectProps}
+                    onChange={(event) =>
+                      setVideoProjectProps(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <label>
+                  <span>{copy.storyFacts}</span>
+                  <textarea
+                    value={videoProjectStoryFacts}
+                    onChange={(event) =>
+                      setVideoProjectStoryFacts(event.currentTarget.value)
+                    }
+                  />
+                </label>
+                <div className={styles["library-action-row"]}>
+                  <button
+                    type="button"
+                    onClick={() => void saveVideoProject()}
+                    disabled={videoProjectSaving}
+                  >
+                    {copy.saveProject}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void addCurrentShotToVideoProject()}
+                    disabled={!prompt.trim() || noCapability}
+                  >
+                    <AddIcon />
+                    {copy.addShot}
+                  </button>
+                  {selectedVideoProject && (
+                    <button
+                      type="button"
+                      onClick={() => void exportSelectedVideoProject()}
+                    >
+                      {copy.exportProject}
+                    </button>
+                  )}
+                  {selectedVideoProject && (
+                    <button
+                      type="button"
+                      onClick={() => void removeVideoProject()}
+                    >
+                      <DeleteIcon />
+                    </button>
+                  )}
+                </div>
+                {selectedVideoProject && (
+                  <div className={styles["video-project-shot-list"]}>
+                    {selectedVideoProject.shots.length ? (
+                      selectedVideoProject.shots.map((shot, index) => (
+                        <div key={shot.id}>
+                          <strong>
+                            {index + 1}. {shot.title}
+                          </strong>
+                          <small>{shot.prompt}</small>
+                          <span>{copy.taskStatus[shot.taskStatus]}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <small>{copy.noShots}</small>
+                    )}
+                  </div>
+                )}
+                {selectedVideoProject?.shots.some((shot) =>
+                  ["queued", "submitting", "running", "reconciling"].includes(
+                    shot.taskStatus,
+                  ),
+                ) && (
+                  <button
+                    type="button"
+                    className={styles["primary-action"]}
+                    disabled={status === "running" || noCapability}
+                    onClick={() => void runVideoProjectShots()}
+                  >
+                    <PlayIcon />
+                    {copy.generateShots}
+                  </button>
+                )}
+              </>
+            )}
+            {!videoProjectOpen && videoProjects.length === 0 && (
+              <button type="button" onClick={() => setVideoProjectOpen(true)}>
+                {copy.newProject}
+              </button>
+            )}
+          </section>
           <div className={styles["form-grid"]}>
             <label>
               <span>{copy.group}</span>
@@ -16517,26 +17981,39 @@ function AndroidImageStudio() {
     (item: any) => item.status === "success" && imageResults(item).length > 0,
   );
   const activeTask = sdStore.draw.find(
-    (item: any) => item.status === "running" || item.status === "submitting",
+    (item: any) =>
+      String(item?.account_id || "") === activeAccountId &&
+      (item.status === "running" || item.status === "submitting"),
   );
   const queuedTasks = useMemo(
     () =>
       sdStore.draw.filter(
         (item: any) =>
           item?.queue_schema === 1 &&
-          ["queued", "submitting", "running", "reconciling"].includes(
-            String(item.status || ""),
-          ),
+          String(item?.account_id || "") === activeAccountId &&
+          [
+            "queued",
+            "submitting",
+            "running",
+            "reconciling",
+            "blocked",
+          ].includes(String(item.status || "")),
       ),
-    [sdStore.draw],
+    [activeAccountId, sdStore.draw],
   );
   const queuedTaskCount = queuedTasks.filter(
     (item: any) => item.status === "queued",
   ).length;
+  const blockedTasks = queuedTasks.filter(
+    (item: any) => item.status === "blocked",
+  );
   const failedImageTaskIds = useMemo(
     () =>
       sdStore.draw
         .filter((item: any) => {
+          if (String(item?.account_id || "") !== activeAccountId) {
+            return false;
+          }
           if (item.status === "running" || item.status === "queued") {
             return false;
           }
@@ -16549,7 +18026,7 @@ function AndroidImageStudio() {
           );
         })
         .map((item: any) => String(item.id)),
-    [sdStore.draw],
+    [activeAccountId, sdStore.draw],
   );
 
   useEffect(() => {
@@ -16921,7 +18398,8 @@ function AndroidImageStudio() {
 
     const id = queuedTaskID || `image-${Date.now()}`;
     if (queuedImageRunsRef.current.has(id)) return;
-    const createdAt = new Date().toLocaleString(text.dateLocale);
+    const createdAtMs = Date.now();
+    const createdAt = new Date(createdAtMs).toLocaleString(text.dateLocale);
     const draft = {
       id,
       status: "queued",
@@ -16945,6 +18423,7 @@ function AndroidImageStudio() {
         status: "queued",
       })),
       created_at: createdAt,
+      created_at_ms: createdAtMs,
     };
 
     if (queuedTaskID) {
@@ -16960,6 +18439,10 @@ function AndroidImageStudio() {
         state.draw = [draft, ...state.draw];
         state.currentId += 1;
       });
+      // Persist first, then let the account FIFO effect choose the oldest
+      // runnable task. Direct clicks must not bypass older work already saved
+      // by another creation surface.
+      return;
     }
 
     queuedImageRunsRef.current.add(id);
@@ -17426,11 +18909,49 @@ function AndroidImageStudio() {
                 },
               )
             : text.image.generateFailed;
+          const statusFromMessage = Number(
+            String(message).match(/HTTP\s+(\d{3})/i)?.[1] || 0,
+          );
+          const failure = classifyCreationQueueFailure({
+            status:
+              err instanceof ManagedApiError ? err.status : statusFromMessage,
+            code: err instanceof ManagedApiError ? String(err.code || "") : "",
+            message,
+          });
           updateTask(id, {
-            status: aborted ? "cancelled" : "error",
+            status: aborted
+              ? "cancelled"
+              : failure.status === "blocked"
+              ? "blocked"
+              : "error",
             progress: aborted ? 0 : 100,
             error: message,
+            blocked_reason: aborted ? undefined : failure.blockedReason,
           });
+          if (!aborted && failure.status === "blocked") {
+            // Authentication, balance and permission errors cannot be solved
+            // by retrying silently. Keep this request and every later request
+            // for the same account intact until the user resolves the cause
+            // and explicitly resumes the queue.
+            sdStore.update((state) => {
+              const currentCreatedAt = Number(
+                currentTask?.created_at_ms || createdAtMs,
+              );
+              state.draw.forEach((item: any) => {
+                if (
+                  item?.queue_schema === 1 &&
+                  String(item?.account_id || "") === activeAccountId &&
+                  item.status === "queued" &&
+                  Number(item?.created_at_ms || 0) >= currentCreatedAt
+                ) {
+                  item.status = "blocked";
+                  item.blocked_reason = failure.blockedReason;
+                  item.updated_at = Date.now();
+                }
+              });
+              state.currentId += 1;
+            });
+          }
           void projectedTaskPromise.then(async (task) => {
             if (!task) return;
             const client = await mobilePlatformClient().catch(() => null);
@@ -17500,18 +19021,28 @@ function AndroidImageStudio() {
       });
     }
     if (!managed.imageSession || !managed.accessToken) return;
-    sdStore.draw
-      .filter(
-        (item: any) =>
-          item?.queue_schema === 1 &&
-          String(item?.account_id || "") === activeAccountId &&
-          item.status === "queued",
-      )
-      .forEach((item: any) => {
-        void runImageTask({ queueTaskId: String(item.id) });
-      });
-    // `currentId` is the persisted queue wake-up signal. The worker itself
-    // owns de-duplication so recovery cannot start two requests for one item.
+    const hasActiveTask = sdStore.draw.some(
+      (item: any) =>
+        item?.queue_schema === 1 &&
+        String(item?.account_id || "") === activeAccountId &&
+        ["submitting", "running"].includes(String(item.status || "")),
+    );
+    if (hasActiveTask) return;
+    const next = nextRunnableCreationQueueTask(
+      sdStore.draw
+        .filter((item: any) => item?.queue_schema === 1)
+        .map((item: any) => ({
+          ...item,
+          accountId: String(item?.account_id || ""),
+          createdAt: Number(item?.created_at_ms || 0),
+        })),
+      activeAccountId,
+    );
+    if (next && !queuedImageRunsRef.current.has(String(next.id))) {
+      void runImageTask({ queueTaskId: String(next.id) });
+    }
+    // `currentId` is the persisted FIFO wake-up signal. One task is selected
+    // per account, so recovery cannot race into a second billable request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     activeAccountId,
@@ -17550,6 +19081,26 @@ function AndroidImageStudio() {
       n: item?.params?.n,
       referenceImages: item?.params?.referenceImages || [],
     });
+  }
+
+  function resumeBlockedImageQueue() {
+    if (!activeAccountId || !blockedTasks.length) return;
+    sdStore.update((state) => {
+      state.draw = resumeBlockedCreationQueueTasks(
+        state.draw.map((item: any) => ({
+          ...item,
+          accountId: String(item?.account_id || ""),
+          blockedReason: item?.blocked_reason,
+        })),
+        activeAccountId,
+      ).map((item: any) => ({
+        ...item,
+        account_id: item.accountId,
+        blocked_reason: item.blockedReason,
+      }));
+      state.currentId += 1;
+    });
+    setError("");
   }
 
   function reuseImageTaskPrompt(item: any) {
@@ -18013,6 +19564,17 @@ function AndroidImageStudio() {
             </div>
           </div>
         )}
+        {blockedTasks.length > 0 && (
+          <div className={styles["task-progress"]} role="status">
+            <div>
+              <span>{text.image.progress}</span>
+              <strong>{text.image.statusBlocked}</strong>
+            </div>
+            <button type="button" onClick={resumeBlockedImageQueue}>
+              {text.platform.contentKit.resumeQueue}
+            </button>
+          </div>
+        )}
 
         {error && <div className={styles["form-error"]}>{error}</div>}
         <button
@@ -18086,6 +19648,11 @@ function AndroidImageStudio() {
                     item.status === "partial") && (
                     <button type="button" onClick={() => retryTask(item)}>
                       {text.image.retryTask}
+                    </button>
+                  )}
+                  {item.status === "blocked" && (
+                    <button type="button" onClick={resumeBlockedImageQueue}>
+                      {text.platform.contentKit.resumeQueue}
                     </button>
                   )}
                   {item.status === "queued" && (
@@ -18346,6 +19913,7 @@ function AndroidGallery() {
     useState(false);
   const [localMaterials, setLocalMaterials] = useState<LocalMaterial[]>([]);
   const [localMaterialsLoading, setLocalMaterialsLoading] = useState(false);
+  const [materialSyncWarning, setMaterialSyncWarning] = useState(false);
   const localMaterialFileRef = useRef<HTMLInputElement | null>(null);
   const [preferences, setPreferences] = useState<GalleryPreferences>(() =>
     readGalleryPreferences(),
@@ -18427,9 +19995,16 @@ function AndroidGallery() {
   async function refreshLocalMaterials() {
     if (!activeAccountId) {
       setLocalMaterials([]);
+      setMaterialSyncWarning(false);
       return;
     }
     setLocalMaterialsLoading(true);
+    // IndexedDB is the first source of truth for this device. Network sync is
+    // a best-effort refresh that must never turn usable local assets into a
+    // full-screen "read failed" state.
+    const local = await listLocalMaterials(activeAccountId).catch(() => []);
+    setLocalMaterials(local);
+    setMaterialSyncWarning(false);
     try {
       if (managed.accessToken && managed.backendBaseUrl) {
         const synced = await syncLocalMaterials(
@@ -18438,12 +20013,14 @@ function AndroidGallery() {
           managed.accessToken,
         );
         setLocalMaterials(synced.materials);
+        setMaterialSyncWarning(synced.failedIds.length > 0);
       } else {
-        setLocalMaterials(await listLocalMaterials(activeAccountId));
+        setLocalMaterials(local);
       }
       setError("");
     } catch {
-      setError(text.platform.materialRefreshFailed);
+      setMaterialSyncWarning(true);
+      if (!local.length) setError(text.platform.materialRefreshFailed);
     } finally {
       setLocalMaterialsLoading(false);
     }
@@ -18527,6 +20104,38 @@ function AndroidGallery() {
       showNotice(text.platform.assetDeleted);
     } catch {
       setError(text.platform.materialRefreshFailed);
+    }
+  }
+
+  async function retryMaterialSync(material: LocalMaterial) {
+    if (
+      !material.syncError ||
+      !managed.accessToken ||
+      !managed.backendBaseUrl
+    ) {
+      return;
+    }
+    setLocalMaterialsLoading(true);
+    try {
+      const repaired = await retryLocalMaterial(
+        activeAccountId,
+        material.id,
+        managed.backendBaseUrl,
+        managed.accessToken,
+      );
+      setLocalMaterials((items) =>
+        items.map((item) => (item.id === repaired.id ? repaired : item)),
+      );
+      setMaterialSyncWarning(
+        localMaterials.some(
+          (item) => item.id !== repaired.id && Boolean(item.syncError),
+        ),
+      );
+    } catch {
+      setMaterialSyncWarning(true);
+      setError(text.platform.materialRefreshFailed);
+    } finally {
+      setLocalMaterialsLoading(false);
     }
   }
 
@@ -18911,6 +20520,17 @@ function AndroidGallery() {
             onChange={importMaterials}
           />
         </div>
+        {materialSyncWarning && (
+          <div className={styles["image-routing-hint"]} role="status">
+            <div>
+              <strong>{text.platform.materialSyncAvailable}</strong>
+              <span>{text.platform.materialRefreshFailed}</span>
+            </div>
+            <button type="button" onClick={() => void refreshLocalMaterials()}>
+              {text.common.retry}
+            </button>
+          </div>
+        )}
         {!localMaterialsLoading && localMaterials.length === 0 && (
           <p className={styles["empty-copy"]}>{text.platform.materialEmpty}</p>
         )}
@@ -18924,6 +20544,17 @@ function AndroidGallery() {
                 <span>
                   <strong>{material.name}</strong>
                   <small>{formatDateTime(material.createdAt, text)}</small>
+                  {material.syncError && (
+                    <>
+                      <small>{text.platform.materialSyncItemFailed}</small>
+                      <button
+                        type="button"
+                        onClick={() => void retryMaterialSync(material)}
+                      >
+                        {text.common.retry}
+                      </button>
+                    </>
+                  )}
                 </span>
                 <div>
                   <button

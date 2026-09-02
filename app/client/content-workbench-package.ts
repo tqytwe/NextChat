@@ -1,7 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import type { ManagedMobileContentKit } from "../store/mobile";
 
-export const CONTENT_WORKBENCH_PACKAGE_VERSION = 1;
+export const CONTENT_WORKBENCH_PACKAGE_VERSION = 2;
 export const CONTENT_WORKBENCH_PACKAGE_MAX_BYTES = 128 * 1024 * 1024;
 export const CONTENT_WORKBENCH_PACKAGE_MAX_FILE_BYTES = 32 * 1024 * 1024;
 
@@ -12,11 +12,15 @@ export type ContentWorkbenchPackageManifest = {
   exported_at: string;
   project: ManagedMobileContentKit;
   files: PackageFile[];
+  /** v2 records exactly which completed local outputs must be present. */
+  output_paths?: string[];
 };
 
 export type ContentWorkbenchPackage = {
   project: ManagedMobileContentKit;
   files: Map<string, Blob>;
+  /** Stable completed-output order from the manifest, never ZIP enumeration. */
+  outputPaths: string[];
 };
 
 function safePath(value: string) {
@@ -59,6 +63,7 @@ function packageFileName(path: string) {
 export async function exportContentWorkbenchPackage(input: {
   project: ManagedMobileContentKit;
   files?: Array<{ path: string; blob: Blob }>;
+  outputPaths?: string[];
 }): Promise<Blob> {
   const entries: Record<string, Uint8Array> = {};
   const files: PackageFile[] = [];
@@ -72,11 +77,17 @@ export async function exportContentWorkbenchPackage(input: {
     entries[path] = bytes;
     files.push({ path, size: bytes.byteLength, sha256: await sha256(bytes) });
   }
+  const outputPaths = (input.outputPaths || []).map(safePath);
+  const exportedPaths = new Set(files.map((file) => file.path));
+  if (outputPaths.some((path) => !exportedPaths.has(path))) {
+    throw new Error("Project package is missing a completed output");
+  }
   const manifest: ContentWorkbenchPackageManifest = {
     manifest_version: CONTENT_WORKBENCH_PACKAGE_VERSION,
     exported_at: new Date().toISOString(),
     project: input.project,
     files,
+    output_paths: outputPaths,
   };
   entries["manifest.json"] = strToU8(JSON.stringify(manifest));
   const archive = zipSync(entries, { level: 6 });
@@ -117,7 +128,9 @@ export async function importContentWorkbenchPackage(
     throw new Error("Project package manifest is invalid");
   }
   if (
-    manifest.manifest_version !== CONTENT_WORKBENCH_PACKAGE_VERSION ||
+    ![1, CONTENT_WORKBENCH_PACKAGE_VERSION].includes(
+      manifest.manifest_version,
+    ) ||
     !manifest.project ||
     !Array.isArray(manifest.files)
   ) {
@@ -143,7 +156,17 @@ export async function importContentWorkbenchPackage(
   if (paths.some((path) => path !== "manifest.json" && !expected.has(path))) {
     throw new Error("Project package contains unexpected files");
   }
-  return { project: manifest.project, files };
+  if (
+    manifest.manifest_version >= 2 &&
+    (manifest.output_paths || []).some((path) => !expected.has(safePath(path)))
+  ) {
+    throw new Error("Project package is missing a completed output");
+  }
+  return {
+    project: manifest.project,
+    files,
+    outputPaths: (manifest.output_paths || []).map(safePath),
+  };
 }
 
 export function contentWorkbenchPackageFileName(

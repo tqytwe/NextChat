@@ -36,7 +36,9 @@ export type ContentWorkbenchShotLabel =
  * unreviewable batch. Users can still compose up to 48 outputs across their
  * own shot groups in a project.
  */
-export const CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT = 6;
+// A shot can be explicitly planned up to 16 times. The project-wide cap still
+// protects the device from an accidental unreviewable batch.
+export const CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT = 16;
 export const CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT = 48;
 
 export interface ContentWorkbenchShotPlan {
@@ -50,6 +52,8 @@ export interface ContentWorkbenchShotPlan {
   size: string;
   count: number;
   promptTemplate: string;
+  /** Most recent prompt versions, newest first; kept with the local project. */
+  promptHistory?: string[];
   copyFields: ContentWorkbenchCopyField[];
 }
 
@@ -304,6 +308,7 @@ const DEFAULT_SHOT_BY_KIND: Record<string, ContentWorkbenchShotPlan> = {
 function cloneShot(shot: ContentWorkbenchShotPlan): ContentWorkbenchShotPlan {
   return {
     ...shot,
+    promptHistory: [...(shot.promptHistory || [])],
     copyFields: [...shot.copyFields],
   };
 }
@@ -427,6 +432,12 @@ export function normalizeContentWorkbenchShot(
     size: shot.size || fallback.size,
     count,
     promptTemplate: shot.promptTemplate || fallback.promptTemplate,
+    promptHistory: Array.isArray(shot.promptHistory)
+      ? shot.promptHistory
+          .map((entry) => String(entry || "").trim())
+          .filter(Boolean)
+          .slice(0, 8)
+      : [],
     copyFields:
       Array.isArray(shot.copyFields) && shot.copyFields.length
         ? [...shot.copyFields]

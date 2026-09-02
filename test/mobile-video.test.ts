@@ -534,7 +534,7 @@ describe("mobile video capability and response contract", () => {
       }),
     ).toEqual({
       source: "server",
-      groups: [],
+      groups: [expect.objectContaining({ id: 22, name: "Grok Heavy", models: [] })],
       suppressed: [
         {
           groupId: 22,

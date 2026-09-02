@@ -63,4 +63,21 @@ describe("managed group-switch workspace integrity", () => {
       expect(body).not.toContain("get().applyBootstrap(legacyBootstrap)");
     }
   });
+
+  test("keeps non-video workspaces and the complete video workspace during a purpose-scoped switch", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "app/store/managed.ts"),
+      "utf8",
+    );
+    const start = source.indexOf("applyBootstrap(bootstrap: ManagedMobileBootstrap)");
+    const end = source.indexOf("\n      async logout()", start);
+    const body = source.slice(start, end);
+
+    expect(body).toContain("const isPurposeScopedResponse");
+    expect(body).toContain("...previousWorkspaces");
+    expect(body).toContain("[purpose]: { models: workspace.models }");
+    expect(body).toContain("purpose === \"video\"");
+    expect(body).toContain("previous.videoSession");
+    expect(body).toContain("managed_api_keys");
+  });
 });

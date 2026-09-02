@@ -37,14 +37,17 @@ export type ContentKitAssetKind = string;
 export type ContentKitTaskStatus =
   | "idle"
   | "queued"
+  | "submitting"
   | "reconciling"
   | "running"
+  | "blocked"
   | "completed"
   | "failed"
   | "cancelled";
 export type ContentKitRunStatus =
   | "queued"
   | "running"
+  | "blocked"
   | "paused"
   | "completed"
   | "partial"
@@ -79,6 +82,9 @@ export interface ManagedMobileContentKitAsset {
   billingRecordId?: string;
   billingStatus?: "pending" | "captured" | "released";
   status: ContentKitTaskStatus;
+  /** Monotonic local queue time, independent of render/update timestamps. */
+  createdAt?: number;
+  blockedReason?: "authentication" | "balance" | "permission";
   imageUrl?: string;
   fileName?: string;
   error?: string;
@@ -192,6 +198,9 @@ function migrateContentKit(kit: any): ManagedMobileContentKit {
       variant: Number(asset.variant || 1),
       requestId: asset.requestId || newId("content-kit-output"),
       billingStatus: asset.billingStatus || "pending",
+      createdAt: Number(
+        asset.createdAt || asset.updatedAt || kit.createdAt || Date.now(),
+      ),
       // A request left in flight cannot be safely resent after process death:
       // retain it for manual result reconciliation instead of duplicating a
       // potentially billable image request.
@@ -205,7 +214,10 @@ function migrateContentKit(kit: any): ManagedMobileContentKit {
     Array.isArray(kit.runs) && kit.runs.length
       ? kit.runs.map((run: any) => ({
           ...run,
-          status: run.status === "running" ? "queued" : run.status || "queued",
+          status:
+            run.status === "running" || run.status === "submitting"
+              ? "queued"
+              : run.status || "queued",
           total: Number(
             run.total ||
               assets.filter((asset: any) => asset.runId === run.id).length,

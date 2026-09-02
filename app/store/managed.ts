@@ -542,17 +542,60 @@ export const useManagedNextChatStore = createPersistStore<
           workspaces,
           ...workspace
         } = bootstrap;
-        const chatSession = sessions?.chat || session;
+        const previous = get();
+        const purpose = session?.purpose;
+        const isPurposeScopedResponse =
+          !sessions &&
+          (purpose === "chat" || purpose === "image" || purpose === "video");
+        // A group-switch response contains one fresh purpose-bound session and
+        // one purpose's model workspace. It is not a full login bootstrap.
+        // Replacing the complete state here used to erase `workspaces.video`,
+        // drop the video API key, and make a subsequent model change crash.
+        const previousWorkspaces = previous.workspace?.workspaces;
+        const scopedWorkspaces = isPurposeScopedResponse
+          ? {
+              ...previousWorkspaces,
+              [purpose]: { models: workspace.models },
+            }
+          : undefined;
+        const nextWorkspaces = workspaces || scopedWorkspaces;
+        const nextManagedAPIKeys =
+          managed_api_keys || isPurposeScopedResponse
+            ? {
+                ...(previous.workspace?.managed_api_keys || {}),
+                ...(managed_api_keys || {}),
+                ...(isPurposeScopedResponse && workspace.managed_api_key
+                  ? { [purpose]: workspace.managed_api_key }
+                  : {}),
+              }
+            : undefined;
+        const chatSession =
+          sessions?.chat ||
+          (purpose === "chat" ? session : previous.session || session);
         // Image/video sessions are separate credentials with separate group
         // authorization. Never silently reuse the chat key for a media call.
-        const imageSession = sessions?.image || null;
-        const videoSession = selectManagedVideoSession(sessions);
-        const chatModels = workspaces?.chat?.models || workspace.models;
+        const imageSession =
+          sessions?.image ||
+          (purpose === "image" ? session : previous.imageSession) ||
+          null;
+        const videoSession =
+          selectManagedVideoSession(sessions) ||
+          (purpose === "video"
+            ? selectManagedVideoSession({ video: session })
+            : previous.videoSession) ||
+          null;
+        const chatModels =
+          nextWorkspaces?.chat?.models ||
+          (purpose === "chat"
+            ? workspace.models
+            : previous.workspace?.models) ||
+          workspace.models;
         const normalizedWorkspace = {
+          ...(previous.workspace || {}),
           ...workspace,
           models: chatModels,
-          managed_api_keys,
-          workspaces,
+          managed_api_keys: nextManagedAPIKeys,
+          workspaces: nextWorkspaces,
         };
         const backendBaseUrl = get().backendBaseUrl;
         const models = flattenManagedModels(chatModels);

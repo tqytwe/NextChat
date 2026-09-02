@@ -134,7 +134,19 @@ export function managedVideoWorkspaceModels(
 export function filterManagedVideoGroups(
   groups?: ManagedWorkspaceGroup[],
 ): ManagedWorkspaceGroup[] {
-  return (groups || []).filter((group) => (group.models || []).length > 0);
+  return (groups || []).filter((group) => {
+    // A purpose-scoped video workspace can legitimately return a group before
+    // its model rows/capability annotations arrive. Keep that group visible so
+    // a later refresh can populate it and the UI can explain the unavailable
+    // state instead of silently dropping the user's group.
+    return (
+      (group.models || []).length > 0 ||
+      group.video_available === true ||
+      (group.modalities || []).includes("video") ||
+      Boolean(group.video_capabilities) ||
+      Boolean(group.video_suppressed?.length)
+    );
+  });
 }
 
 export function managedVideoGroups(

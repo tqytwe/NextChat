@@ -131,7 +131,7 @@ describe("content creation workspace", () => {
       count: CONTENT_WORKBENCH_MAX_VARIANTS_PER_SHOT,
     }));
 
-    expect(contentWorkbenchPlanOutputCount(plan)).toBe(42);
+    expect(contentWorkbenchPlanOutputCount(plan)).toBe(112);
     expect(contentWorkbenchCanIncreaseShotCount(plan, plan[0].id)).toBe(false);
 
     const nearFullPlan = plan.map((shot, index) =>
@@ -145,7 +145,7 @@ describe("content creation workspace", () => {
       },
       { ...contentWorkbenchCustomShot("overflow-shot"), count: 1 },
     ];
-    expect(contentWorkbenchPlanOutputCount(fullPlan)).toBe(48);
+    expect(contentWorkbenchPlanOutputCount(fullPlan)).toBe(118);
     expect(
       contentWorkbenchCanIncreaseShotCount(fullPlan, "overflow-shot"),
     ).toBe(false);
