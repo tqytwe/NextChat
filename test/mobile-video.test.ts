@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import {
   buildMobileVideoScriptPrompt,
+  buildManagedGatewayVideoRequest,
   classifyMobileVideoBootstrapFailure,
   managedVideoCapabilities,
   filterManagedVideoGroups,
@@ -11,6 +12,8 @@ import {
   managedVideoGroups,
   managedVideoModels,
   managedVideoWorkspaceModels,
+  managedGatewayVideoID,
+  managedGatewayVideoTaskID,
   MOBILE_VIDEO_POLL_INTERVAL_MS,
   MOBILE_VIDEO_POLL_TIMEOUT_MS,
   normalizeMobileVideoBootstrapGroups,
@@ -21,6 +24,7 @@ import {
   resolveManagedVideoGroups,
   selectManagedVideoSession,
   selectManagedVideoSessionForGroup,
+  usesManagedMobileVideoTaskApi,
 } from "../app/client/mobile-video";
 import { ManagedApiError } from "../app/client/managed-nextchat";
 
@@ -692,7 +696,7 @@ describe("mobile video capability and response contract", () => {
     ).toEqual({ source: "unavailable", groups: [], suppressed: [] });
   });
 
-  test("keeps every account-visible video group while respecting a server-disabled group", () => {
+  test("keeps workspace availability when a stale bootstrap marks a group unavailable", () => {
     const workspace = {
       workspaces: {
         video: {
@@ -737,7 +741,7 @@ describe("mobile video capability and response contract", () => {
     expect(resolved.groups[0].models?.map((model) => model.id)).toEqual([
       "agnes-video-2.5",
     ]);
-    expect(resolved.groups[0].video_available).toBe(false);
+    expect(resolved.groups[0].video_available).toBeUndefined();
     expect(resolved.groups[1].models?.map((model) => model.id)).toEqual([
       "seedance-1",
     ]);
@@ -846,7 +850,7 @@ describe("mobile video capability and response contract", () => {
       app.indexOf("function AndroidImageStudio("),
     );
 
-    expect(studio).toContain("managed.switchVideoGroup(submissionGroup.id)");
+    expect(studio).toContain("managed.switchVideoGroup(groupID)");
     expect(studio).toContain('purpose: "video"');
     expect(studio).toContain("selectManagedVideoSessionForGroup(");
     expect(studio).toContain(
@@ -922,6 +926,63 @@ describe("mobile video capability and response contract", () => {
     expect(parseMobileVideoStatus(status)).toBe("completed");
     expect(parseMobileVideoURL(status)).toBe(
       "https://cdn.example/video_123.mp4",
+    );
+  });
+
+  test("routes only the declared Grok adapter through the mobile task API", () => {
+    expect(usesManagedMobileVideoTaskApi({ adapter: "grok_video" } as any)).toBe(
+      true,
+    );
+    expect(usesManagedMobileVideoTaskApi({ adapter: "agnes_video" } as any)).toBe(
+      false,
+    );
+    expect(usesManagedMobileVideoTaskApi({} as any)).toBe(false);
+  });
+
+  test("builds the existing gateway video contract without mobile BFF fields", () => {
+    expect(
+      buildManagedGatewayVideoRequest({
+        model: "agnes-video-v2.0",
+        prompt: "A city at sunrise",
+        resolution: "720p",
+        ratio: "16:9",
+        duration: 8,
+      }),
+    ).toEqual({
+      model: "agnes-video-v2.0",
+      prompt: "A city at sunrise",
+      width: 1280,
+      height: 720,
+      num_frames: 193,
+      frame_rate: 24,
+    });
+  });
+
+  test("marks generic gateway task IDs so local lifecycle actions never call the BFF", () => {
+    expect(managedGatewayVideoTaskID("video_123")).toBe("gateway:video_123");
+    expect(managedGatewayVideoID("gateway:video_123")).toBe("video_123");
+    expect(managedGatewayVideoID("mobile-task-123")).toBe("");
+  });
+
+  test("keeps generic video creation and polling on the group-bound gateway session", () => {
+    const app = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.tsx"),
+      "utf8",
+    );
+    const studio = app.slice(
+      app.indexOf("function AndroidVideoStudio()"),
+      app.indexOf("function AndroidImageStudio("),
+    );
+    expect(studio).toContain('"/v1/videos"');
+    expect(studio).toContain("/v1/agnesapi?video_id=");
+    expect(studio).toContain("activeVideoSession.api_key");
+    expect(studio).toContain("managedGatewayVideoTaskID(videoID)");
+    expect(studio).toContain("managedGatewayVideoID(taskID)");
+    expect(studio).toContain("usesManagedMobileVideoTaskApi(submissionModel)");
+    expect(studio).toContain('"/api/v1/mobile/video/jobs"');
+    expect(studio).toContain("const fileID = managedGatewayVideoID(id) || id");
+    expect(studio).toContain(
+      "const fileID = managedGatewayVideoID(taskID) || taskID",
     );
   });
 

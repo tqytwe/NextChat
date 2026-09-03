@@ -24,6 +24,16 @@ type JsonRecord = Record<string, unknown>;
 // the app is closed or the request is cancelled locally.
 export const MOBILE_VIDEO_POLL_INTERVAL_MS = 5_000;
 export const MOBILE_VIDEO_POLL_TIMEOUT_MS = 20 * 60 * 1_000;
+export const MANAGED_GATEWAY_VIDEO_TASK_PREFIX = "gateway:";
+
+export type ManagedGatewayVideoRequest = {
+  model: string;
+  prompt: string;
+  width: number;
+  height: number;
+  num_frames: number;
+  frame_rate: number;
+};
 
 export type MobileVideoServerCapabilities = NonNullable<
   ManagedWorkspaceModel["video_capabilities"]
@@ -397,6 +407,13 @@ export function mergeManagedVideoGroups(input: {
       ...serverGroup,
       id: workspaceGroup.id,
       name: workspaceGroup.name || serverGroup.name,
+      // The purpose-scoped workspace is the account membership and
+      // availability truth. A stale mobile bootstrap may still mark a newly
+      // added group unavailable while the user has a valid video session.
+      video_available: workspaceGroup.video_available,
+      video_unavailable_code:
+        workspaceGroup.video_unavailable_code ||
+        serverGroup.video_unavailable_code,
       models: mergeManagedVideoModels(
         workspaceGroup.models,
         serverGroup.models,
@@ -483,6 +500,116 @@ export function managedVideoCapabilities(
 ) {
   if (model?.video_capabilities) return model.video_capabilities;
   return group?.video_capabilities;
+}
+
+/**
+ * Grok models retain the existing durable mobile-task workflow. Other video
+ * workspace rows use the account's purpose-bound gateway key directly. The
+ * discriminator comes from the server contract, never from a group or model
+ * display name.
+ */
+export function usesManagedMobileVideoTaskApi(
+  model?: Pick<ManagedWorkspaceModel, "adapter"> | null,
+) {
+  return (
+    String(model?.adapter || "")
+      .trim()
+      .toLowerCase() === "grok_video"
+  );
+}
+
+function videoPixels(resolution: string, ratio: string) {
+  const shortEdge = Number.parseInt(String(resolution || "").trim(), 10);
+  const edge = Number.isFinite(shortEdge) && shortEdge > 0 ? shortEdge : 720;
+  const [left, right] = String(ratio || "16:9")
+    .split(":")
+    .map((value) => Number(value));
+  const landscape =
+    Number.isFinite(left) && Number.isFinite(right) && left > 0 && right > 0
+      ? left >= right
+      : true;
+  const longEdge = Math.round(
+    edge *
+      (landscape
+        ? Number.isFinite(left) && Number.isFinite(right) && right > 0
+          ? left / right
+          : 16 / 9
+        : Number.isFinite(left) && Number.isFinite(right) && left > 0
+        ? right / left
+        : 16 / 9),
+  );
+  return landscape
+    ? { width: longEdge, height: edge }
+    : { width: edge, height: longEdge };
+}
+
+/**
+ * The existing OpenAI/Agnes gateway accepts dimensions and frame controls.
+ * Keep this protocol isolated from the Grok/mobile-task payload, whose field
+ * names and lifecycle are deliberately different.
+ */
+export function buildManagedGatewayVideoRequest(input: {
+  model: string;
+  prompt: string;
+  resolution?: string;
+  ratio?: string;
+  duration?: number;
+}): ManagedGatewayVideoRequest {
+  const model = String(input.model || "").trim();
+  const prompt = String(input.prompt || "").trim();
+  if (!model || !prompt) {
+    throw new Error("A model and prompt are required for video generation.");
+  }
+  const { width, height } = videoPixels(
+    String(input.resolution || "720p"),
+    String(input.ratio || "16:9"),
+  );
+  const duration = Math.max(1, Math.round(Number(input.duration) || 8));
+  const frameRate = 24;
+  return {
+    model,
+    prompt,
+    width,
+    height,
+    // Agnes counts both the initial and final frame for an N-second clip.
+    num_frames: duration * frameRate + 1,
+    frame_rate: frameRate,
+  };
+}
+
+export function managedGatewayVideoTaskID(videoID: string) {
+  const id = String(videoID || "").trim();
+  return id ? `${MANAGED_GATEWAY_VIDEO_TASK_PREFIX}${id}` : "";
+}
+
+export function managedGatewayVideoID(taskID: string) {
+  const task = String(taskID || "").trim();
+  return task.startsWith(MANAGED_GATEWAY_VIDEO_TASK_PREFIX)
+    ? task.slice(MANAGED_GATEWAY_VIDEO_TASK_PREFIX.length).trim()
+    : "";
+}
+
+export function isManagedGatewayVideoTerminalStatus(status: string) {
+  return [
+    "completed",
+    "complete",
+    "done",
+    "success",
+    "succeeded",
+    "partial",
+  ].includes(
+    String(status || "")
+      .trim()
+      .toLowerCase(),
+  );
+}
+
+export function isManagedGatewayVideoFailureStatus(status: string) {
+  return ["failed", "error", "cancelled", "canceled", "rejected"].includes(
+    String(status || "")
+      .trim()
+      .toLowerCase(),
+  );
 }
 
 export type MobileVideoScriptChatSession = {

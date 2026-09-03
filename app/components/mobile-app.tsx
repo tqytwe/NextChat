@@ -132,16 +132,25 @@ import {
 } from "../client/mobile-image-async";
 import {
   buildMobileVideoScriptPrompt,
+  buildManagedGatewayVideoRequest,
   classifyMobileVideoBootstrapFailure,
+  isManagedGatewayVideoFailureStatus,
+  isManagedGatewayVideoTerminalStatus,
   managedVideoCapabilities,
+  managedGatewayVideoID,
+  managedGatewayVideoTaskID,
   managedVideoModels,
   MOBILE_VIDEO_POLL_INTERVAL_MS,
   MOBILE_VIDEO_POLL_TIMEOUT_MS,
   normalizeMobileVideoBootstrapGroups,
   resolveMobileVideoScriptSelection,
   resolveManagedVideoGroups,
+  parseMobileVideoID,
+  parseMobileVideoStatus,
+  parseMobileVideoURL,
   selectManagedVideoSession,
   selectManagedVideoSessionForGroup,
+  usesManagedMobileVideoTaskApi,
 } from "../client/mobile-video";
 import type {
   MobileVideoBootstrapFailure,
@@ -15263,19 +15272,16 @@ function videoModelCanSubmit(
   model?: ManagedWorkspaceModel,
   group?: ManagedWorkspaceGroup,
 ) {
+  if (!model || !group || group.video_available === false) return false;
   const capabilities = managedVideoCapabilities(model, group);
   const operations = capabilities?.operations || [];
-  const resolutions =
-    capabilities?.resolutions || capabilities?.supported_resolutions || [];
-  const durations =
-    capabilities?.durations || capabilities?.supported_durations || [];
-  const hasGenerateOperation =
-    operations.includes("generate") || capabilities?.text_to_video === true;
+  // Missing optional capability metadata must not erase an account-owned row
+  // from a purpose=video workspace. Only an explicit incompatible operation
+  // is a reason to disable the model; default controls remain usable.
   return (
-    group?.video_available !== false &&
-    hasGenerateOperation &&
-    resolutions.length > 0 &&
-    durations.length > 0
+    operations.length === 0 ||
+    operations.includes("generate") ||
+    capabilities?.text_to_video === true
   );
 }
 
@@ -16172,6 +16178,10 @@ function AndroidVideoStudio() {
   const historyObjectURLsRef = useRef<string[]>([]);
   const videoPromptObjectURLsRef = useRef<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  // Generic gateway tasks are scoped to a video group. Keep only the group
+  // ID in memory, never a reusable API key, so a retry can reacquire the
+  // current purpose-bound session without accidentally borrowing chat auth.
+  const gatewayTaskGroupIDsRef = useRef(new Map<string, number>());
   const referenceInputRef = useRef<HTMLInputElement | null>(null);
   const referenceObjectURLsRef = useRef<string[]>([]);
   const resultObjectURLRef = useRef<string>("");
@@ -16706,6 +16716,27 @@ function AndroidVideoStudio() {
       await patchVideoProjectShot(projectId, shot.id, {
         taskStatus: "reconciling",
       });
+      const gatewayVideoID = managedGatewayVideoID(shot.taskId);
+      if (gatewayVideoID) {
+        const groupID = Number(shot.groupId || 0);
+        if (!groupID) throw new Error(copy.capabilitiesUnavailable);
+        gatewayTaskGroupIDsRef.current.set(shot.taskId, groupID);
+        const { groupSession } = await resolveVideoSessionForGroup(groupID);
+        await waitForGatewayVideoTask(
+          {},
+          gatewayVideoID,
+          requestID,
+          controller,
+          groupSession.api_key,
+          shot.prompt,
+        );
+        await patchVideoProjectShot(projectId, shot.id, {
+          taskStatus: "completed",
+          resultTaskId: shot.taskId,
+          error: "",
+        });
+        return true;
+      }
       const remote =
         await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
           `/api/v1/mobile/video/jobs/${encodeURIComponent(shot.taskId)}`,
@@ -17184,6 +17215,31 @@ function AndroidVideoStudio() {
     }
   }
 
+  async function resolveVideoSessionForGroup(groupID: number) {
+    let activeManaged = useManagedNextChatStore.getState();
+    if (shouldRefreshManagedSession(activeManaged.videoSession)) {
+      await managed.bootstrap({ silent: true });
+      activeManaged = useManagedNextChatStore.getState();
+    }
+    const activeVideoSession = selectManagedVideoSession({
+      video: activeManaged.videoSession || undefined,
+    });
+    if (!activeVideoSession) throw new Error(copy.capabilitiesUnavailable);
+    if (
+      activeVideoSession.group_id !== groupID ||
+      currentVideoGroupID(activeManaged.workspace) !== groupID
+    ) {
+      await managed.switchVideoGroup(groupID);
+      activeManaged = useManagedNextChatStore.getState();
+    }
+    const groupSession = selectManagedVideoSessionForGroup(
+      { video: activeManaged.videoSession || undefined },
+      groupID,
+    );
+    if (!groupSession) throw new Error(copy.capabilitiesUnavailable);
+    return { activeManaged, groupSession };
+  }
+
   async function waitForVideoTask(
     initialTask: MobileVideoServerTask,
     requestID: string,
@@ -17263,6 +17319,95 @@ function AndroidVideoStudio() {
     return id;
   }
 
+  async function waitForGatewayVideoTask(
+    initialPayload: unknown,
+    videoID: string,
+    requestID: string,
+    controller: AbortController,
+    videoAPIKey: string,
+    sourcePrompt = prompt.trim(),
+  ): Promise<string> {
+    const taskId = managedGatewayVideoTaskID(videoID);
+    if (!taskId || !videoAPIKey) throw new Error(copy.noResult);
+    setTaskID(taskId);
+    const deadline = Date.now() + MOBILE_VIDEO_POLL_TIMEOUT_MS;
+    let latest: unknown = initialPayload;
+    let attempt = 0;
+    while (Date.now() < deadline) {
+      if (controller.signal.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      const state = parseMobileVideoStatus(latest);
+      if (isManagedGatewayVideoFailureStatus(state)) {
+        throw new Error(copy.failed);
+      }
+      const resultURL = parseMobileVideoURL(latest);
+      if (isManagedGatewayVideoTerminalStatus(state) && resultURL) {
+        const blob = await managedDownloadBlob(
+          managed.backendBaseUrl,
+          resultURL,
+          videoAPIKey,
+          controller.signal,
+        );
+        const localEntry = await saveLocalVideo(activeAccountId, taskId, blob, {
+          prompt: sourcePrompt,
+          createdAt: Date.now(),
+        });
+        if (resultObjectURLRef.current) {
+          URL.revokeObjectURL(resultObjectURLRef.current);
+        }
+        resultObjectURLRef.current = URL.createObjectURL(blob);
+        setResultUrl(resultObjectURLRef.current);
+        setStatus("completed");
+        setProgress(100);
+        const historyURL = URL.createObjectURL(blob);
+        historyObjectURLsRef.current.push(historyURL);
+        const entry: MobileVideoHistoryItem = {
+          ...localEntry,
+          url: historyURL,
+        };
+        setHistory((items) =>
+          [entry, ...items.filter((item) => item.taskId !== taskId)].slice(
+            0,
+            24,
+          ),
+        );
+        return taskId;
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, MOBILE_VIDEO_POLL_INTERVAL_MS),
+      );
+      const response = await managedGatewayRequestText(
+        managed.backendBaseUrl,
+        `/v1/agnesapi?video_id=${encodeURIComponent(videoID)}`,
+        {
+          method: "GET",
+          headers: { Accept: "application/json", "X-Request-ID": requestID },
+          signal: controller.signal,
+        },
+        videoAPIKey,
+        text,
+      );
+      if (!response.ok) {
+        throw new Error(
+          parseOpenAIError(
+            response.text,
+            response.status,
+            "/v1/agnesapi",
+            response.requestId || requestID,
+          ),
+        );
+      }
+      try {
+        latest = JSON.parse(response.text || "{}");
+      } catch {
+        throw new Error(copy.noResult);
+      }
+      setProgress(Math.min(94, 12 + Math.min(80, ++attempt * 5)));
+    }
+    throw new Error(copy.timeout);
+  }
+
   function handleVideoRunError(controller: AbortController, runError: unknown) {
     if (controller.signal.aborted) {
       setStatus("cancelled");
@@ -17337,35 +17482,13 @@ function AndroidVideoStudio() {
       return null;
     }
 
+    let activeVideoSession: Awaited<
+      ReturnType<typeof resolveVideoSessionForGroup>
+    >["groupSession"];
     try {
-      let activeManaged = useManagedNextChatStore.getState();
-      if (shouldRefreshManagedSession(activeManaged.videoSession)) {
-        await managed.bootstrap({ silent: true });
-        activeManaged = useManagedNextChatStore.getState();
-      }
-      const activeVideoSession = selectManagedVideoSession({
-        video: activeManaged.videoSession || undefined,
-      });
-      if (!activeVideoSession) {
-        throw new Error(copy.capabilitiesUnavailable);
-      }
-      if (
-        activeVideoSession.group_id !== submissionGroup.id ||
-        currentVideoGroupID(activeManaged.workspace) !== submissionGroup.id
-      ) {
-        await managed.switchVideoGroup(submissionGroup.id);
-        activeManaged = useManagedNextChatStore.getState();
-      }
-      if (
-        !selectManagedVideoSessionForGroup(
-          {
-            video: activeManaged.videoSession || undefined,
-          },
-          submissionGroup.id,
-        )
-      ) {
-        throw new Error(copy.capabilitiesUnavailable);
-      }
+      activeVideoSession = (
+        await resolveVideoSessionForGroup(submissionGroup.id)
+      ).groupSession;
     } catch (sessionError) {
       setError(
         localizedMobileErrorMessage(sessionError, copy.capabilitiesUnavailable),
@@ -17383,6 +17506,63 @@ function AndroidVideoStudio() {
     setResultUrl("");
     setError("");
     try {
+      if (!usesManagedMobileVideoTaskApi(submissionModel)) {
+        const response = await managedGatewayRequestText(
+          managed.backendBaseUrl,
+          "/v1/videos",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              "Idempotency-Key": requestID,
+              "X-Request-ID": requestID,
+              "X-Client-Request-ID": requestID,
+            },
+            body: JSON.stringify(
+              buildManagedGatewayVideoRequest({
+                model: modelValue(submissionModel),
+                prompt: submissionPrompt,
+                resolution: submissionPreferences.resolution,
+                ratio: submissionPreferences.ratio,
+                duration: submissionPreferences.duration,
+              }),
+            ),
+            signal: controller.signal,
+          },
+          activeVideoSession.api_key,
+          text,
+        );
+        if (!response.ok) {
+          throw new Error(
+            parseOpenAIError(
+              response.text,
+              response.status,
+              "/v1/videos",
+              response.requestId || requestID,
+            ),
+          );
+        }
+        let payload: unknown;
+        try {
+          payload = JSON.parse(response.text || "{}");
+        } catch {
+          throw new Error(copy.noResult);
+        }
+        const videoID = parseMobileVideoID(payload);
+        if (!videoID) throw new Error(copy.noResult);
+        const gatewayTaskID = managedGatewayVideoTaskID(videoID);
+        gatewayTaskGroupIDsRef.current.set(gatewayTaskID, submissionGroup.id);
+        await snapshot?.onTaskCreated?.(gatewayTaskID);
+        return await waitForGatewayVideoTask(
+          payload,
+          videoID,
+          requestID,
+          controller,
+          activeVideoSession.api_key,
+          submissionPrompt,
+        );
+      }
       const createData = await managedAuthenticatedJsonRequest<{
         task?: MobileVideoServerTask;
       }>("/api/v1/mobile/video/jobs", {
@@ -17443,6 +17623,22 @@ function AndroidVideoStudio() {
     setResultUrl("");
     setError("");
     try {
+      const gatewayVideoID = managedGatewayVideoID(taskID);
+      if (gatewayVideoID) {
+        const groupID =
+          gatewayTaskGroupIDsRef.current.get(taskID) ||
+          Number(selectedGroup?.id || 0);
+        if (!groupID) throw new Error(copy.capabilitiesUnavailable);
+        const { groupSession } = await resolveVideoSessionForGroup(groupID);
+        await waitForGatewayVideoTask(
+          {},
+          gatewayVideoID,
+          requestID,
+          controller,
+          groupSession.api_key,
+        );
+        return;
+      }
       const current =
         await managedAuthenticatedJsonRequest<MobileVideoServerTask>(
           `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}`,
@@ -17483,7 +17679,10 @@ function AndroidVideoStudio() {
 
   function cancelVideo() {
     abortRef.current?.abort();
-    if (taskID && managed.accessToken) {
+    // The generic OpenAI/Agnes status API exposes no cancellation contract.
+    // Stop local polling truthfully instead of pretending that a BFF cancel
+    // reached the provider. Durable Grok tasks keep their existing cancel.
+    if (taskID && managed.accessToken && !managedGatewayVideoID(taskID)) {
       void managedAuthenticatedJsonRequest(
         `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/cancel`,
         {
@@ -17511,12 +17710,14 @@ function AndroidVideoStudio() {
       // The user has explicitly removed the only device copy. Release the
       // temporary relay object best-effort; a cleanup failure must not restore
       // deleted private local history.
-      void managedAuthenticatedJsonRequest(
-        `/api/v1/mobile/video/jobs/${encodeURIComponent(
-          item.taskId,
-        )}/content/ack`,
-        { method: "POST" },
-      ).catch(() => undefined);
+      if (!managedGatewayVideoID(item.taskId)) {
+        void managedAuthenticatedJsonRequest(
+          `/api/v1/mobile/video/jobs/${encodeURIComponent(
+            item.taskId,
+          )}/content/ack`,
+          { method: "POST" },
+        ).catch(() => undefined);
+      }
     } catch {
       setError(copy.failed);
     }
@@ -17524,6 +17725,17 @@ function AndroidVideoStudio() {
 
   async function downloadVideo(url: string, id: string) {
     try {
+      const cached = (await listLocalVideosWithBlobs(activeAccountId)).find(
+        ({ entry }) => entry.taskId === id,
+      );
+      if (managedGatewayVideoID(id) && cached) {
+        const fileID = managedGatewayVideoID(id) || id;
+        await shareFile(cached.blob, `jisudeng-video-${fileID}.mp4`, {
+          title: copy.title,
+          mimeType: cached.entry.mimeType || "video/mp4",
+        });
+        return;
+      }
       // Local history is played from an IndexedDB blob URL. Android's
       // DownloadManager cannot consume blob: URLs, so it downloads the same
       // server-owned task artifact with the active account's short-lived JWT.
@@ -17562,7 +17774,8 @@ function AndroidVideoStudio() {
       );
       if (!localVideo) throw new Error(copy.noResult);
       const form = new FormData();
-      form.append("file", localVideo.blob, `video-${taskID}.mp4`);
+      const fileID = managedGatewayVideoID(taskID) || taskID;
+      form.append("file", localVideo.blob, `video-${fileID}.mp4`);
       form.append("kind", "video");
       form.append("source", "video_result");
       await managedFormDataRequest("/api/v1/mobile/assets", form, text, {
@@ -17572,10 +17785,12 @@ function AndroidVideoStudio() {
       await refreshReferenceMaterials();
       // The user requested a durable account asset, so the temporary relay
       // object is no longer required for later playback or native downloads.
-      void managedAuthenticatedJsonRequest(
-        `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/content/ack`,
-        { method: "POST" },
-      ).catch(() => undefined);
+      if (!managedGatewayVideoID(taskID)) {
+        void managedAuthenticatedJsonRequest(
+          `/api/v1/mobile/video/jobs/${encodeURIComponent(taskID)}/content/ack`,
+          { method: "POST" },
+        ).catch(() => undefined);
+      }
       setError("");
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : copy.failed);
