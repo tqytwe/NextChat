@@ -3,21 +3,22 @@
   "channel": "direct",
   "appRepository": "https://github.com/tqytwe/NextChat.git",
   "appBranch": "app/domestic",
-  "appCommit": "907828c8ec4d37c450af562a78f742ba24dfdf96",
+  "appCommit": "edf39a18fd32f983a0f5a4b1d17ae8a53ca6f2dc",
   "backendRepository": "https://github.com/tqytwe/sub2api.git",
   "backendBranch": "app/domestic",
   "backendCommit": "5c6d55f7ed117d34362d22337833c0ee4e61ab55",
-  "androidVersionName": "3.0.34",
-  "androidVersionCode": 334,
+  "androidVersionName": "3.0.35",
+  "androidVersionCode": 335,
   "artifactPath": "public/downloads/jisudengchat-android.apk",
-  "artifactSha256": "b3d87518756f9fcae000ec31ae57432479992dd6b85e1fe357ed1dbaebc78f7b",
+  "artifactSha256": "bd522d579fae98e2bb3ea9c6114f32a01296f1c506889396154fe756c38bb6b2",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "knownLimitations": [
-    "3.0.34 was built from the clean source commit 907828c8ec4d37c450af562a78f742ba24dfdf96. The domestic Direct APK is a test candidate, not a production release.",
-    "Toolchain doctor, TypeScript, documentation checks, nine focused Jest suites (145 tests), Direct Firebase validation, offline Gradle signing and release-artifact verification passed. No deployment, Play artifact or production publication occurred.",
-    "Read-only account diagnostics confirmed workspace groups video视频 (45) and Grok Heavy (65), including their returned models, and video-session switching. The deployed video bootstrap has no complete executable capability or price record for group 45; the client displays it, but an actual task can still be refused by the existing server configuration. Any server-side compatibility fix requires separate approval.",
+    "3.0.35 was built from the clean source commit edf39a18fd32f983a0f5a4b1d17ae8a53ca6f2dc. The domestic Direct APK is a test candidate, not a production release.",
+    "Toolchain doctor, TypeScript, documentation checks, 59 focused Jest tests, Direct Firebase validation, offline Gradle signing and release-artifact verification passed. No deployment, Play artifact or production publication occurred.",
+    "The client now falls back to the existing synchronous Images endpoint only when the async endpoint explicitly rejects the request before task admission, and it restores an already accepted image task without replaying a billable request. This does not make an upstream image account schedulable.",
+    "Read-only account diagnostics confirmed workspace groups video视频 (45) and Grok Heavy (65), including their returned models and video-session switching. The deployed video bootstrap has no executable capability or price record for group 45; Grok Heavy had executable declarations but an earlier provider submission was recorded as unknown. Any server-side configuration or worker fix requires a separately deployed backend candidate.",
     "Real-device acceptance remains required for image queue continuation after a provider failure, blocked-login/balance recovery, local-material single-file recovery, video-project shot submission/reconciliation, package import/export, and all four languages."
   ],
-  "updatedAt": "2026-09-02T16:15:53+08:00"
+  "updatedAt": "2026-09-03T11:38:00+08:00"
 }
