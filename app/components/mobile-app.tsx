@@ -23,6 +23,7 @@ import type {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import clsx from "clsx";
+import { CapacitorHttp } from "@capacitor/core";
 import styles from "./mobile-app.module.scss";
 import AddIcon from "../icons/add.svg";
 import ChatIcon from "../icons/chat.svg";
@@ -4820,6 +4821,35 @@ async function managedGatewayRequestTextOnce(
   headers.set("Authorization", `Bearer ${accessToken}`);
   if (!headers.has("Accept-Language")) {
     headers.set("Accept-Language", text.dateLocale);
+  }
+  // Image generations return a complete JSON document whose b64 payload can
+  // be several megabytes. The line-oriented bridge is for SSE/chat; feeding
+  // an image document through it made a successful provider response look
+  // like an interrupted client request on some Android WebViews.
+  const bufferedImageGeneration =
+    /^\/v1\/images\/generations(?:\/|$)/.test(path) &&
+    typeof init.body === "string";
+  if (bufferedImageGeneration && isDirectNativeStreamAvailable()) {
+    const response = await CapacitorHttp.request({
+      url: managedApiUrl(baseUrl, path),
+      method: init.method || "GET",
+      headers: Object.fromEntries(headers.entries()),
+      data: init.body,
+      responseType: "text",
+      connectTimeout: 15_000,
+      readTimeout: 180_000,
+    });
+    const data = response.data;
+    return {
+      ok: response.status >= 200 && response.status < 300,
+      status: response.status,
+      text:
+        typeof data === "string"
+          ? data
+          : data === undefined || data === null
+          ? ""
+          : JSON.stringify(data),
+    };
   }
   if (
     isDirectNativeStreamAvailable() &&
