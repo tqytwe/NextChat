@@ -1,87 +1,75 @@
 {
   "platform": "android",
-  "version": "3.0.35",
-  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.35-335-bd522d579fae98e2bb3ea9c6114f32a01296f1c506889396154fe756c38bb6b2",
+  "version": "3.0.36",
+  "apkUrl": "/downloads/jisudengchat-android.apk?v=3.0.36-336-99b856462838c38e43e49598c99dcdf74344355679225e3aacd716c53789842f",
   "size": "9.7 MB",
-  "sha256": "bd522d579fae98e2bb3ea9c6114f32a01296f1c506889396154fe756c38bb6b2",
+  "sha256": "99b856462838c38e43e49598c99dcdf74344355679225e3aacd716c53789842f",
   "minAndroidVersion": "6.0",
   "releaseDate": "2026-09-03",
   "notes": [
-    "图片生成改为异步任务提交和轮询，长时间生成不会因单次连接中断而丢失结果",
-    "图片失败会立即结束当前任务并自动继续后续排队任务，不会一直卡在生成中",
-    "图片结果支持受认证的任务文件读取并保存到本机素材",
-    "视频页保留账号可见的全部分组",
-    "未配置执行能力的分组会显示具体原因而不会闪退",
+    "视频生成改为按所选视频分组直接使用平台视频网关，video视频 等账号已有分组不再被旧移动任务限制隐藏",
+    "视频模型切换改为原子状态更新，缺少可选能力说明时仍可使用稳定默认参数，避免创作页崩溃",
+    "通用视频任务支持状态恢复、本地保存、下载分享和保存到素材库，不会错误请求 Grok 专用任务接口",
     "仅供真机功能验证，尚未发布"
   ],
-  "versionCode": 335,
-  "bytes": 10211609,
+  "versionCode": 336,
+  "bytes": 10213150,
   "packageName": "com.jisudeng.chat",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
-  "latestVersion": "3.0.35",
-  "sourceCommit": "edf39a18fd32f983a0f5a4b1d17ae8a53ca6f2dc",
-  "builtFromCommit": "edf39a18fd32f983a0f5a4b1d17ae8a53ca6f2dc",
+  "latestVersion": "3.0.36",
+  "sourceCommit": "065cd616e9a4a390dcea71b3c15d759c24a2f8d5",
+  "builtFromCommit": "065cd616e9a4a390dcea71b3c15d759c24a2f8d5",
   "sourceDirty": false,
   "channel": "direct",
   "notes_i18n": {
     "zh": [
-      "图片生成改为异步任务提交和轮询，长时间生成不会因单次连接中断而丢失结果",
-      "图片失败会立即结束当前任务并自动继续后续排队任务，不会一直卡在生成中",
-      "图片结果支持受认证的任务文件读取并保存到本机素材",
-      "视频页保留账号可见的全部分组",
-      "未配置执行能力的分组会显示具体原因而不会闪退",
+      "视频生成改为按所选视频分组直接使用平台视频网关，video视频 等账号已有分组不再被旧移动任务限制隐藏",
+      "视频模型切换改为原子状态更新，缺少可选能力说明时仍可使用稳定默认参数，避免创作页崩溃",
+      "通用视频任务支持状态恢复、本地保存、下载分享和保存到素材库，不会错误请求 Grok 专用任务接口",
       "仅供真机功能验证，尚未发布"
     ],
     "en": [
-      "Image generation now submits and polls durable async tasks, so long runs do not lose results when one connection ends",
-      "A failed image task now settles immediately and automatically continues later queued work instead of remaining generating",
-      "Image results support authenticated task-file downloads and device material storage",
-      "The video page keeps every account-visible group and explains an unconfigured group without crashing",
+      "Video generation now uses the platform gateway for the selected video group, so account-visible groups such as video视频 are no longer hidden by the legacy mobile-task path",
+      "Video model switches now update atomically and retain stable defaults when optional capability metadata is absent, avoiding creation-page crashes",
+      "Gateway video tasks support status recovery, local saving, download sharing, and material-library saving without calling the Grok-only task API",
       "For real-device functional testing only. Not released"
     ],
     "ja": [
-      "画像生成を永続的な非同期タスクの送信と照会に変更し、長時間の生成でも接続切断で結果を失いません",
-      "画像タスクの失敗は直ちに完了し、生成中のまま止まらず後続の待機作業を自動で続行します",
-      "画像結果は認証付きタスクファイルとして取得し、端末の素材に保存できます",
-      "動画画面はアカウントで表示可能な全グループを保持し、未設定グループはクラッシュせず理由を表示します",
+      "動画生成は選択した動画グループのプラットフォームゲートウェイを直接使用し、video视频 などアカウントで利用可能なグループを旧モバイルタスク経路で非表示にしません",
+      "動画モデルの切替を原子的な状態更新に変更し、任意の機能情報が不足しても安定した既定値を使用して作成画面のクラッシュを防ぎます",
+      "ゲートウェイ動画タスクは状態復帰、端末保存、共有ダウンロード、素材ライブラリ保存に対応し、Grok 専用タスク API を誤って呼び出しません",
       "実機での機能検証専用です。未リリースです"
     ],
     "ko": [
-      "이미지 생성을 지속형 비동기 작업 제출과 조회로 변경하여 긴 생성도 연결 종료로 결과를 잃지 않습니다",
-      "이미지 작업 실패는 즉시 종료되고 생성 중 상태에 멈추지 않으며 다음 대기 작업을 자동으로 계속합니다",
-      "이미지 결과는 인증된 작업 파일로 받아 기기 자료에 저장할 수 있습니다",
-      "동영상 화면은 계정에 보이는 모든 그룹을 유지하고 설정되지 않은 그룹은 충돌 없이 이유를 표시합니다",
+      "동영상 생성은 선택한 동영상 그룹의 플랫폼 게이트웨이를 직접 사용하여 video视频 등 계정에 보이는 그룹이 기존 모바일 작업 경로에서 숨겨지지 않습니다",
+      "동영상 모델 전환을 원자적 상태 업데이트로 변경하여 선택적 기능 정보가 없어도 안정적인 기본값을 사용하고 제작 화면 충돌을 막습니다",
+      "게이트웨이 동영상 작업은 상태 복구, 기기 저장, 다운로드 공유, 소재 라이브러리 저장을 지원하며 Grok 전용 작업 API를 잘못 호출하지 않습니다",
       "실기기 기능 검증 전용이며 아직 출시되지 않았습니다"
     ]
   },
   "notesByLocale": {
     "zh-CN": [
-      "图片生成改为异步任务提交和轮询，长时间生成不会因单次连接中断而丢失结果",
-      "图片失败会立即结束当前任务并自动继续后续排队任务，不会一直卡在生成中",
-      "图片结果支持受认证的任务文件读取并保存到本机素材",
-      "视频页保留账号可见的全部分组",
-      "未配置执行能力的分组会显示具体原因而不会闪退",
+      "视频生成改为按所选视频分组直接使用平台视频网关，video视频 等账号已有分组不再被旧移动任务限制隐藏",
+      "视频模型切换改为原子状态更新，缺少可选能力说明时仍可使用稳定默认参数，避免创作页崩溃",
+      "通用视频任务支持状态恢复、本地保存、下载分享和保存到素材库，不会错误请求 Grok 专用任务接口",
       "仅供真机功能验证，尚未发布"
     ],
     "en": [
-      "Image generation now submits and polls durable async tasks, so long runs do not lose results when one connection ends",
-      "A failed image task now settles immediately and automatically continues later queued work instead of remaining generating",
-      "Image results support authenticated task-file downloads and device material storage",
-      "The video page keeps every account-visible group and explains an unconfigured group without crashing",
+      "Video generation now uses the platform gateway for the selected video group, so account-visible groups such as video视频 are no longer hidden by the legacy mobile-task path",
+      "Video model switches now update atomically and retain stable defaults when optional capability metadata is absent, avoiding creation-page crashes",
+      "Gateway video tasks support status recovery, local saving, download sharing, and material-library saving without calling the Grok-only task API",
       "For real-device functional testing only. Not released"
     ],
     "ja": [
-      "画像生成を永続的な非同期タスクの送信と照会に変更し、長時間の生成でも接続切断で結果を失いません",
-      "画像タスクの失敗は直ちに完了し、生成中のまま止まらず後続の待機作業を自動で続行します",
-      "画像結果は認証付きタスクファイルとして取得し、端末の素材に保存できます",
-      "動画画面はアカウントで表示可能な全グループを保持し、未設定グループはクラッシュせず理由を表示します",
+      "動画生成は選択した動画グループのプラットフォームゲートウェイを直接使用し、video视频 などアカウントで利用可能なグループを旧モバイルタスク経路で非表示にしません",
+      "動画モデルの切替を原子的な状態更新に変更し、任意の機能情報が不足しても安定した既定値を使用して作成画面のクラッシュを防ぎます",
+      "ゲートウェイ動画タスクは状態復帰、端末保存、共有ダウンロード、素材ライブラリ保存に対応し、Grok 専用タスク API を誤って呼び出しません",
       "実機での機能検証専用です。未リリースです"
     ],
     "ko": [
-      "이미지 생성을 지속형 비동기 작업 제출과 조회로 변경하여 긴 생성도 연결 종료로 결과를 잃지 않습니다",
-      "이미지 작업 실패는 즉시 종료되고 생성 중 상태에 멈추지 않으며 다음 대기 작업을 자동으로 계속합니다",
-      "이미지 결과는 인증된 작업 파일로 받아 기기 자료에 저장할 수 있습니다",
-      "동영상 화면은 계정에 보이는 모든 그룹을 유지하고 설정되지 않은 그룹은 충돌 없이 이유를 표시합니다",
+      "동영상 생성은 선택한 동영상 그룹의 플랫폼 게이트웨이를 직접 사용하여 video视频 등 계정에 보이는 그룹이 기존 모바일 작업 경로에서 숨겨지지 않습니다",
+      "동영상 모델 전환을 원자적 상태 업데이트로 변경하여 선택적 기능 정보가 없어도 안정적인 기본값을 사용하고 제작 화면 충돌을 막습니다",
+      "게이트웨이 동영상 작업은 상태 복구, 기기 저장, 다운로드 공유, 소재 라이브러리 저장을 지원하며 Grok 전용 작업 API를 잘못 호출하지 않습니다",
       "실기기 기능 검증 전용이며 아직 출시되지 않았습니다"
     ]
   }

@@ -3,22 +3,22 @@
   "channel": "direct",
   "appRepository": "https://github.com/tqytwe/NextChat.git",
   "appBranch": "app/domestic",
-  "appCommit": "edf39a18fd32f983a0f5a4b1d17ae8a53ca6f2dc",
+  "appCommit": "065cd616e9a4a390dcea71b3c15d759c24a2f8d5",
   "backendRepository": "https://github.com/tqytwe/sub2api.git",
   "backendBranch": "app/domestic",
   "backendCommit": "5c6d55f7ed117d34362d22337833c0ee4e61ab55",
-  "androidVersionName": "3.0.35",
-  "androidVersionCode": 335,
+  "androidVersionName": "3.0.36",
+  "androidVersionCode": 336,
   "artifactPath": "public/downloads/jisudengchat-android.apk",
-  "artifactSha256": "bd522d579fae98e2bb3ea9c6114f32a01296f1c506889396154fe756c38bb6b2",
+  "artifactSha256": "99b856462838c38e43e49598c99dcdf74344355679225e3aacd716c53789842f",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "knownLimitations": [
-    "3.0.35 was built from the clean source commit edf39a18fd32f983a0f5a4b1d17ae8a53ca6f2dc. The domestic Direct APK is a test candidate, not a production release.",
-    "Toolchain doctor, TypeScript, documentation checks, 59 focused Jest tests, Direct Firebase validation, offline Gradle signing and release-artifact verification passed. No deployment, Play artifact or production publication occurred.",
+    "3.0.36 was built from the clean source commit 065cd616e9a4a390dcea71b3c15d759c24a2f8d5. The domestic Direct APK is a test candidate, not a production release.",
+    "Toolchain doctor, TypeScript, documentation checks, 120 focused Jest tests, Direct Firebase validation, offline Gradle signing and release-artifact verification passed. No deployment, Play artifact or production publication occurred.",
     "The client now falls back to the existing synchronous Images endpoint only when the async endpoint explicitly rejects the request before task admission, and it restores an already accepted image task without replaying a billable request. This does not make an upstream image account schedulable.",
-    "Read-only account diagnostics confirmed workspace groups video视频 (45) and Grok Heavy (65), including their returned models and video-session switching. The deployed video bootstrap has no executable capability or price record for group 45; Grok Heavy had executable declarations but an earlier provider submission was recorded as unknown. Any server-side configuration or worker fix requires a separately deployed backend candidate.",
+    "Read-only account diagnostics confirmed workspace groups video视频 (45) and Grok Heavy (65), including their returned models and purpose=video session switching. The historical mobile bootstrap payload was incomplete for group 45, so 3.0.36 no longer uses that optional metadata as a membership or routing allow-list: it calls the selected group-bound gateway session. No server-side group, price, account or billing configuration was changed in this client-only candidate; the final provider result remains a real-device check.",
     "Real-device acceptance remains required for image queue continuation after a provider failure, blocked-login/balance recovery, local-material single-file recovery, video-project shot submission/reconciliation, package import/export, and all four languages."
   ],
-  "updatedAt": "2026-09-03T11:38:00+08:00"
+  "updatedAt": "2026-09-03T14:08:00+08:00"
 }

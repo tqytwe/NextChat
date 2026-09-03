@@ -1,5 +1,13 @@
 # APP 变更记录
 
+## 3.0.36 (336) - Direct 真机测试候选
+
+- 视频分组：账号工作区与视频 bootstrap 按稳定组 ID、模型 ID 合并；bootstrap 缺少部分能力时不再删除账号已有的 `video视频` 或其他视频组及模型。
+- 视频提交：仅声明 `grok_video` 的模型继续使用现有移动视频任务；其他账号视频模型使用其 purpose=video 的分组会话调用现有 `/v1/videos` 网关，轮询 `/v1/agnesapi`，避免切换模型后误走 Grok 专用接口而崩溃。
+- 视频稳定性：模型切换采用原子选择快照；缺少可选能力元数据时保留稳定默认分辨率、比例和时长；通用网关任务支持恢复、下载、分享和保存到素材库。
+- 构建：Dell `codex` 固定工具链生成并校验 `public/downloads/jisudengchat-android.apk`，SHA-256 为 `99b856462838c38e43e49598c99dcdf74344355679225e3aacd716c53789842f`，包名 `com.jisudeng.chat`、版本 `3.0.36 (336)`、签名证书 SHA-256 为 `cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e`，构建源提交为 `065cd616`。
+- 验收：TypeScript、工具链 doctor、文档治理、6 组定向 Jest（120 项）、Direct Firebase 校验、离线 Gradle 签名和 APK 制品校验通过。没有部署、没有上传 Play；真实手机仍需验证 `video视频`、`Grok Heavy` 的实际提交、图片队列和本机素材库。
+
 ## 3.0.35 (335) - Direct 真机测试候选
 
 - 图片：异步图片接口在明确的“未启用、未就绪或不支持”且尚未受理任务时，才回退到
