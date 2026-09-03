@@ -97,151 +97,46 @@ describe("local prompt catalog", () => {
     database.clear();
   });
 
-  test("supports the shared Canvas mirror for video prompts and preserves string IDs", async () => {
-    const item = {
-      id: "gpt-image-2-prompts-598",
-      title: "共享创作空间提示词",
-      purpose: "gpt-image-2-prompts",
-      prompt_text: "一个带动作和镜头的短视频提示词",
-      media: [{ media_type: "image", url: "/api/v1/mobile/canvas-prompts/gpt-image-2-prompts-598/cover" }],
-      updated_at: "2026-08-20T01:02:03Z",
-    } as unknown as CatalogItem;
-    const requests: string[] = [];
-    const result = await library.syncLocalPromptCatalog(
-      "user-canvas",
-      "zh",
-      "video",
-      "https://api.example.test",
-      "token",
-      {
-        requestText: jest.fn(async (_base: string, path: string) => {
-          requests.push(path);
-          if (path.includes("/manifest?")) {
-            return success({ revision: "canvas-v1", total: 1, updated_at: "2026-08-20T01:02:03Z" });
-          }
-          if (path.includes("/catalog?")) {
-            return success({ items: [item], total: 1, page: 1, page_size: 100, pages: 1 });
-          }
-          if (path.includes("/categories")) return success([]);
-          throw new Error(`unexpected path ${path}`);
-        }),
-        downloadBlob: jest.fn(async () => new Blob(["cover"], { type: "image/jpeg" })),
-      },
-      "canvas",
-    );
-    expect(result.catalog.items[0].id).toBe("gpt-image-2-prompts-598");
-    expect(result.catalog.items[0].cover_url).toContain("gpt-image-2-prompts-598");
-    expect(requests.some((path) => path.includes("/mobile/canvas-prompts/catalog?media_type=video"))).toBe(true);
-  });
-
-  test("preserves string categories from the Canvas mirror for video filtering", async () => {
-    const item = {
-      id: "canvas-video-1",
-      title: "城市延时镜头",
-      category: "video animation",
-      tags: ["motion"],
-      prompt_text: "城市夜景延时摄影，镜头缓慢推进",
-      media: [{ media_type: "image", url: "/api/v1/mobile/canvas-prompts/canvas-video-1/cover" }],
-      updated_at: "2026-08-20T01:02:03Z",
-    } as unknown as CatalogItem;
-    const result = await library.syncLocalPromptCatalog(
-      "user-canvas-categories",
-      "zh",
-      "video",
-      "https://api.example.test",
-      "token",
-      {
-        requestText: jest.fn(async (_base: string, path: string) => {
-          if (path.includes("/manifest?")) {
-            return success({ revision: "canvas-category-v1", total: 1, updated_at: "2026-08-20T01:02:03Z" });
-          }
-          if (path.includes("/catalog?")) {
-            return success({
-              items: [item],
-              total: 1,
-              page: 1,
-              page_size: 100,
-              pages: 1,
-              categories: ["video animation", "motion"],
-            });
-          }
-          if (path.includes("/categories")) {
-            return success(["video animation", "motion"]);
-          }
-          throw new Error(`unexpected path ${path}`);
-        }),
-        downloadBlob: jest.fn(async () => new Blob(["cover"], { type: "image/jpeg" })),
-      },
-      "canvas",
-    );
-
-    expect(result.catalog.categories).toEqual([
-      { id: "video animation", label: "video animation" },
-      { id: "motion", label: "motion" },
-    ]);
-    expect(result.catalog.items[0]).toMatchObject({
-      prompt_text: "城市夜景延时摄影，镜头缓慢推进",
-      category: "video animation",
-      categories: ["video animation", "motion"],
-    });
-  });
-
-  test("keeps prompt text when an external cover cannot be downloaded", async () => {
-    const item = {
-      id: "canvas-cover-temporary-error",
-      title: "封面暂不可用的提示词",
-      prompt_text: "保留这段提示词正文并允许用户继续编辑",
-      coverUrl: "https://raw.githubusercontent.com/example/cover.jpg",
-      category: "video animation",
-      updatedAt: "2026-08-20T01:02:03Z",
-    };
-    const result = await library.syncLocalPromptCatalog(
-      "user-cover-error",
-      "zh",
-      "video",
-      "https://api.example.test",
-      "token",
-      {
-        requestText: jest.fn(async (_base: string, path: string) => {
-          if (path.includes("/manifest?")) {
-            return success({
-              revision: "canvas-cover-error-v1",
-              total: 1,
-              updated_at: "2026-08-20T01:02:03Z",
-            });
-          }
-          if (path.includes("/catalog?")) {
-            return success({
-              items: [item],
-              total: 1,
-              page: 1,
-              page_size: 100,
-              pages: 1,
-            });
-          }
-          if (path.includes("/categories")) return success(["video animation"]);
-          throw new Error(`unexpected path ${path}`);
-        }),
-        downloadBlob: jest.fn(async () => {
-          throw new Error("cover temporarily unavailable");
-        }),
-      },
-      "canvas",
-    );
-
-    expect(result.catalog.items).toHaveLength(1);
-    expect(result.catalog.items[0].prompt_text).toBe(
-      "保留这段提示词正文并允许用户继续编辑",
-    );
+  test("rejects Canvas as a video prompt source", async () => {
     await expect(
-      library.readLocalPromptCover(
+      library.syncLocalPromptCatalog(
+        "user-canvas",
+        "zh",
+        "video",
+        "https://api.example.test",
+        "token",
+        {},
+        "canvas",
+      ),
+    ).rejects.toThrow("Canvas prompt catalog supports image prompts only");
+  });
+
+  test("does not use Canvas categories for video filtering", async () => {
+    await expect(
+      library.syncLocalPromptCatalog(
+        "user-canvas-categories",
+        "zh",
+        "video",
+        "https://api.example.test",
+        "token",
+        {},
+        "canvas",
+      ),
+    ).rejects.toThrow("Canvas prompt catalog supports image prompts only");
+  });
+
+  test("does not treat a Canvas image cover as a video prompt", async () => {
+    await expect(
+      library.syncLocalPromptCatalog(
         "user-cover-error",
         "zh",
         "video",
-        "canvas-cover-temporary-error",
+        "https://api.example.test",
+        "token",
+        {},
         "canvas",
       ),
-    ).resolves.toBeNull();
+    ).rejects.toThrow("Canvas prompt catalog supports image prompts only");
   });
 
   test("downloads the complete image catalog and cover once, scoped to account and language", async () => {
@@ -323,6 +218,7 @@ describe("local prompt catalog", () => {
     const unchanged: CatalogItem = {
       id: 10,
       title: "保留提示词",
+      prompt_text: "保留正文",
       purpose: "image",
       version: 1,
       updated_at: "2026-08-20T01:00:00Z",

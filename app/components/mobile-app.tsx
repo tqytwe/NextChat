@@ -123,7 +123,12 @@ import {
   recoverMobileImageQueueTask,
   resumeBlockedCreationQueueTasks,
 } from "../client/mobile-image-queue";
-import { requestManagedAsyncImageTask } from "../client/mobile-image-async";
+import {
+  extractManagedImageResultData,
+  isManagedAsyncImagePreAdmissionUnsupported,
+  pollManagedAsyncImageTask,
+  requestManagedAsyncImageTask,
+} from "../client/mobile-image-async";
 import {
   buildMobileVideoScriptPrompt,
   classifyMobileVideoBootstrapFailure,
@@ -3870,18 +3875,7 @@ function dataUrlToBlob(dataUrl: string) {
 }
 
 function openAIImageData(json: any) {
-  const candidates = [
-    json?.data,
-    json?.images,
-    json?.result?.data,
-    json?.result?.images,
-    json?.output,
-  ];
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate) && candidate.length) return candidate;
-  }
-  if (json?.b64_json || json?.url || json?.image) return [json];
-  return [];
+  return extractManagedImageResultData(json);
 }
 
 type ManagedImageGatewayResponse = {
@@ -3890,6 +3884,7 @@ type ManagedImageGatewayResponse = {
   text: string;
   requestId?: string;
   imageApiKey?: string;
+  taskId?: string;
 };
 
 /**
@@ -3905,8 +3900,10 @@ async function requestManagedAsyncImage(
   apiKey: string,
   text: ManagedMobileText,
   signal?: AbortSignal,
+  fallbackSync?: () => Promise<ManagedImageGatewayResponse>,
+  onAccepted?: (taskId: string, pollPath: string) => void | Promise<void>,
 ): Promise<ManagedImageGatewayResponse> {
-  return requestManagedAsyncImageTask({
+  const response = await requestManagedAsyncImageTask({
     submit: () =>
       managedGatewayRequestText(
         baseUrl,
@@ -3934,7 +3931,16 @@ async function requestManagedAsyncImage(
       ),
     timeoutMessage: text.errors.requestTimeout,
     signal,
+    onAccepted,
   });
+  // The durable image worker is currently enabled only for OpenAI/Grok image
+  // groups. A pre-admission 404/405/501 is safe to route through the existing
+  // synchronous contract; once a task ID exists, never issue a second billable
+  // request even if polling later fails.
+  if (fallbackSync && isManagedAsyncImagePreAdmissionUnsupported(response)) {
+    return fallbackSync();
+  }
+  return response;
 }
 
 async function persistContentKitImageResult(
@@ -12277,6 +12283,7 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
   // coordinator now chooses the oldest persisted shot across both creation
   // surfaces, and retains that executor when this page is no longer visible.
   const recoveredQueuesRef = useRef(false);
+  const reconcilingContentKitAssetIdsRef = useRef(new Set<string>());
   const [assetTagFilter, setAssetTagFilter] = useState<
     "all" | ContentKitAssetTag
   >("all");
@@ -12671,6 +12678,133 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
     });
   }
 
+  async function reconcileContentKitAsyncAsset(
+    projectId: string,
+    assetId: string,
+  ) {
+    const key = `${projectId}:${assetId}`;
+    if (reconcilingContentKitAssetIdsRef.current.has(key)) return;
+    const project = useManagedMobileAppStore
+      .getState()
+      .contentKits.find((item) => item.id === projectId);
+    const asset = project?.assets.find((item) => item.id === assetId);
+    const asyncTaskId = String(asset?.asyncTaskId || "").trim();
+    if (
+      !project ||
+      !asset ||
+      !asyncTaskId ||
+      project.accountId !== activeAccountId
+    )
+      return;
+    reconcilingContentKitAssetIdsRef.current.add(key);
+    try {
+      const groupId = Number(project.imageGroupId || 0);
+      let activeManaged = useManagedNextChatStore.getState();
+      let imageSession = selectManagedImageSessionForGroup(
+        { image: activeManaged.imageSession || undefined },
+        groupId,
+      );
+      if (!imageSession && groupId > 0) {
+        await activeManaged.switchImageGroup(groupId);
+        activeManaged = useManagedNextChatStore.getState();
+        imageSession = selectManagedImageSessionForGroup(
+          { image: activeManaged.imageSession || undefined },
+          groupId,
+        );
+      }
+      if (!imageSession) {
+        patchAsset(projectId, assetId, {
+          status: "blocked",
+          blockedReason: "authentication",
+          error: text.errors.switchGroupFailed,
+        });
+        return;
+      }
+      const response = await pollManagedAsyncImageTask({
+        taskId: asyncTaskId,
+        pollPath: asset.asyncPollUrl,
+        poll: (pollPath, taskId) =>
+          managedGatewayRequestText(
+            activeManaged.backendBaseUrl,
+            pollPath,
+            {
+              method: "GET",
+              headers: { Accept: "application/json", "X-Request-ID": taskId },
+            },
+            imageSession!.api_key,
+            text,
+          ),
+        timeoutMessage: text.errors.requestTimeout,
+      });
+      let payload: any = null;
+      try {
+        payload = response.text ? JSON.parse(response.text) : null;
+      } catch {
+        payload = null;
+      }
+      if (!response.ok || payload?.error) {
+        const message = localizedMobileErrorMessage(
+          new Error(
+            payload?.error?.message || payload?.message || response.text,
+          ),
+          text.platform.contentKit.failed,
+        );
+        const failure = classifyCreationQueueFailure({
+          status: response.status,
+          code: String(payload?.error?.code || ""),
+          message,
+        });
+        patchAsset(projectId, assetId, {
+          status: failure.status === "blocked" ? "blocked" : "failed",
+          blockedReason: failure.blockedReason,
+          error: message,
+        });
+        return;
+      }
+      const image = openAIImageData(payload)[0];
+      if (!image) {
+        patchAsset(projectId, assetId, {
+          status: "failed",
+          error: text.image.emptyResult,
+        });
+        return;
+      }
+      const saved = await persistContentKitImageResult(image, {
+        taskId: asset.requestId || asset.id,
+        prompt: asset.prompt,
+        model: project.model,
+        ownerUserId: activeAccountId,
+        projectId,
+        runId: asset.runId,
+        shotId: asset.shotId,
+        kind: asset.kind,
+        label: asset.label,
+        collectionId: projectId,
+        downloadBaseUrl: activeManaged.backendBaseUrl,
+        downloadApiKey: imageSession.api_key,
+      });
+      patchAsset(projectId, assetId, {
+        status: "completed",
+        imageUrl: saved.url,
+        fileName: saved.fileName,
+        error: "",
+      });
+    } catch (error) {
+      // A transport interruption cannot prove whether the gateway completed
+      // the accepted task. Preserve its durable ID and continue only after a
+      // later reconciliation, never by issuing another image request.
+      patchAsset(projectId, assetId, {
+        status: "reconciling",
+        error: localizedMobileErrorMessage(
+          error,
+          text.platform.contentKit.failed,
+        ),
+      });
+    } finally {
+      reconcilingContentKitAssetIdsRef.current.delete(key);
+    }
+  }
+
   async function hydrateAssetBilling(
     projectId: string,
     assetId: string,
@@ -12802,6 +12936,7 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
       setError(text.errors.switchGroupFailed);
       return;
     }
+    const imageApiKey = imageSession.api_key;
     // Persist before the first request. A restart or timeout must replay the
     // same key so the gateway can return the original job instead of billing a
     // second generation.
@@ -12892,8 +13027,22 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
         activeManaged.backendBaseUrl,
         endpoint,
         { headers, body },
-        imageSession.api_key,
+        imageApiKey,
         text,
+        undefined,
+        () =>
+          managedGatewayRequestText(
+            activeManaged.backendBaseUrl,
+            `/v1${endpoint}`,
+            { headers, body },
+            imageApiKey,
+            text,
+          ),
+        (taskId, pollPath) =>
+          patchAsset(project.id, asset.id, {
+            asyncTaskId: taskId,
+            asyncPollUrl: pollPath,
+          }),
       );
       const json = response.text ? JSON.parse(response.text) : null;
       if (!response.ok || json?.error) {
@@ -13654,6 +13803,7 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
                 ? {
                     ...asset,
                     status: "reconciling",
+                    error: asset.asyncTaskId ? "" : asset.error,
                     updatedAt: Date.now(),
                   }
                 : asset,
@@ -13668,6 +13818,14 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
       });
     }
     projects.forEach((project) => {
+      project.assets
+        .filter(
+          (asset) =>
+            asset.status === "reconciling" && Boolean(asset.asyncTaskId),
+        )
+        .forEach((asset) => {
+          void reconcileContentKitAsyncAsset(project.id, asset.id);
+        });
       const run = project.runs?.find((item) => item.id === project.activeRunId);
       if (run?.status === "queued" || run?.status === "running") {
         void runProjectQueue(project.id);
@@ -15892,10 +16050,6 @@ function AndroidVideoStudio() {
     serverBootstrapFailure,
   );
   const unavailableVideoDiagnostic = resolvedVideoGroups.suppressed[0];
-  const selectedVideoUnavailableDiagnostics =
-    resolvedVideoGroups.suppressed.filter(
-      (item) => Number(item.groupId) === Number(selectedGroup?.id || 0),
-    );
   const serverCheckedWithoutVideo =
     serverBootstrapState === "ready" &&
     videoGroupSource === "server" &&
@@ -15909,15 +16063,6 @@ function AndroidVideoStudio() {
         unavailableVideoDiagnostic.code,
       )}`
     : copy.groupHint;
-  const selectedVideoUnavailableHint = selectedVideoUnavailableDiagnostics
-    .slice(0, 2)
-    .map((item) =>
-      [item.model, localizedVideoUnavailableReason(copy, item.code)]
-        .filter(Boolean)
-        .join(": "),
-    )
-    .filter(Boolean)
-    .join(" · ");
   const videoSelection = useMemo(
     () => resolveVideoStudioSelection(groups, preferences),
     [groups, preferences],
@@ -15930,6 +16075,19 @@ function AndroidVideoStudio() {
   const resolutions = videoSelection.resolutions;
   const ratios = videoSelection.ratios;
   const durations = videoSelection.durations;
+  const selectedVideoUnavailableDiagnostics =
+    resolvedVideoGroups.suppressed.filter(
+      (item) => Number(item.groupId) === Number(selectedGroup?.id || 0),
+    );
+  const selectedVideoUnavailableHint = selectedVideoUnavailableDiagnostics
+    .slice(0, 2)
+    .map((item) =>
+      [item.model, localizedVideoUnavailableReason(copy, item.code)]
+        .filter(Boolean)
+        .join(": "),
+    )
+    .filter(Boolean)
+    .join(" · ");
   const selectionOptionsKey = [
     selectedGroup?.id || 0,
     modelValue(selectedModel),
@@ -18176,6 +18334,7 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
   const platformTaskPollRef = useRef<number | null>(null);
   const progressTimerRef = useRef<number | null>(null);
   const queuedImageRunsRef = useRef(new Set<string>());
+  const reconcilingImageTaskIDsRef = useRef(new Set<string>());
   const gallery = sdStore.draw.filter(
     (item: any) => item.status === "success" && imageResults(item).length > 0,
   );
@@ -18504,6 +18663,143 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
       url: saved.localUrl || imageData,
       fileName: saved.fileName,
     };
+  }
+
+  async function reconcilePersistedImageTask(item: any) {
+    const localTaskId = String(item?.id || "").trim();
+    const remoteTaskId = String(item?.async_task_id || "").trim();
+    if (!localTaskId || !remoteTaskId || !activeAccountId) return;
+    if (reconcilingImageTaskIDsRef.current.has(localTaskId)) return;
+    reconcilingImageTaskIDsRef.current.add(localTaskId);
+    try {
+      const groupId = Number(item?.group_id || 0);
+      let activeManaged = useManagedNextChatStore.getState();
+      let imageSession = selectManagedImageSessionForGroup(
+        { image: activeManaged.imageSession || undefined },
+        groupId,
+      );
+      if (!imageSession && groupId > 0) {
+        await activeManaged.switchImageGroup(groupId);
+        activeManaged = useManagedNextChatStore.getState();
+        imageSession = selectManagedImageSessionForGroup(
+          { image: activeManaged.imageSession || undefined },
+          groupId,
+        );
+      }
+      if (!imageSession) {
+        updateTask(localTaskId, {
+          status: "blocked",
+          blocked_reason: "authentication",
+          error: text.errors.switchGroupFailed,
+        });
+        return;
+      }
+      const response = await pollManagedAsyncImageTask({
+        taskId: remoteTaskId,
+        pollPath: String(item?.async_poll_url || "").trim() || undefined,
+        poll: (pollPath, taskId) =>
+          managedGatewayRequestText(
+            activeManaged.backendBaseUrl,
+            pollPath,
+            {
+              method: "GET",
+              headers: { Accept: "application/json", "X-Request-ID": taskId },
+            },
+            imageSession!.api_key,
+            text,
+          ),
+        timeoutMessage: text.errors.requestTimeout,
+      });
+      let payload: any = null;
+      try {
+        payload = response.text ? JSON.parse(response.text) : null;
+      } catch {
+        payload = null;
+      }
+      if (!response.ok || payload?.error) {
+        const message = describeImageError(
+          payload?.error?.message || payload?.message || response.text,
+          {
+            text,
+            selectedModel: String(item?.model || ""),
+            imageModelCount: 1,
+            hasImageGroup: Boolean(groupId),
+            status: response.status,
+          },
+        );
+        const failure = classifyCreationQueueFailure({
+          status: response.status,
+          code: String(payload?.error?.code || ""),
+          message,
+        });
+        updateTask(localTaskId, {
+          status: failure.status === "blocked" ? "blocked" : "error",
+          blocked_reason: failure.blockedReason,
+          error: message,
+          progress: 100,
+        });
+        return;
+      }
+      const images = openAIImageData(payload);
+      if (!images.length) {
+        updateTask(localTaskId, {
+          status: "error",
+          error: text.image.emptyResult,
+          progress: 100,
+        });
+        return;
+      }
+      const savedResults: string[] = [];
+      const localFiles: string[] = [];
+      for (let index = 0; index < images.length; index += 1) {
+        const saved = await persistImageFromResult(images[index], {
+          taskId: localTaskId,
+          index,
+          prompt: String(item?.params?.prompt || item?.prompt || ""),
+          model: String(item?.model || ""),
+          downloadBaseUrl: activeManaged.backendBaseUrl,
+          downloadApiKey: imageSession.api_key,
+        });
+        savedResults.push(saved.url);
+        if (saved.fileName) localFiles.push(saved.fileName);
+      }
+      const requestedCount = Math.max(1, Number(item?.params?.n || 1));
+      const partial = savedResults.length < requestedCount;
+      updateTask(localTaskId, {
+        status: partial ? "partial" : "success",
+        progress: 100,
+        img_data: savedResults[0],
+        results: savedResults,
+        local_files: localFiles,
+        result_items: savedResults.map((url, index) => ({
+          index,
+          status: "success",
+          url,
+          fileName: localFiles[index] || "",
+          error: "",
+        })),
+        error: partial
+          ? text.image.partialSuccess(
+              savedResults.length,
+              requestedCount,
+              text.image.generateFailed,
+            )
+          : "",
+      });
+    } catch (error) {
+      const message = localizedMobileErrorMessage(
+        error,
+        text.image.generateFailed,
+      );
+      const failure = classifyCreationQueueFailure({ message });
+      updateTask(localTaskId, {
+        status: failure.status === "blocked" ? "blocked" : "reconciling",
+        blocked_reason: failure.blockedReason,
+        error: message,
+      });
+    } finally {
+      reconcilingImageTaskIDsRef.current.delete(localTaskId);
+    }
   }
 
   async function attachReferences(event: ChangeEvent<HTMLInputElement>) {
@@ -18929,6 +19225,19 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                 imageSession.api_key,
                 text,
                 controller.signal,
+                () =>
+                  managedGatewayRequestText(
+                    taskBackendBaseUrl,
+                    `/v1${endpoint}`,
+                    request,
+                    imageSession.api_key,
+                    text,
+                  ),
+                (taskId, pollPath) =>
+                  updateTask(id, {
+                    async_task_id: taskId,
+                    async_poll_url: pollPath,
+                  }),
               );
               if (
                 (response.status === 401 || response.status === 403) &&
@@ -19346,7 +19655,7 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
               status: item.status,
             }).status;
             item.progress = Number(item.progress || 0);
-            item.error = text.image.generateFailed;
+            item.error = item.async_task_id ? "" : text.image.generateFailed;
             item.updated_at = Date.now();
           }
         });
@@ -19354,6 +19663,18 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
       });
     }
     if (!managed.imageSession || !managed.accessToken) return;
+    const reconciling = useSdStore
+      .getState()
+      .draw.filter(
+        (item: any) =>
+          item?.queue_schema === 1 &&
+          String(item?.account_id || "") === activeAccountId &&
+          String(item?.async_task_id || "").trim() &&
+          String(item?.status || "") === "reconciling",
+      );
+    reconciling.forEach((item: any) => {
+      void reconcilePersistedImageTask(item);
+    });
     void mobileCreationQueueCoordinator.wake(activeAccountId);
     // `currentId` is the persisted FIFO wake-up signal. The shared
     // coordinator chooses the oldest task across image studio and workbench.

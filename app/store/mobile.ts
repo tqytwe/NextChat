@@ -78,6 +78,9 @@ export interface ManagedMobileContentKitAsset {
   variant: number;
   requestId?: string;
   taskId?: string;
+  /** Durable gateway task identity, distinct from optional mobile task history. */
+  asyncTaskId?: string;
+  asyncPollUrl?: string;
   actualCost?: number;
   billingRecordId?: string;
   billingStatus?: "pending" | "captured" | "released";

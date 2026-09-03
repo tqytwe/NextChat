@@ -62,6 +62,21 @@ describe("mobile video capability and response contract", () => {
     expect(app).toContain('styles["creation-mode-active"]');
   });
 
+  test("resolves the selected group before reading its unavailable diagnostics", () => {
+    const app = readFileSync(
+      resolve(process.cwd(), "app/components/mobile-app.tsx"),
+      "utf8",
+    );
+    const studio = app.slice(
+      app.indexOf("function AndroidVideoStudio()"),
+      app.indexOf("function AndroidImageStudio("),
+    );
+    expect(studio.indexOf("const selectedGroup = videoSelection.group;")).toBeGreaterThan(-1);
+    expect(studio.indexOf("const selectedVideoUnavailableDiagnostics =")).toBeGreaterThan(
+      studio.indexOf("const selectedGroup = videoSelection.group;"),
+    );
+  });
+
   test("uses the shared account-scoped prompt catalog instead of a video localStorage cache", () => {
     const app = readFileSync(
       resolve(process.cwd(), "app/components/mobile-app.tsx"),
