@@ -1,5 +1,17 @@
 # APP 变更记录
 
+## 3.0.38 (338) - Direct 真机测试候选
+
+- 图片协议兼容：新的简单生图和内容工作台镜头直接使用现有
+  `POST /v1/images/generations` 或 `POST /v1/images/edits`，不再先调用额外的
+  `/async` 端点。账户级 FIFO、不可变请求编号和原有平台计费继续保留。
+- 视频协议兼容：恢复非 `grok_video` 模型的既有目的分组视频会话、`POST /v1/videos`
+  和 `/v1/agnesapi` 查询路径；`grok_video` 继续使用已有移动任务接口。可选
+  `adapter`、`capability_version`、`video_available` 或价格字段不能再阻止账号工作区
+  已返回的模型提交。
+- 范围：没有修改后端模型后台、分组、价格、余额、扣费、数据库或部署配置。APK 构建与真实
+  账号/真机验证前仍为 candidate，不能表述为已发布或已验收。
+
 ## 3.0.37 (337) - Direct 真机测试候选
 
 - 版本与交付：Dell `codex` 固定 Direct 工具链从干净 `453df15c` 构建并归档

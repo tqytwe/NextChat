@@ -517,15 +517,6 @@ export function usesManagedMobileVideoTaskApi(
   );
 }
 
-export function hasManagedVideoExecutionContract(
-  model?: Pick<ManagedWorkspaceModel, "adapter" | "capability_version"> | null,
-) {
-  return Boolean(
-    String(model?.adapter || "").trim() &&
-      String(model?.capability_version || "").trim(),
-  );
-}
-
 function videoPixels(resolution: string, ratio: string) {
   const shortEdge = Number.parseInt(String(resolution || "").trim(), 10);
   const edge = Number.isFinite(shortEdge) && shortEdge > 0 ? shortEdge : 720;

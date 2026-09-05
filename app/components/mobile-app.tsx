@@ -131,14 +131,12 @@ import {
 } from "../client/mobile-operation-diagnostic";
 import {
   extractManagedImageResultData,
-  isManagedAsyncImagePreAdmissionUnsupported,
   pollManagedAsyncImageTask,
-  requestManagedAsyncImageTask,
 } from "../client/mobile-image-async";
 import {
   buildMobileVideoScriptPrompt,
+  buildManagedGatewayVideoRequest,
   classifyMobileVideoBootstrapFailure,
-  hasManagedVideoExecutionContract,
   isManagedGatewayVideoFailureStatus,
   isManagedGatewayVideoTerminalStatus,
   managedVideoCapabilities,
@@ -148,12 +146,14 @@ import {
   MOBILE_VIDEO_POLL_INTERVAL_MS,
   MOBILE_VIDEO_POLL_TIMEOUT_MS,
   normalizeMobileVideoBootstrapGroups,
+  parseMobileVideoID,
   parseMobileVideoStatus,
   parseMobileVideoURL,
   resolveMobileVideoScriptSelection,
   resolveManagedVideoGroups,
   selectManagedVideoSession,
   selectManagedVideoSessionForGroup,
+  usesManagedMobileVideoTaskApi,
 } from "../client/mobile-video";
 import type {
   MobileVideoBootstrapFailure,
@@ -3906,59 +3906,30 @@ type ManagedImageGatewayResponse = {
 };
 
 /**
- * Images can take longer than the CDN's synchronous request window. Submit
- * once to the durable async gateway, then poll the same task with the same
- * image-purpose key. A missing/unknown task id is returned to the caller so
- * its normal error handling can surface the real gateway response.
+ * The gateway's OpenAI-compatible image endpoints are the established
+ * execution contract. Queueing is a client concern and must never force an
+ * account through a second, optional async endpoint before this request.
  */
-async function requestManagedAsyncImage(
+async function requestManagedImage(
   baseUrl: string,
   endpoint: "/images/generations" | "/images/edits",
   request: { headers: Record<string, string>; body: BodyInit },
   apiKey: string,
   text: ManagedMobileText,
   signal?: AbortSignal,
-  fallbackSync?: () => Promise<ManagedImageGatewayResponse>,
-  onAccepted?: (taskId: string, pollPath: string) => void | Promise<void>,
 ): Promise<ManagedImageGatewayResponse> {
-  const response = await requestManagedAsyncImageTask({
-    submit: () =>
-      managedGatewayRequestText(
-        baseUrl,
-        `/v1${endpoint}/async`,
-        {
-          method: "POST",
-          headers: request.headers,
-          body: request.body,
-          signal,
-        },
-        apiKey,
-        text,
-      ),
-    poll: (pollPath, taskId) =>
-      managedGatewayRequestText(
-        baseUrl,
-        pollPath,
-        {
-          method: "GET",
-          headers: { Accept: "application/json", "X-Request-ID": taskId },
-          signal,
-        },
-        apiKey,
-        text,
-      ),
-    timeoutMessage: text.errors.requestTimeout,
-    signal,
-    onAccepted,
-  });
-  // The durable image worker is currently enabled only for OpenAI/Grok image
-  // groups. A pre-admission 404/405/501 is safe to route through the existing
-  // synchronous contract; once a task ID exists, never issue a second billable
-  // request even if polling later fails.
-  if (fallbackSync && isManagedAsyncImagePreAdmissionUnsupported(response)) {
-    return fallbackSync();
-  }
-  return response;
+  return managedGatewayRequestText(
+    baseUrl,
+    `/v1${endpoint}`,
+    {
+      method: "POST",
+      headers: request.headers,
+      body: request.body,
+      signal,
+    },
+    apiKey,
+    text,
+  );
 }
 
 async function persistContentKitImageResult(
@@ -13211,26 +13182,12 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
         headers["Content-Type"] = "application/json";
         body = JSON.stringify(payload);
       }
-      const response = await requestManagedAsyncImage(
+      const response = await requestManagedImage(
         activeManaged.backendBaseUrl,
         endpoint,
         { headers, body },
         imageApiKey,
         text,
-        undefined,
-        () =>
-          managedGatewayRequestText(
-            activeManaged.backendBaseUrl,
-            `/v1${endpoint}`,
-            { headers, body },
-            imageApiKey,
-            text,
-          ),
-        (taskId, pollPath) =>
-          patchAsset(project.id, asset.id, {
-            asyncTaskId: taskId,
-            asyncPollUrl: pollPath,
-          }),
       );
       const json = response.text ? JSON.parse(response.text) : null;
       if (!response.ok || json?.error) {
@@ -15433,17 +15390,10 @@ function videoModelCanSubmit(
   model?: ManagedWorkspaceModel,
   group?: ManagedWorkspaceGroup,
 ) {
-  if (!model || !group || group.video_available === false) return false;
-  const capabilities = managedVideoCapabilities(model, group);
-  const operations = capabilities?.operations || [];
-  // Missing optional capability metadata must not erase an account-owned row
-  // from a purpose=video workspace. Only an explicit incompatible operation
-  // is a reason to disable the model; default controls remain usable.
-  return (
-    operations.length === 0 ||
-    operations.includes("generate") ||
-    capabilities?.text_to_video === true
-  );
+  // A purpose=video workspace is the existing account authorization boundary.
+  // Bootstrap availability/capability annotations are supplementary and may
+  // lag behind an already usable group, so they must not disable its models.
+  return Boolean(model && group && modelValue(model));
 }
 
 function resolveVideoStudioSelection(
@@ -16040,19 +15990,6 @@ function videoBootstrapFailureCopy(
         title: copy.bootstrapFailed,
         hint: copy.bootstrapFailedHint,
       };
-  }
-}
-
-function videoExecutionContractMissingCopy() {
-  switch (getManagedMobileLocale()) {
-    case "en":
-      return "The server has not declared an executable contract for this video model.";
-    case "jp":
-      return "この動画モデルには、サーバーが実行可能な契約をまだ公開していません。";
-    case "ko":
-      return "서버가 이 동영상 모델의 실행 가능한 계약을 아직 제공하지 않았습니다.";
-    default:
-      return "服务端尚未声明此视频模型的可执行合同。";
   }
 }
 
@@ -17655,18 +17592,13 @@ function AndroidVideoStudio() {
       );
       return null;
     }
-    if (!hasManagedVideoExecutionContract(submissionModel)) {
-      setStatus("failed");
-      setError(videoExecutionContractMissingCopy());
-      return null;
-    }
-
-    let submissionApiKeyId = 0;
+    let activeVideoSession: Awaited<
+      ReturnType<typeof resolveVideoSessionForGroup>
+    >["groupSession"];
     try {
-      const { groupSession } = await resolveVideoSessionForGroup(
-        submissionGroup.id,
-      );
-      submissionApiKeyId = Number(groupSession.api_key_id || 0);
+      activeVideoSession = (
+        await resolveVideoSessionForGroup(submissionGroup.id)
+      ).groupSession;
     } catch (sessionError) {
       setError(
         localizedMobileErrorMessage(sessionError, copy.capabilitiesUnavailable),
@@ -17687,7 +17619,7 @@ function AndroidVideoStudio() {
       groupId: Number(submissionGroup.id),
       modelId: modelValue(submissionModel),
       purpose: "video",
-      apiKeyId: submissionApiKeyId || undefined,
+      apiKeyId: Number(activeVideoSession.api_key_id || 0) || undefined,
       phase: "snapshot",
       accepted: false,
     });
@@ -17698,6 +17630,80 @@ function AndroidVideoStudio() {
     setError("");
     let serverTaskAccepted = false;
     try {
+      // Existing account-bound gateway video sessions predate the optional
+      // mobile-task metadata. Do not require adapter/capability fields before
+      // using their established OpenAI/Agnes request and polling contract.
+      if (!usesManagedMobileVideoTaskApi(submissionModel)) {
+        const response = await managedGatewayRequestText(
+          managed.backendBaseUrl,
+          "/v1/videos",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              "Idempotency-Key": requestID,
+              "X-Request-ID": requestID,
+              "X-Client-Request-ID": requestID,
+            },
+            body: JSON.stringify(
+              buildManagedGatewayVideoRequest({
+                model: modelValue(submissionModel),
+                prompt: submissionPrompt,
+                resolution: submissionPreferences.resolution,
+                ratio: submissionPreferences.ratio,
+                duration: submissionPreferences.duration,
+              }),
+            ),
+            signal: controller.signal,
+          },
+          activeVideoSession.api_key,
+          text,
+        );
+        if (!response.ok) {
+          throw new Error(
+            parseOpenAIError(
+              response.text,
+              response.status,
+              "/v1/videos",
+              response.requestId || requestID,
+            ),
+          );
+        }
+        let payload: unknown;
+        try {
+          payload = JSON.parse(response.text || "{}");
+        } catch {
+          throw new Error(copy.noResult);
+        }
+        const videoID = parseMobileVideoID(payload);
+        if (!videoID) throw new Error(copy.noResult);
+        const gatewayTaskID = managedGatewayVideoTaskID(videoID);
+        serverTaskAccepted = Boolean(gatewayTaskID);
+        gatewayTaskGroupIDsRef.current.set(gatewayTaskID, submissionGroup.id);
+        await snapshot?.onTaskCreated?.(gatewayTaskID);
+        recordMobileOperationDiagnostic({
+          operation: "video.gateway.create",
+          clientRequestId: requestID,
+          requestId: response.requestId || requestID,
+          status: response.status,
+          code: "",
+          groupId: Number(submissionGroup.id),
+          modelId: modelValue(submissionModel),
+          purpose: "video",
+          apiKeyId: Number(activeVideoSession.api_key_id || 0) || undefined,
+          phase: "accepted",
+          accepted: true,
+        });
+        return await waitForGatewayVideoTask(
+          payload,
+          videoID,
+          requestID,
+          controller,
+          activeVideoSession.api_key,
+          submissionPrompt,
+        );
+      }
       const createData = await managedAuthenticatedJsonRequest<{
         task?: MobileVideoServerTask;
       }>("/api/v1/mobile/video/jobs", {
@@ -17740,7 +17746,7 @@ function AndroidVideoStudio() {
         groupId: Number(submissionGroup.id),
         modelId: modelValue(submissionModel),
         purpose: "video",
-        apiKeyId: submissionApiKeyId || undefined,
+        apiKeyId: Number(activeVideoSession.api_key_id || 0) || undefined,
         phase: createdTaskId ? "accepted" : "invalid_response",
         accepted: Boolean(createdTaskId),
       });
@@ -17765,7 +17771,7 @@ function AndroidVideoStudio() {
         groupId: Number(submissionGroup.id),
         modelId: modelValue(submissionModel),
         purpose: "video",
-        apiKeyId: submissionApiKeyId || undefined,
+        apiKeyId: Number(activeVideoSession.api_key_id || 0) || undefined,
         phase: controller.signal.aborted ? "cancelled" : "failed",
         accepted: serverTaskAccepted,
       });
@@ -19629,40 +19635,13 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
               imageSession.api_key,
             );
             try {
-              const response = await requestManagedAsyncImage(
+              const response = await requestManagedImage(
                 taskBackendBaseUrl,
                 endpoint,
                 request,
                 imageSession.api_key,
                 text,
                 controller.signal,
-                () =>
-                  managedGatewayRequestText(
-                    taskBackendBaseUrl,
-                    `/v1${endpoint}`,
-                    request,
-                    imageSession.api_key,
-                    text,
-                  ),
-                (taskId, pollPath) => {
-                  updateTask(id, {
-                    async_task_id: taskId,
-                    async_poll_url: pollPath,
-                  });
-                  recordMobileOperationDiagnostic({
-                    operation: "images.generate",
-                    clientRequestId: id,
-                    requestId: `android-image-${id}-${requestIndex + 1}`,
-                    status: 202,
-                    code: "",
-                    groupId: taskGroupId,
-                    modelId: model,
-                    purpose: "image",
-                    apiKeyId: Number(imageSession.api_key_id || 0) || undefined,
-                    phase: "accepted",
-                    accepted: true,
-                  });
-                },
               );
               const responseError = parseMobileOperationError(
                 response.text,

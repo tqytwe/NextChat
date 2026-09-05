@@ -146,6 +146,27 @@ describe("mobile app backend alignment", () => {
     );
   });
 
+  test("submits new image work through the existing OpenAI image endpoints", () => {
+    const contentKit = source.slice(
+      source.indexOf("function AndroidContentKit("),
+      source.indexOf("function AndroidImageStudio("),
+    );
+    const imageStudio = source.slice(
+      source.indexOf("function AndroidImageStudio("),
+      source.indexOf("function AndroidGallery()"),
+    );
+    const request = source.slice(
+      source.indexOf("async function requestManagedImage("),
+      source.indexOf("async function persistContentKitImageResult("),
+    );
+
+    expect(request).toContain('`/v1${endpoint}`');
+    expect(request).not.toContain("/async");
+    expect(contentKit).toContain("requestManagedImage(");
+    expect(imageStudio).toContain("requestManagedImage(");
+    expect(imageStudio).not.toContain("requestManagedAsyncImage(");
+  });
+
   test("accepts native WebView input events for image and video prompts", () => {
     const imageStudio = source.slice(
       source.indexOf("function AndroidImageStudio("),
