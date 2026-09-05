@@ -3,28 +3,28 @@
   "channel": "direct",
   "appRepository": "https://github.com/tqytwe/NextChat.git",
   "appBranch": "app/domestic",
-  "appCommit": "453df15c5e58858e930ca65031bcc8e622675836",
+  "appCommit": "4d2e27a680b79de92bbef3d379cc59cfdb89ae3e",
   "backendRepository": "https://github.com/tqytwe/sub2api.git",
   "backendBranch": "app/domestic",
   "backendCommit": "5c6d55f7ed117d34362d22337833c0ee4e61ab55",
-  "androidVersionName": "3.0.37",
-  "androidVersionCode": 337,
+  "androidVersionName": "3.0.38",
+  "androidVersionCode": 338,
   "artifactPath": "public/downloads/jisudengchat-android.apk",
-  "artifactSha256": "40089ea98400a46947b74a71cac73af239fffce717bd7c86962d03a6d9a7e535",
+  "artifactSha256": "25f20abb83ebec2bc6f30c2815fb344566c5e9aa14451deff9ceaa9a1f641c64",
   "signingCertificateSha256": "cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e",
   "acceptanceStatus": "candidate",
   "workingTreeCandidate": {
-    "baseCommit": "453df15c5e58858e930ca65031bcc8e622675836",
-    "scope": "Domestic stability phase 1: structured operation diagnostics, chat group-model snapshot validation, single image queue executor hardening, async image reconciliation, account-scoped Skills selection, video job contract routing, local-material failure separation, and speech-recognition error classification.",
+    "baseCommit": "4d2e27a680b79de92bbef3d379cc59cfdb89ae3e",
+    "scope": "Domestic media compatibility restoration: new images use the established standard gateway endpoint; account video models retain their established group-session gateway route without new capability metadata prerequisites; queue, request identity and existing billing rules remain unchanged.",
     "artifactStatus": "built",
     "publicationStatus": "not_published"
   },
   "knownLimitations": [
-    "3.0.37 was built from the clean source commit 453df15c5e58858e930ca65031bcc8e622675836. The domestic Direct APK is a test candidate, not a production release.",
-    "Toolchain doctor, TypeScript, documentation checks, 98 focused Jest tests, Direct Firebase validation, offline Gradle signing, artifact packaging and independent signature/upgrade-eligibility verification passed. No deployment, Play artifact or production publication occurred.",
-    "The client now falls back to the existing synchronous Images endpoint only when the async endpoint explicitly rejects the request before task admission, and it restores an already accepted image task without replaying a billable request. This does not make an upstream image account schedulable.",
-    "Read-only account diagnostics confirmed workspace groups video视频 (45) and Grok Heavy (65), including their returned models and purpose=video session switching. The historical mobile bootstrap payload was incomplete for group 45, so 3.0.36 no longer uses that optional metadata as a membership or routing allow-list: it calls the selected group-bound gateway session. No server-side group, price, account or billing configuration was changed in this client-only candidate; the final provider result remains a real-device check.",
-    "Real-device acceptance remains required for image queue continuation after a provider failure, blocked-login/balance recovery, local-material single-file recovery, video-project shot submission/reconciliation, package import/export, and all four languages."
+    "3.0.38 was built from clean source commit 4d2e27a680b79de92bbef3d379cc59cfdb89ae3e. The domestic Direct APK is a test candidate, not a production release.",
+    "Toolchain doctor, TypeScript, documentation checks, 149 focused Jest tests, Direct Firebase validation, offline Gradle signing, artifact packaging, independent signature verification and overlay-upgrade eligibility verification passed. No deployment, Play artifact or production publication occurred.",
+    "New image requests now directly use POST /v1/images/generations or POST /v1/images/edits with the selected image-group session. The optional async image task helper remains only for historical persisted task reconciliation and is not a new-request prerequisite.",
+    "Non-grok_video models again submit through their selected purpose=video group session to POST /v1/videos and query /v1/agnesapi. grok_video remains on its existing mobile task API. Optional adapter, capability_version, availability and price fields no longer disable account-returned video rows; no backend group, model, price, account, billing or database setting was changed.",
+    "Real-device acceptance remains required for image generation and queue continuation, video group/model submission and result polling, local-material recovery, and four-language UI flows."
   ],
   "updatedAt": "2026-09-05T00:00:00+08:00"
 }
