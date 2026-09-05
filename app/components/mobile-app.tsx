@@ -125,6 +125,11 @@ import {
   resumeBlockedCreationQueueTasks,
 } from "../client/mobile-image-queue";
 import {
+  mobileOperationErrorCode,
+  parseMobileOperationError,
+  recordMobileOperationDiagnostic,
+} from "../client/mobile-operation-diagnostic";
+import {
   extractManagedImageResultData,
   isManagedAsyncImagePreAdmissionUnsupported,
   pollManagedAsyncImageTask,
@@ -132,8 +137,8 @@ import {
 } from "../client/mobile-image-async";
 import {
   buildMobileVideoScriptPrompt,
-  buildManagedGatewayVideoRequest,
   classifyMobileVideoBootstrapFailure,
+  hasManagedVideoExecutionContract,
   isManagedGatewayVideoFailureStatus,
   isManagedGatewayVideoTerminalStatus,
   managedVideoCapabilities,
@@ -143,14 +148,12 @@ import {
   MOBILE_VIDEO_POLL_INTERVAL_MS,
   MOBILE_VIDEO_POLL_TIMEOUT_MS,
   normalizeMobileVideoBootstrapGroups,
-  resolveMobileVideoScriptSelection,
-  resolveManagedVideoGroups,
-  parseMobileVideoID,
   parseMobileVideoStatus,
   parseMobileVideoURL,
+  resolveMobileVideoScriptSelection,
+  resolveManagedVideoGroups,
   selectManagedVideoSession,
   selectManagedVideoSessionForGroup,
-  usesManagedMobileVideoTaskApi,
 } from "../client/mobile-video";
 import type {
   MobileVideoBootstrapFailure,
@@ -423,6 +426,11 @@ const CONTENT_KIT_MAX_OUTPUTS_PER_RUN = 24;
 const CONTENT_KIT_MAX_OUTPUTS_PER_PROJECT =
   CONTENT_WORKBENCH_MAX_OUTPUTS_PER_PROJECT;
 const mobileCreationQueueCoordinator = new MobileCreationQueueCoordinator();
+
+function serverSkillSelectionStorageKey(accountId: string) {
+  const account = String(accountId || "").trim();
+  return account ? `${SERVER_SKILL_SELECTION_KEY}:${account}` : "";
+}
 
 function currentMobileCreationAccountId() {
   const state = useManagedNextChatStore.getState();
@@ -5066,22 +5074,14 @@ function parseOpenAIError(
   path: string,
   requestId = "unknown",
 ) {
-  let message = responseText;
-  try {
-    const json = JSON.parse(responseText);
-    message =
-      json?.error?.message || json?.message || json?.error || responseText;
-    requestId =
-      json?.request_id || json?.requestId || json?.instance || requestId;
-  } catch {
-    // Plain upstream responses still include the local request identifier.
-  }
+  const parsed = parseMobileOperationError(responseText, requestId);
   return formatManagedMobileError({
-    message,
+    message: parsed.message,
     status,
     path,
     category: "http",
-    requestId,
+    errorCode: parsed.code,
+    requestId: parsed.requestId,
   });
 }
 
@@ -6129,7 +6129,7 @@ function AndroidDashboard() {
   const workspace = managed.workspace;
   const activeAccountId = String(
     managed.user?.id || managed.session?.user_id || workspace?.user?.id || "",
-  );
+  ).trim();
   const [dashboardChatGroupId, setDashboardChatGroupId] = useState<
     number | undefined
   >(() => storedChatPreferenceGroupID() || undefined);
@@ -9685,6 +9685,11 @@ function AndroidChat() {
   const location = useLocation();
   const navigate = useNavigate();
   const workspace = managed.workspace;
+  const activeAccountId = String(
+    managed.user?.id || managed.session?.user_id || workspace?.user?.id || "",
+  ).trim();
+  const skillSelectionStorageKey =
+    serverSkillSelectionStorageKey(activeAccountId);
   const groups = workspace?.models?.groups ?? [];
   const chatGroup = bestChatGroup(workspace);
   const hasChatGroup = Boolean(chatGroup);
@@ -9722,7 +9727,7 @@ function AndroidChat() {
   const [usingSkillId, setUsingSkillId] = useState("");
   const [serverSkillSelections, setServerSkillSelections] = useState<
     Record<string, ServerSkillSelection>
-  >(() => readStoredJSON(SERVER_SKILL_SELECTION_KEY, {}));
+  >({});
   const [draftModel, setDraftModel] = useState(() =>
     storedChatPreferenceModel(storedChatPreferenceGroupID() || undefined),
   );
@@ -9855,11 +9860,25 @@ function AndroidChat() {
     setServerSkillsLoading(true);
     try {
       const client = await mobilePlatformClient();
-      const page = await client.skills.list({
-        locale: text.dateLocale,
-        limit: 100,
-      });
-      setServerSkills(page.items || []);
+      const all: MobileSkill[] = [];
+      let cursor = "";
+      for (let pageNumber = 0; pageNumber < 50; pageNumber += 1) {
+        const page = await client.skills.list({
+          locale: text.dateLocale,
+          limit: 100,
+          ...(cursor ? { cursor } : {}),
+        });
+        all.push(...(page.items || []));
+        const nextCursor = String(page.next_cursor || "").trim();
+        if (!page.has_more || !nextCursor || nextCursor === cursor) break;
+        cursor = nextCursor;
+      }
+      if (currentMobileCreationAccountId() !== activeAccountId) return;
+      setServerSkills(
+        Array.from(
+          new Map(all.map((skill) => [String(skill.id), skill])).values(),
+        ),
+      );
       setServerSkillsUnavailable(false);
     } catch {
       setServerSkillsUnavailable(true);
@@ -9867,6 +9886,16 @@ function AndroidChat() {
       setServerSkillsLoading(false);
     }
   }
+
+  useEffect(() => {
+    setServerSkillSelections(
+      skillSelectionStorageKey
+        ? readStoredJSON(skillSelectionStorageKey, {})
+        : {},
+    );
+    setDraftSkillSelection(null);
+    setServerSkills([]);
+  }, [skillSelectionStorageKey]);
 
   useEffect(() => {
     async function applySharedDraft() {
@@ -10403,9 +10432,18 @@ function AndroidChat() {
               setChatError(text.errors.emptySpeechResult);
             }
           } else if (result.type === "error" && !voiceCancelledRef.current) {
+            const voiceErrorCode = String(result.errorCode || "").trim();
+            const voiceErrorMessage =
+              voiceErrorCode === "recognizer_unavailable"
+                ? "speech recognition service is unavailable"
+                : voiceErrorCode === "permission_denied"
+                ? "microphone permission denied"
+                : voiceErrorCode === "timeout"
+                ? "speech recognition timeout"
+                : result.errorMessage || "";
             setChatError(
-              result.errorMessage
-                ? localizeManagedMobileError({ message: result.errorMessage })
+              voiceErrorMessage
+                ? localizeManagedMobileError({ message: voiceErrorMessage })
                 : text.errors.permissionDenied,
             );
           }
@@ -10444,7 +10482,12 @@ function AndroidChat() {
       ) {
         setChatError(
           err instanceof Error && err.message
-            ? localizeManagedMobileError({ message: err.message })
+            ? localizeManagedMobileError({
+                message:
+                  err.message === "permission_denied"
+                    ? "microphone permission denied"
+                    : err.message,
+              })
             : text.errors.permissionDenied,
         );
       }
@@ -10506,7 +10549,7 @@ function AndroidChat() {
       text.chat.mobileSystemPrompt,
       sessionAgent ? localizedValue(sessionAgent.systemPrompt, text) : "",
       selectedSkill?.systemPrompt
-        ? `当前启用技能：${selectedSkill.title}\n${selectedSkill.systemPrompt}`
+        ? `[MOBILE_SKILL id=${selectedSkill.id} slug=${selectedSkill.slug}]\n${selectedSkill.systemPrompt}`
         : "",
     ]
       .filter(Boolean)
@@ -10682,7 +10725,8 @@ function AndroidChat() {
       if (draftSkillSelection) {
         setServerSkillSelections((current) => {
           const next = { ...current, [sessionId]: draftSkillSelection };
-          writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+          if (skillSelectionStorageKey)
+            writeStoredJSON(skillSelectionStorageKey, next);
           return next;
         });
       }
@@ -10765,38 +10809,44 @@ function AndroidChat() {
     let projectedTask: MobileTask | null = null;
     let projectedTaskId = "";
     let cancellationTimer: number | undefined;
-    const projectedTaskPromise = (async () => {
-      try {
-        const client = await mobilePlatformClient();
-        const task = await client.tasks.create({
-          kind: "chat",
-          operation: "chat.completions",
-          client_request_id: gatewayRequestId,
-          title_zh: userContent.slice(0, 80),
-          model,
-          group_id: requestGroupId,
-          asset_ids: readyAssetIds,
-          skill_id: skillForRequest?.id,
-          locale: text.dateLocale,
-        });
-        projectedTask = task;
-        projectedTaskId = task.id;
-        platformTaskRef.current = task;
-        await client.tasks.status(task.id, { status: "running" });
-        if (abortRef.current !== controller) return task;
-        cancellationTimer = window.setInterval(() => {
-          void mobilePlatformClient()
-            .then((client) => client.tasks.detail(task.id))
-            .then((task) => {
-              if (task.status === "cancelled") controller.abort();
-            })
-            .catch(() => undefined);
-        }, 2500);
-        return task;
-      } catch {
-        return null;
-      }
-    })();
+    const createProjectedTask = (
+      modelSnapshot: string,
+      groupSnapshot: number | undefined,
+    ) =>
+      (async () => {
+        try {
+          const client = await mobilePlatformClient();
+          const task = await client.tasks.create({
+            kind: "chat",
+            operation: "chat.completions",
+            client_request_id: gatewayRequestId,
+            title_zh: userContent.slice(0, 80),
+            model: modelSnapshot,
+            group_id: groupSnapshot,
+            asset_ids: readyAssetIds,
+            skill_id: skillForRequest?.id,
+            locale: text.dateLocale,
+          });
+          projectedTask = task;
+          projectedTaskId = task.id;
+          platformTaskRef.current = task;
+          await client.tasks.status(task.id, { status: "running" });
+          if (abortRef.current !== controller) return task;
+          cancellationTimer = window.setInterval(() => {
+            void mobilePlatformClient()
+              .then((client) => client.tasks.detail(task.id))
+              .then((task) => {
+                if (task.status === "cancelled") controller.abort();
+              })
+              .catch(() => undefined);
+          }, 2500);
+          return task;
+        } catch {
+          return null;
+        }
+      })();
+    let projectedTaskPromise: Promise<MobileTask | null> =
+      Promise.resolve(null);
     let contentBuffer = "";
     let lastStreamPersistAt = 0;
     const persistStreamCheckpoint = () => {
@@ -10809,6 +10859,8 @@ function AndroidChat() {
       });
     };
     const path = "/v1/chat/completions";
+    let submissionModel = model;
+    let submissionApiKeyId = 0;
     try {
       let activeManaged = useManagedNextChatStore.getState();
       if (controller.signal.aborted) {
@@ -10825,6 +10877,56 @@ function AndroidChat() {
         await managed.switchGroup(requestGroupId);
         activeManaged = useManagedNextChatStore.getState();
       }
+      // Group-pinned sessions can return a fresh model directory. Never send
+      // a render-time model snapshot through a newly switched key: an admin
+      // may have removed or remapped it between selection and submission.
+      if (requestGroupId) {
+        const currentModel = chatModelsForGroup(
+          activeManaged.workspace,
+          requestGroupId,
+        ).find((candidate) => modelMatches(candidate, model));
+        if (!currentModel) {
+          throw new ManagedApiError(
+            formatManagedMobileError({
+              message:
+                "The selected model is no longer available in this group.",
+              status: 409,
+              path,
+              category: "api",
+              errorCode: "MODEL_UNAVAILABLE",
+              requestId: gatewayRequestId,
+            }),
+            409,
+            path,
+            "MODEL_UNAVAILABLE",
+            gatewayRequestId,
+            "api",
+          );
+        }
+        submissionModel = modelValue(currentModel);
+      }
+      submissionApiKeyId = Number(activeManaged.session?.api_key_id || 0);
+      recordMobileOperationDiagnostic({
+        operation: "chat.completions",
+        clientRequestId: gatewayRequestId,
+        requestId: gatewayRequestId,
+        status: 0,
+        code: "",
+        groupId: requestGroupId,
+        modelId: submissionModel,
+        purpose: "chat",
+        apiKeyId: submissionApiKeyId || undefined,
+        phase: "snapshot",
+        accepted: false,
+      });
+      // The task projection is created only after the new group-bound session
+      // has confirmed the exact model. It must describe the same immutable
+      // request snapshot that reaches the gateway.
+      mobileStore.updateChatSession(sessionId, { model: submissionModel });
+      projectedTaskPromise = createProjectedTask(
+        submissionModel,
+        requestGroupId,
+      );
       if (controller.signal.aborted) {
         throw new DOMException("Aborted", "AbortError");
       }
@@ -10834,7 +10936,7 @@ function AndroidChat() {
         skillForRequest,
       );
       const payload = JSON.stringify({
-        model,
+        model: submissionModel,
         stream: true,
         messages: gatewayMessages,
       });
@@ -11285,6 +11387,19 @@ function AndroidChat() {
         content: completedContent,
         status: "done",
       });
+      recordMobileOperationDiagnostic({
+        operation: "chat.completions",
+        clientRequestId: gatewayRequestId,
+        requestId: gatewayRequestId,
+        status: 200,
+        code: "",
+        groupId: requestGroupId,
+        modelId: submissionModel,
+        purpose: "chat",
+        apiKeyId: submissionApiKeyId || undefined,
+        phase: "completed",
+        accepted: true,
+      });
       void projectedTaskPromise.then(async (completedTask) => {
         if (!completedTask) return;
         const client = await mobilePlatformClient().catch(() => null);
@@ -11296,6 +11411,26 @@ function AndroidChat() {
     } catch (err) {
       const aborted = controller.signal.aborted;
       performanceOutcome = aborted ? "cancelled" : "error";
+      const errorCode =
+        err instanceof ManagedApiError
+          ? String(err.code || "")
+          : mobileOperationErrorCode(err);
+      const errorStatus = err instanceof ManagedApiError ? err.status : 0;
+      const errorRequestId =
+        err instanceof ManagedApiError ? err.requestId : gatewayRequestId;
+      recordMobileOperationDiagnostic({
+        operation: "chat.completions",
+        clientRequestId: gatewayRequestId,
+        requestId: errorRequestId,
+        status: errorStatus,
+        code: errorCode,
+        groupId: requestGroupId,
+        modelId: submissionModel,
+        purpose: "chat",
+        apiKeyId: submissionApiKeyId || undefined,
+        phase: aborted ? "cancelled" : "failed",
+        accepted: Boolean(contentBuffer),
+      });
       const message = aborted
         ? text.errors.requestCancelled
         : err instanceof ManagedTransportError
@@ -11303,6 +11438,18 @@ function AndroidChat() {
         : err instanceof Error
         ? localizeManagedMobileError({ message: err.message, path })
         : text.errors.networkFailed;
+      if (
+        !aborted &&
+        ["MODEL_UNAVAILABLE", "GROUP_UNAVAILABLE"].includes(
+          errorCode.toUpperCase(),
+        )
+      ) {
+        // An administrator can change a group while the app is open. Keep the
+        // user's unsent inputs available instead of silently swapping models.
+        setInput(content);
+        setAttachments(imageUrls);
+        setSharedMaterials(sharedMaterials);
+      }
       mobileStore.updateChatMessage(sessionId, assistantId, {
         content: contentBuffer,
         status: aborted ? "cancelled" : "error",
@@ -11502,7 +11649,8 @@ function AndroidChat() {
         } else {
           delete next[currentSession.id];
         }
-        writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+        if (skillSelectionStorageKey)
+          writeStoredJSON(skillSelectionStorageKey, next);
         return next;
       });
       setDraftSkillSelection(null);
@@ -11543,7 +11691,8 @@ function AndroidChat() {
       if (currentSession?.id) {
         setServerSkillSelections((current) => {
           const next = { ...current, [currentSession.id]: selection };
-          writeStoredJSON(SERVER_SKILL_SELECTION_KEY, next);
+          if (skillSelectionStorageKey)
+            writeStoredJSON(skillSelectionStorageKey, next);
           return next;
         });
         setDraftSkillSelection(null);
@@ -13416,7 +13565,7 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
   async function runContentKitCreationQueueTask(task: CreationQueueTask) {
     const taskAccountId = String(task.accountId || "").trim();
     if (!taskAccountId || currentMobileCreationAccountId() !== taskAccountId) {
-      return { status: "skipped" as const };
+      return { status: "unavailable" as const };
     }
     const state = useManagedMobileAppStore.getState();
     const project = state.contentKits.find(
@@ -13439,7 +13588,7 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
       !["queued", "idle"].includes(asset.status) ||
       !["queued", "running"].includes(run.status)
     ) {
-      return { status: "skipped" as const };
+      return { status: "stale" as const };
     }
 
     mobileStore.updateContentKit(project.id, {
@@ -13465,14 +13614,14 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
       !latestRun ||
       !["queued", "running"].includes(latestRun.status)
     ) {
-      return { status: "skipped" as const };
+      return { status: "stale" as const };
     }
     await generateAsset(latestProject, latestAsset);
     const after = useManagedMobileAppStore
       .getState()
       .contentKits.find((item) => item.id === project.id);
     const afterAsset = after?.assets.find((item) => item.id === asset.id);
-    if (!afterAsset) return { status: "skipped" as const };
+    if (!afterAsset) return { status: "stale" as const };
     if (afterAsset.status === "blocked") {
       updateRun(project.id, run.id, "blocked");
       return {
@@ -13490,10 +13639,22 @@ function AndroidContentKit(props: { queueWorker?: boolean } = {}) {
   }
 
   useEffect(() => {
+    if (!props.queueWorker) return;
     return mobileCreationQueueCoordinator.register({
       source: "content-workbench",
       tasks: contentKitCreationQueueTasks,
       run: runContentKitCreationQueueTask,
+      onExecutorError: async (task) => {
+        const state = useManagedMobileAppStore.getState();
+        const project = state.contentKits.find((item) =>
+          item.assets.some((asset) => asset.id === task.sourceTaskId),
+        );
+        if (!project || project.accountId !== task.accountId) return;
+        patchAsset(project.id, task.sourceTaskId, {
+          status: "failed",
+          error: text.platform.contentKit.failed,
+        });
+      },
       isActive: (accountId) => currentMobileCreationAccountId() === accountId,
       persistOnUnmount: Boolean(props.queueWorker),
       priority: props.queueWorker ? 0 : 10,
@@ -15882,6 +16043,19 @@ function videoBootstrapFailureCopy(
   }
 }
 
+function videoExecutionContractMissingCopy() {
+  switch (getManagedMobileLocale()) {
+    case "en":
+      return "The server has not declared an executable contract for this video model.";
+    case "jp":
+      return "この動画モデルには、サーバーが実行可能な契約をまだ公開していません。";
+    case "ko":
+      return "서버가 이 동영상 모델의 실행 가능한 계약을 아직 제공하지 않았습니다.";
+    default:
+      return "服务端尚未声明此视频模型的可执行合同。";
+  }
+}
+
 function AndroidCreationStudio() {
   const installedRelease = useInstalledAndroidReleaseVersion();
   const playDistribution = isPlayDistribution(installedRelease);
@@ -17481,14 +17655,18 @@ function AndroidVideoStudio() {
       );
       return null;
     }
+    if (!hasManagedVideoExecutionContract(submissionModel)) {
+      setStatus("failed");
+      setError(videoExecutionContractMissingCopy());
+      return null;
+    }
 
-    let activeVideoSession: Awaited<
-      ReturnType<typeof resolveVideoSessionForGroup>
-    >["groupSession"];
+    let submissionApiKeyId = 0;
     try {
-      activeVideoSession = (
-        await resolveVideoSessionForGroup(submissionGroup.id)
-      ).groupSession;
+      const { groupSession } = await resolveVideoSessionForGroup(
+        submissionGroup.id,
+      );
+      submissionApiKeyId = Number(groupSession.api_key_id || 0);
     } catch (sessionError) {
       setError(
         localizedMobileErrorMessage(sessionError, copy.capabilitiesUnavailable),
@@ -17500,69 +17678,26 @@ function AndroidVideoStudio() {
     abortRef.current = controller;
     const requestID =
       snapshot?.clientRequestId || clientRequestID("mobile-video");
+    recordMobileOperationDiagnostic({
+      operation: "video.jobs.create",
+      clientRequestId: requestID,
+      requestId: requestID,
+      status: 0,
+      code: "",
+      groupId: Number(submissionGroup.id),
+      modelId: modelValue(submissionModel),
+      purpose: "video",
+      apiKeyId: submissionApiKeyId || undefined,
+      phase: "snapshot",
+      accepted: false,
+    });
     setStatus("running");
     setProgress(8);
     setTaskID("");
     setResultUrl("");
     setError("");
+    let serverTaskAccepted = false;
     try {
-      if (!usesManagedMobileVideoTaskApi(submissionModel)) {
-        const response = await managedGatewayRequestText(
-          managed.backendBaseUrl,
-          "/v1/videos",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-              "Idempotency-Key": requestID,
-              "X-Request-ID": requestID,
-              "X-Client-Request-ID": requestID,
-            },
-            body: JSON.stringify(
-              buildManagedGatewayVideoRequest({
-                model: modelValue(submissionModel),
-                prompt: submissionPrompt,
-                resolution: submissionPreferences.resolution,
-                ratio: submissionPreferences.ratio,
-                duration: submissionPreferences.duration,
-              }),
-            ),
-            signal: controller.signal,
-          },
-          activeVideoSession.api_key,
-          text,
-        );
-        if (!response.ok) {
-          throw new Error(
-            parseOpenAIError(
-              response.text,
-              response.status,
-              "/v1/videos",
-              response.requestId || requestID,
-            ),
-          );
-        }
-        let payload: unknown;
-        try {
-          payload = JSON.parse(response.text || "{}");
-        } catch {
-          throw new Error(copy.noResult);
-        }
-        const videoID = parseMobileVideoID(payload);
-        if (!videoID) throw new Error(copy.noResult);
-        const gatewayTaskID = managedGatewayVideoTaskID(videoID);
-        gatewayTaskGroupIDsRef.current.set(gatewayTaskID, submissionGroup.id);
-        await snapshot?.onTaskCreated?.(gatewayTaskID);
-        return await waitForGatewayVideoTask(
-          payload,
-          videoID,
-          requestID,
-          controller,
-          activeVideoSession.api_key,
-          submissionPrompt,
-        );
-      }
       const createData = await managedAuthenticatedJsonRequest<{
         task?: MobileVideoServerTask;
       }>("/api/v1/mobile/video/jobs", {
@@ -17595,6 +17730,20 @@ function AndroidVideoStudio() {
       const createdTask =
         createData?.task || (createData as unknown as MobileVideoServerTask);
       const createdTaskId = String(createdTask?.id || "").trim();
+      serverTaskAccepted = Boolean(createdTaskId);
+      recordMobileOperationDiagnostic({
+        operation: "video.jobs.create",
+        clientRequestId: requestID,
+        requestId: requestID,
+        status: createdTaskId ? 202 : 200,
+        code: "",
+        groupId: Number(submissionGroup.id),
+        modelId: modelValue(submissionModel),
+        purpose: "video",
+        apiKeyId: submissionApiKeyId || undefined,
+        phase: createdTaskId ? "accepted" : "invalid_response",
+        accepted: Boolean(createdTaskId),
+      });
       if (createdTaskId) await snapshot?.onTaskCreated?.(createdTaskId);
       return await waitForVideoTask(
         createdTask,
@@ -17603,6 +17752,23 @@ function AndroidVideoStudio() {
         submissionPrompt,
       );
     } catch (runError) {
+      recordMobileOperationDiagnostic({
+        operation: "video.jobs.create",
+        clientRequestId: requestID,
+        requestId:
+          runError instanceof ManagedApiError ? runError.requestId : requestID,
+        status: runError instanceof ManagedApiError ? runError.status : 0,
+        code:
+          runError instanceof ManagedApiError
+            ? String(runError.code || "")
+            : mobileOperationErrorCode(runError),
+        groupId: Number(submissionGroup.id),
+        modelId: modelValue(submissionModel),
+        purpose: "video",
+        apiKeyId: submissionApiKeyId || undefined,
+        phase: controller.signal.aborted ? "cancelled" : "failed",
+        accepted: serverTaskAccepted,
+      });
       handleVideoRunError(controller, runError);
       return null;
     } finally {
@@ -18586,7 +18752,7 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
   const activeTask = sdStore.draw.find(
     (item: any) =>
       String(item?.account_id || "") === activeAccountId &&
-      (item.status === "running" || item.status === "submitting"),
+      ["running", "submitting", "reconciling"].includes(item.status),
   );
   const queuedTasks = useMemo(
     () =>
@@ -19478,14 +19644,33 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                     imageSession.api_key,
                     text,
                   ),
-                (taskId, pollPath) =>
+                (taskId, pollPath) => {
                   updateTask(id, {
                     async_task_id: taskId,
                     async_poll_url: pollPath,
-                  }),
+                  });
+                  recordMobileOperationDiagnostic({
+                    operation: "images.generate",
+                    clientRequestId: id,
+                    requestId: `android-image-${id}-${requestIndex + 1}`,
+                    status: 202,
+                    code: "",
+                    groupId: taskGroupId,
+                    modelId: model,
+                    purpose: "image",
+                    apiKeyId: Number(imageSession.api_key_id || 0) || undefined,
+                    phase: "accepted",
+                    accepted: true,
+                  });
+                },
+              );
+              const responseError = parseMobileOperationError(
+                response.text,
+                response.requestId || `android-image-${id}-${requestIndex + 1}`,
               );
               if (
-                (response.status === 401 || response.status === 403) &&
+                (response.status === 401 ||
+                  responseError.code === "TOKEN_EXPIRED") &&
                 authAttempt < 1
               ) {
                 authAttempt += 1;
@@ -19584,6 +19769,10 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                 status: response.status,
               };
               const responseText = response.text;
+              const responseError = parseMobileOperationError(
+                responseText,
+                response.requestId || `android-image-${id}-${requestIndex + 1}`,
+              );
               let json: any = null;
               try {
                 json = responseText ? JSON.parse(responseText) : null;
@@ -19591,6 +19780,40 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                 json = null;
               }
               if (!res.ok || json?.error) {
+                const remoteState = String(
+                  json?.status || json?.state || json?.data?.status || "",
+                ).toLowerCase();
+                const terminalRemoteState = [
+                  "failed",
+                  "cancelled",
+                  "canceled",
+                  "expired",
+                ].includes(remoteState);
+                if (
+                  response.taskId &&
+                  !terminalRemoteState &&
+                  (responseError.code === "IMAGE_TASK_POLL_TIMEOUT" ||
+                    [0, 502, 503, 504].includes(res.status))
+                ) {
+                  updateTask(id, {
+                    status: "reconciling",
+                    progress: 12,
+                    error: "",
+                  });
+                  recordMobileOperationDiagnostic({
+                    operation: "images.generate",
+                    clientRequestId: id,
+                    requestId: responseError.requestId,
+                    status: res.status,
+                    code: responseError.code,
+                    groupId: taskGroupId,
+                    modelId: model,
+                    purpose: "image",
+                    phase: "reconciling",
+                    accepted: true,
+                  });
+                  return;
+                }
                 const raw =
                   json?.error?.message ||
                   json?.message ||
@@ -19616,12 +19839,31 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                   diagnostics && !described.includes(diagnostics)
                     ? `${described} ${diagnostics}`
                     : described;
+                recordMobileOperationDiagnostic({
+                  operation: "images.generate",
+                  clientRequestId: id,
+                  requestId: responseError.requestId,
+                  status: res.status,
+                  code: responseError.code,
+                  groupId: taskGroupId,
+                  modelId: model,
+                  purpose: "image",
+                  phase: "failed",
+                  accepted: Boolean(response.taskId),
+                });
                 if (
                   res.status === 401 ||
                   res.status === 402 ||
-                  res.status === 403
+                  responseError.code === "GROUP_ACCESS_DENIED" ||
+                  responseError.code === "GROUP_PERMISSION_DENIED"
                 ) {
-                  throw new Error(message);
+                  throw new ManagedApiError(
+                    message,
+                    res.status,
+                    `/v1${endpoint}`,
+                    responseError.code || undefined,
+                    responseError.requestId,
+                  );
                 }
                 failures.push(message);
                 resultItems[requestIndex] = {
@@ -19691,11 +19933,7 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
                 error: message,
               };
               updateTask(id, { result_items: [...resultItems] });
-              if (
-                /权限|余额|登录|unauthorized|permission|balance|insufficient/.test(
-                  message.toLowerCase(),
-                )
-              ) {
+              if (singleErr instanceof ManagedApiError) {
                 break;
               }
             }
@@ -19785,14 +20023,27 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
             code: err instanceof ManagedApiError ? String(err.code || "") : "",
             message,
           });
+          const acceptedTaskId = String(
+            useSdStore
+              .getState()
+              .draw.find((item: any) => String(item?.id) === id)
+              ?.async_task_id || "",
+          ).trim();
+          const uncertainAcceptedTask =
+            Boolean(acceptedTaskId) &&
+            !aborted &&
+            !(err instanceof ManagedApiError) &&
+            (err instanceof ManagedTransportError || statusFromMessage >= 500);
           updateTask(id, {
             status: aborted
               ? "cancelled"
+              : uncertainAcceptedTask
+              ? "reconciling"
               : failure.status === "blocked"
               ? "blocked"
               : "error",
             progress: aborted ? 0 : 100,
-            error: message,
+            error: uncertainAcceptedTask ? "" : message,
             blocked_reason: aborted ? undefined : failure.blockedReason,
           });
           void projectedTaskPromise.then(async (task) => {
@@ -19843,6 +20094,10 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
   }
 
   useEffect(() => {
+    // The authenticated application shell owns the durable executor. A
+    // visible studio only creates and observes tasks, preventing a page and
+    // the retained runtime from concurrently submitting the same snapshot.
+    if (!props.queueWorker) return;
     return mobileCreationQueueCoordinator.register({
       source: "image-studio",
       tasks: imageStudioCreationQueueTasks,
@@ -19851,8 +20106,8 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
         const latest = useSdStore
           .getState()
           .draw.find((item: any) => String(item?.id) === task.sourceTaskId);
-        if (!latest) return { status: "skipped" as const };
-        if (latest.status === "queued") return { status: "skipped" as const };
+        if (!latest) return { status: "stale" as const };
+        if (latest.status === "queued") return { status: "stale" as const };
         if (latest.status === "blocked") {
           return {
             status: "blocked" as const,
@@ -19862,6 +20117,13 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
           };
         }
         return { status: "settled" as const };
+      },
+      onExecutorError: async (task) => {
+        updateTask(task.sourceTaskId, {
+          status: "error",
+          progress: 100,
+          error: text.image.generateFailed,
+        });
       },
       isActive: (accountId) => currentMobileCreationAccountId() === accountId,
       persistOnUnmount: Boolean(props.queueWorker),
@@ -19880,8 +20142,15 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
     sdStore.currentId,
   ]);
 
+  const recoveredImageQueueAccountsRef = useRef(new Set<string>());
+
   useEffect(() => {
-    if (!activeAccountId) return;
+    // This is cold recovery, not a reaction to every durable task write.
+    // Otherwise a healthy submitting/running request is incorrectly changed
+    // to reconciling by its own progress update.
+    if (!props.queueWorker || !activeAccountId) return;
+    if (recoveredImageQueueAccountsRef.current.has(activeAccountId)) return;
+    recoveredImageQueueAccountsRef.current.add(activeAccountId);
     const staleTaskIDs = sdStore.draw
       .filter(
         (item: any) =>
@@ -19928,6 +20197,42 @@ function AndroidImageStudio(props: { queueWorker?: boolean } = {}) {
     activeAccountId,
     managed.accessToken,
     managed.imageSession,
+    props.queueWorker,
+  ]);
+
+  useEffect(() => {
+    // A task that was already accepted by the async gateway is never returned
+    // to `queued`. This lightweight watcher only reconciles durable task IDs;
+    // it deliberately does not rewrite healthy submitting/running rows.
+    if (
+      !props.queueWorker ||
+      !activeAccountId ||
+      !managed.accessToken ||
+      !managed.imageSession
+    ) {
+      return;
+    }
+    useSdStore
+      .getState()
+      .draw.filter(
+        (item: any) =>
+          item?.queue_schema === 1 &&
+          String(item?.account_id || "") === activeAccountId &&
+          String(item?.status || "") === "reconciling" &&
+          String(item?.async_task_id || "").trim(),
+      )
+      .forEach((item: any) => {
+        void reconcilePersistedImageTask(item);
+      });
+    void mobileCreationQueueCoordinator.wake(activeAccountId);
+    // A queue write is a wake signal only. The reconciliation function guards
+    // every task ID, so repeated store revisions cannot create duplicate GETs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeAccountId,
+    managed.accessToken,
+    managed.imageSession,
+    props.queueWorker,
     sdStore.currentId,
   ]);
 
@@ -20929,8 +21234,10 @@ function AndroidGallery() {
       return;
     }
     setLocalMaterialsLoading(true);
+    let importedLocally = false;
     try {
       const imported = await importLocalMaterials(activeAccountId, files);
+      importedLocally = true;
       setLocalMaterials((items) => [...imported, ...items]);
       // A local import remains available if the network fails, but an online
       // import must also become a server-owned asset. Otherwise it cannot be
@@ -20974,7 +21281,16 @@ function AndroidGallery() {
       }
       showNotice(text.platform.uploadReady);
     } catch {
-      setError(text.platform.uploadFailedHint);
+      // The optional server manifest is currently not universally available.
+      // A successful device import must stay usable when upload/sync returns
+      // 404 or has a transient failure; only a failed IndexedDB import is a
+      // local-material error.
+      if (importedLocally) {
+        setMaterialSyncWarning(true);
+        showNotice(text.platform.uploadReady);
+      } else {
+        setError(text.platform.uploadFailedHint);
+      }
     } finally {
       input.value = "";
       setLocalMaterialsLoading(false);

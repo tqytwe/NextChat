@@ -12,16 +12,18 @@ describe("mobile creation queue", () => {
       status: "error",
     });
     expect(
-      classifyCreationQueueFailure({ message: "余额不足" }),
+      classifyCreationQueueFailure({ code: "INSUFFICIENT_BALANCE" }),
     ).toEqual({ status: "blocked", blockedReason: "balance" });
     expect(classifyCreationQueueFailure({ status: 401 })).toEqual({
       status: "blocked",
       blockedReason: "authentication",
     });
     expect(classifyCreationQueueFailure({ status: 403 })).toEqual({
-      status: "blocked",
-      blockedReason: "permission",
+      status: "error",
     });
+    expect(
+      classifyCreationQueueFailure({ code: "GROUP_ACCESS_DENIED" }),
+    ).toEqual({ status: "blocked", blockedReason: "permission" });
   });
 
   test("keeps FIFO order and resumes blocked work only for the active account", () => {
@@ -161,7 +163,7 @@ describe("mobile creation queue", () => {
     coordinator.register({
       source: "content-workbench",
       tasks: () => [],
-      run: async () => ({ status: "skipped" }),
+      run: async () => ({ status: "stale" }),
       block: (_account, _createdAt, reason) => blocked.push(`content:${reason}`),
       resume: (account) => resumed.push(`content:${account}`),
     });
@@ -211,7 +213,7 @@ describe("mobile creation queue", () => {
     expect(events).toEqual(["image-1"]);
   });
 
-  test("uses task ID as a stable tie-breaker and stops on an unavailable source", async () => {
+  test("uses task ID as a stable tie-breaker and skips stale records", async () => {
     const coordinator = new MobileCreationQueueCoordinator();
     const events: string[] = [];
     const imageTasks = [
@@ -248,13 +250,66 @@ describe("mobile creation queue", () => {
     coordinator.register({
       source: "content-workbench",
       tasks: () => contentTasks,
-      run: async () => ({ status: "skipped" }),
+      run: async () => {
+        contentTasks.splice(0, 1);
+        return { status: "stale" };
+      },
       block: () => undefined,
       resume: () => undefined,
     });
 
     await coordinator.wake("a");
-    expect(events).toEqual([]);
-    expect(imageTasks).toHaveLength(1);
+    expect(events).toEqual(["z-image"]);
+    expect(imageTasks).toHaveLength(0);
+  });
+
+  test("stops only an unavailable source and never throws through wake", async () => {
+    const coordinator = new MobileCreationQueueCoordinator();
+    const tasks = [
+      {
+        id: "a",
+        sourceTaskId: "a",
+        source: "image-studio" as const,
+        accountId: "a",
+        status: "queued" as const,
+        createdAt: 1,
+      },
+    ];
+    coordinator.register({
+      source: "image-studio",
+      tasks: () => tasks,
+      run: async () => ({ status: "unavailable" }),
+      block: () => undefined,
+      resume: () => undefined,
+    });
+    await expect(coordinator.wake("a")).resolves.toBeUndefined();
+    expect(tasks).toHaveLength(1);
+  });
+
+  test("settles an executor exception and continues the following FIFO task", async () => {
+    const coordinator = new MobileCreationQueueCoordinator();
+    const tasks = [
+      { id: "a", sourceTaskId: "a", source: "image-studio" as const, accountId: "a", status: "queued" as const, createdAt: 1 },
+      { id: "b", sourceTaskId: "b", source: "image-studio" as const, accountId: "a", status: "queued" as const, createdAt: 2 },
+    ];
+    const events: string[] = [];
+    coordinator.register({
+      source: "image-studio",
+      tasks: () => tasks,
+      run: async (task) => {
+        if (task.id === "a") throw new Error("bridge failure");
+        events.push(task.id);
+        tasks.splice(tasks.findIndex((item) => item.id === task.id), 1);
+        return { status: "settled" };
+      },
+      onExecutorError: (task) => {
+        events.push(`error:${task.id}`);
+        tasks.splice(tasks.findIndex((item) => item.id === task.id), 1);
+      },
+      block: () => undefined,
+      resume: () => undefined,
+    });
+    await coordinator.wake("a");
+    expect(events).toEqual(["error:a", "b"]);
   });
 });

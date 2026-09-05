@@ -1105,7 +1105,10 @@ export async function startForegroundPttSession(options: {
     throw new Error("foreground PTT session id is invalid");
   }
 
-  await requestMicrophonePermission();
+  const permission = await requestMicrophonePermission();
+  if (!permission.granted) {
+    throw new Error("permission_denied");
+  }
   await cancelAllForegroundPttSessions("replaced");
   ensureDirectNativeCallbacks();
 

@@ -219,7 +219,7 @@ export async function importLocalMaterials(ownerUserId: string, files: File[]) {
     throw new Error("A local material exceeds its supported media size.");
   }
   if (totalBytes > MAX_LOCAL_IMPORT_BYTES) {
-    throw new Error("Selected local materials exceed 60 MB.");
+    throw new Error("Selected local materials exceed the 645 MB total limit.");
   }
   const current = await readIndex(owner);
   const now = Date.now();

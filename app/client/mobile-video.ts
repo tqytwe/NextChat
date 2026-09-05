@@ -503,10 +503,9 @@ export function managedVideoCapabilities(
 }
 
 /**
- * Grok models retain the existing durable mobile-task workflow. Other video
- * workspace rows use the account's purpose-bound gateway key directly. The
- * discriminator comes from the server contract, never from a group or model
- * display name.
+ * The authenticated mobile task endpoint is the verified execution boundary.
+ * It owns adapter routing and polling server-side. A visible model without a
+ * declared adapter/version remains inspectable but cannot be submitted.
  */
 export function usesManagedMobileVideoTaskApi(
   model?: Pick<ManagedWorkspaceModel, "adapter"> | null,
@@ -515,6 +514,15 @@ export function usesManagedMobileVideoTaskApi(
     String(model?.adapter || "")
       .trim()
       .toLowerCase() === "grok_video"
+  );
+}
+
+export function hasManagedVideoExecutionContract(
+  model?: Pick<ManagedWorkspaceModel, "adapter" | "capability_version"> | null,
+) {
+  return Boolean(
+    String(model?.adapter || "").trim() &&
+      String(model?.capability_version || "").trim(),
   );
 }
 

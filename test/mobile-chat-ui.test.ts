@@ -42,4 +42,18 @@ describe("mobile chat UI state and layout contract", () => {
     expect(app).toContain("https?:\\/\\/[^\\s<]+");
     expect(app).toContain("void openExternalUrl(url)");
   });
+
+  test("revalidates a selected model after the chat group session changes", () => {
+    expect(app).toContain("let submissionModel = model;");
+    expect(app).toContain("The selected model is no longer available in this group.");
+    expect(app).toContain('errorCode: "MODEL_UNAVAILABLE"');
+    expect(app).toContain("model: submissionModel");
+  });
+
+  test("keeps server skill selection scoped to the signed-in account", () => {
+    expect(app).toContain("serverSkillSelectionStorageKey(accountId");
+    expect(app).toContain("readStoredJSON(skillSelectionStorageKey, {})");
+    expect(app).toContain("[MOBILE_SKILL id=${selectedSkill.id}");
+    expect(app).not.toContain("当前启用技能：");
+  });
 });

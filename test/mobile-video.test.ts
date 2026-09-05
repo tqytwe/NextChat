@@ -25,6 +25,7 @@ import {
   selectManagedVideoSession,
   selectManagedVideoSessionForGroup,
   usesManagedMobileVideoTaskApi,
+  hasManagedVideoExecutionContract,
 } from "../app/client/mobile-video";
 import { ManagedApiError } from "../app/client/managed-nextchat";
 
@@ -937,6 +938,21 @@ describe("mobile video capability and response contract", () => {
       false,
     );
     expect(usesManagedMobileVideoTaskApi({} as any)).toBe(false);
+    expect(
+      hasManagedVideoExecutionContract({
+        adapter: "grok_video",
+        capability_version: "2026-09-05.1",
+      } as any),
+    ).toBe(true);
+    expect(
+      hasManagedVideoExecutionContract({
+        adapter: "agnes_video",
+        capability_version: "2026-09-05.1",
+      } as any),
+    ).toBe(true);
+    expect(hasManagedVideoExecutionContract({ adapter: "agnes_video" } as any)).toBe(
+      false,
+    );
   });
 
   test("builds the existing gateway video contract without mobile BFF fields", () => {
@@ -964,7 +980,7 @@ describe("mobile video capability and response contract", () => {
     expect(managedGatewayVideoID("mobile-task-123")).toBe("");
   });
 
-  test("keeps generic video creation and polling on the group-bound gateway session", () => {
+  test("fails closed rather than guessing a generic gateway video protocol", () => {
     const app = readFileSync(
       resolve(process.cwd(), "app/components/mobile-app.tsx"),
       "utf8",
@@ -973,12 +989,12 @@ describe("mobile video capability and response contract", () => {
       app.indexOf("function AndroidVideoStudio()"),
       app.indexOf("function AndroidImageStudio("),
     );
-    expect(studio).toContain('"/v1/videos"');
+    expect(studio).toContain("hasManagedVideoExecutionContract(submissionModel)");
+    expect(studio).toContain("videoExecutionContractMissingCopy()");
+    expect(studio).not.toContain('"/v1/videos"');
+    // Existing historical gateway tasks may still be reconciled, but no new
+    // submission is allowed to infer that protocol from an adapter fallback.
     expect(studio).toContain("/v1/agnesapi?video_id=");
-    expect(studio).toContain("activeVideoSession.api_key");
-    expect(studio).toContain("managedGatewayVideoTaskID(videoID)");
-    expect(studio).toContain("managedGatewayVideoID(taskID)");
-    expect(studio).toContain("usesManagedMobileVideoTaskApi(submissionModel)");
     expect(studio).toContain('"/api/v1/mobile/video/jobs"');
     expect(studio).toContain("const fileID = managedGatewayVideoID(id) || id");
     expect(studio).toContain(

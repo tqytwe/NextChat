@@ -1,31 +1,35 @@
 {
   "channel": "direct",
-  "version": "3.0.36",
-  "versionCode": 336,
-  "releaseDate": "2026-09-03",
+  "version": "3.0.37",
+  "versionCode": 337,
+  "releaseDate": "2026-09-05",
   "notes": {
     "zh": [
-      "视频生成改为按所选视频分组直接使用平台视频网关，video视频 等账号已有分组不再被旧移动任务限制隐藏",
-      "视频模型切换改为原子状态更新，缺少可选能力说明时仍可使用稳定默认参数，避免创作页崩溃",
-      "通用视频任务支持状态恢复、本地保存、下载分享和保存到素材库，不会错误请求 Grok 专用任务接口",
+      "聊天、图片和视频请求增加脱敏请求编号、机器码、分组和模型诊断，模型异常不再笼统显示为服务器不可用",
+      "图片队列在单项模型或上游失败后继续后续任务；已受理的异步任务只核对结果，不会自动重复扣费",
+      "视频生成统一通过服务端任务合同；没有执行合同的可见模型会明确提示，避免错误协议和页面崩溃",
+      "语音输入区分麦克风权限与系统识别服务；本机素材导入不会被跨设备同步失败覆盖",
       "仅供真机功能验证，尚未发布"
     ],
     "en": [
-      "Video generation now uses the platform gateway for the selected video group, so account-visible groups such as video视频 are no longer hidden by the legacy mobile-task path",
-      "Video model switches now update atomically and retain stable defaults when optional capability metadata is absent, avoiding creation-page crashes",
-      "Gateway video tasks support status recovery, local saving, download sharing, and material-library saving without calling the Grok-only task API",
+      "Chat, image, and video requests now keep redacted request ID, error-code, group, and model diagnostics instead of reducing model failures to a generic server error",
+      "The image FIFO continues after one model or upstream failure; an accepted async task only reconciles its result and never auto-resubmits a charge",
+      "Video creation now uses the server task contract; a visible model without an execution contract is explained instead of using a wrong protocol or crashing the page",
+      "Voice input distinguishes microphone permission from the system recognizer, and a local material import remains available when cross-device sync fails",
       "For real-device functional testing only. Not released"
     ],
     "ja": [
-      "動画生成は選択した動画グループのプラットフォームゲートウェイを直接使用し、video视频 などアカウントで利用可能なグループを旧モバイルタスク経路で非表示にしません",
-      "動画モデルの切替を原子的な状態更新に変更し、任意の機能情報が不足しても安定した既定値を使用して作成画面のクラッシュを防ぎます",
-      "ゲートウェイ動画タスクは状態復帰、端末保存、共有ダウンロード、素材ライブラリ保存に対応し、Grok 専用タスク API を誤って呼び出しません",
+      "チャット、画像、動画リクエストは、モデル障害を一般的なサーバーエラーにせず、秘匿化したリクエスト ID、エラーコード、グループ、モデルの診断を保持します",
+      "画像 FIFO は一つのモデルまたは上流障害後も後続タスクを続行します。受理済み非同期タスクは結果だけを照合し、自動再課金しません",
+      "動画作成はサーバーのタスク契約を使用します。実行契約のない表示モデルは、誤ったプロトコルや画面クラッシュの代わりに理由を表示します",
+      "音声入力はマイク権限とシステム音声認識を区別し、端末素材はクロスデバイス同期が失敗しても利用可能です",
       "実機での機能検証専用です。未リリースです"
     ],
     "ko": [
-      "동영상 생성은 선택한 동영상 그룹의 플랫폼 게이트웨이를 직접 사용하여 video视频 등 계정에 보이는 그룹이 기존 모바일 작업 경로에서 숨겨지지 않습니다",
-      "동영상 모델 전환을 원자적 상태 업데이트로 변경하여 선택적 기능 정보가 없어도 안정적인 기본값을 사용하고 제작 화면 충돌을 막습니다",
-      "게이트웨이 동영상 작업은 상태 복구, 기기 저장, 다운로드 공유, 소재 라이브러리 저장을 지원하며 Grok 전용 작업 API를 잘못 호출하지 않습니다",
+      "채팅, 이미지, 동영상 요청은 모델 오류를 일반 서버 오류로 축소하지 않고, 민감정보를 제외한 요청 ID, 오류 코드, 그룹, 모델 진단을 유지합니다",
+      "이미지 FIFO는 단일 모델 또는 업스트림 실패 후에도 다음 작업을 계속합니다. 접수된 비동기 작업은 결과만 확인하며 자동 재청구하지 않습니다",
+      "동영상 생성은 서버 작업 계약을 사용합니다. 실행 계약이 없는 표시 모델은 잘못된 프로토콜이나 화면 충돌 대신 이유를 안내합니다",
+      "음성 입력은 마이크 권한과 시스템 음성 인식을 구분하며, 기기 소재는 기기 간 동기화 실패 후에도 사용할 수 있습니다",
       "실기기 기능 검증 전용이며 아직 출시되지 않았습니다"
     ]
   }

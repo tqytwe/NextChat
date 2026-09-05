@@ -1729,7 +1729,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            reject(requestId, "speech recognition is not available");
+            reject(requestId, "recognizer_unavailable");
             return;
         }
         pendingSpeechRequestId = requestId;
@@ -1747,7 +1747,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            reject(requestId, "speech recognition is not available");
+            reject(requestId, "recognizer_unavailable");
             return;
         }
         cancelForegroundPttSession(null, "replaced");
@@ -1871,7 +1871,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            reject(requestId, "speech recognition is not available");
+            reject(requestId, "recognizer_unavailable");
             return;
         }
 
@@ -2507,7 +2507,7 @@ public class MainActivity extends Activity {
             case SpeechRecognizer.ERROR_NETWORK:
                 return "network";
             case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                return "network_timeout";
+                return "timeout";
             case SpeechRecognizer.ERROR_NO_MATCH:
                 return "no_match";
             case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
@@ -2515,7 +2515,7 @@ public class MainActivity extends Activity {
             case SpeechRecognizer.ERROR_SERVER:
                 return "server";
             case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
-                return "speech_timeout";
+                return "timeout";
             default:
                 return "unknown";
         }

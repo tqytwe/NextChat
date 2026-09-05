@@ -34,12 +34,20 @@ export type CreationQueueTask = MobileImageQueueTask & {
 export type CreationQueueRunOutcome =
   | { status: "settled" }
   | { status: "blocked"; blockedReason?: CreationQueueBlockReason }
-  | { status: "skipped" };
+  /** The record was cancelled/deleted/settled by its owner; continue FIFO. */
+  | { status: "stale" }
+  /** The source cannot safely run until an explicit later wake. */
+  | { status: "unavailable" };
 
 export type CreationQueueSourceRegistration = {
   source: CreationQueueSource;
   tasks: (accountId: string) => CreationQueueTask[];
   run: (task: CreationQueueTask) => Promise<CreationQueueRunOutcome>;
+  /** Persist a safe task result when the executor itself throws. */
+  onExecutorError?: (
+    task: CreationQueueTask,
+    error: unknown,
+  ) => Promise<void> | void;
   /**
    * A screen can leave its executor registered while it is not visible, but
    * it must never submit a saved request using a later account's session.
@@ -83,25 +91,24 @@ export function classifyCreationQueueFailure(input: {
   message?: string;
 }): CreationQueueFailure {
   const status = Number(input.status || 0);
-  const raw = `${input.code || ""} ${input.message || ""}`.toLowerCase();
+  const code = String(input.code || "")
+    .trim()
+    .toUpperCase();
   if (
     status === 401 ||
-    /unauthori[sz]ed|token.*expired|login.*expired|登录.*过期|请.*登录/.test(
-      raw,
-    )
+    code === "TOKEN_EXPIRED" ||
+    code === "AUTHENTICATION_REQUIRED"
   ) {
     return { status: "blocked", blockedReason: "authentication" };
   }
   if (
     status === 402 ||
-    /insufficient.*balance|balance.*insufficient|余额.*不足|充值/.test(raw)
+    code === "INSUFFICIENT_BALANCE" ||
+    code === "BALANCE_INSUFFICIENT"
   ) {
     return { status: "blocked", blockedReason: "balance" };
   }
-  if (
-    status === 403 ||
-    /permission|forbidden|not allowed|权限|无权|不可用.*分组/.test(raw)
-  ) {
+  if (code === "GROUP_ACCESS_DENIED" || code === "GROUP_PERMISSION_DENIED") {
     return { status: "blocked", blockedReason: "permission" };
   }
   return { status: "error" };
@@ -255,19 +262,33 @@ export class MobileCreationQueueCoordinator {
   }
 
   private async drain(accountId: string) {
-    // A source that is unmounted while a task is selected returns "skipped".
-    // Stop instead of spinning; its next mount calls wake() again.
     for (let guard = 0; guard < 10_000; guard += 1) {
       const selected = this.next(accountId);
       if (!selected) return;
-      const outcome = await selected.registration.run(selected.task);
-      if (outcome.status === "skipped") return;
+      let outcome: CreationQueueRunOutcome;
+      try {
+        outcome = await selected.registration.run(selected.task);
+      } catch (error) {
+        // The source owns task persistence. An unexpected bridge/storage
+        // failure must not reject the account drain into a stuck UI state.
+        // If its owner settles the selected task, continue FIFO.
+        if (!selected.registration.onExecutorError) return;
+        try {
+          await selected.registration.onExecutorError(selected.task, error);
+        } catch {
+          return;
+        }
+        continue;
+      }
+      if (outcome.status === "unavailable") return;
+      if (outcome.status === "stale") continue;
       if (outcome.status === "blocked") {
+        const blockedReason = outcome.blockedReason;
         this.activeRegistrations().forEach((registration) =>
           registration.block(
             accountId,
             Number(selected.task.createdAt || 0),
-            outcome.blockedReason,
+            blockedReason,
           ),
         );
         return;
