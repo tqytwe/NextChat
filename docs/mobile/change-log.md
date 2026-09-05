@@ -1,9 +1,12 @@
 # APP 变更记录
 
-## 3.0.37 (337) - Direct 真机测试候选（待构建）
+## 3.0.37 (337) - Direct 真机测试候选
 
-- 版本与交付：将在 Dell `codex` 固定 Direct 工具链从干净 `app/domestic` 源码构建。
-  构建、验签与归档完成前，不部署、不发布、不上传 Play。
+- 版本与交付：Dell `codex` 固定 Direct 工具链从干净 `453df15c` 构建并归档
+  `public/downloads/jisudengchat-android.apk`。SHA-256 为
+  `40089ea98400a46947b74a71cac73af239fffce717bd7c86962d03a6d9a7e535`；包名
+  `com.jisudeng.chat`，证书 SHA-256 为
+  `cd7abbd79daf6648a429ff34d7450b18cfb6b416e660b2f5169178e0a488627e`。不部署、不发布、不上传 Play。
 - 请求诊断：新增 `MobileOperationDiagnostic`，仅保存操作、请求编号、HTTP、机器码、组/模型、
   用途、会话 API key ID、阶段和是否受理；不保存 API Key、JWT、提示词、附件或完整上游响应。
 - 聊天：在目标 chat 分组会话切换后重新确认模型，确认的组-模型快照才创建任务投影和调用网关；
@@ -17,7 +20,8 @@
 - Skills、素材与语音：服务端 Skills 改为账号隔离、分页去重加载，结构化 Skill 标记不再混入
   固定中文系统提示；本机素材成功导入不会被可选远端 sync 失败覆盖；语音权限和识别服务错误区分。
 - 静态回归：TypeScript、`git diff --check` 与图片队列、异步图片、聊天、视频、账号隔离、素材、
-  四语言和诊断的 8 组 Jest 定向回归通过。真实账号与真机验收仍是候选进入构建阶段的前提。
+  四语言和诊断的 8 组 Jest 定向回归共 98 项通过。doctor、Direct Firebase 校验、离线 Gradle
+  签名、制品打包和独立签名/覆盖升级资格检查通过。真实账号与真机验收仍是候选转发布的前提。
 
 ## 3.0.36 (336) - Direct 真机测试候选
 
